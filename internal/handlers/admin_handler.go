@@ -1,24 +1,35 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"myapp/internal/middleware"
+	"myapp/internal/services"
 	"myapp/internal/utils"
 )
 
-type AdminHandler struct{}
-
-func NewAdminHandler() *AdminHandler {
-	return &AdminHandler{}
+type AdminHandler struct {
+	admins *services.AdminService
 }
 
-// Me returns the authenticated admin id from the JWT (for verifying auth works).
+func NewAdminHandler(admins *services.AdminService) *AdminHandler {
+	return &AdminHandler{admins: admins}
+}
+
+// Me returns the authenticated admin profile (HTTP layer only).
 func (h *AdminHandler) Me(w http.ResponseWriter, r *http.Request) {
 	adminID, _ := r.Context().Value(middleware.AdminIDContextKey).(string)
-	if adminID == "" {
-		utils.Error(w, http.StatusUnauthorized, "unauthorized")
+
+	admin, err := h.admins.GetByID(r.Context(), adminID)
+	if err != nil {
+		if errors.Is(err, services.ErrUnauthorized) {
+			utils.Error(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		utils.Error(w, http.StatusInternalServerError, "could not load admin")
 		return
 	}
-	utils.JSON(w, http.StatusOK, map[string]string{"admin_id": adminID})
+
+	utils.JSON(w, http.StatusOK, admin)
 }

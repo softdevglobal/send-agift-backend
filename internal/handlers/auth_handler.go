@@ -4,21 +4,17 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
-	"time"
 
-	"myapp/internal/models"
-	"myapp/internal/repository"
+	"myapp/internal/services"
 	"myapp/internal/utils"
 )
 
 type AuthHandler struct {
-	admins    *repository.AdminRepository
-	jwtSecret string
+	auth *services.AuthService
 }
 
-func NewAuthHandler(admins *repository.AdminRepository, jwtSecret string) *AuthHandler {
-	return &AuthHandler{admins: admins, jwtSecret: jwtSecret}
+func NewAuthHandler(auth *services.AuthService) *AuthHandler {
+	return &AuthHandler{auth: auth}
 }
 
 type bootstrapRequest struct {
@@ -27,49 +23,29 @@ type bootstrapRequest struct {
 	DisplayName string `json:"display_name"`
 }
 
-// Bootstrap creates the very first superadmin.
-// Allowed when the table is empty (count == 0), OR when the caller sends a
-// matching X-Bootstrap-Secret header — lets you re-seed a fresh environment
-// without leaving this endpoint open forever.
+// Bootstrap creates the very first superadmin (HTTP layer only).
 func (h *AuthHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
-	count, err := h.admins.CountAdmins(r.Context())
-	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, "could not check admin count")
-		return
-	}
-
-	expectedSecret := os.Getenv("BOOTSTRAP_SECRET")
-	sentSecret := r.Header.Get("X-Bootstrap-Secret")
-
-	if count > 0 && (expectedSecret == "" || sentSecret != expectedSecret) {
-		utils.Error(w, http.StatusForbidden, "bootstrap already completed")
-		return
-	}
-
 	var req bootstrapRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Email == "" || len(req.Password) < 8 {
-		utils.Error(w, http.StatusBadRequest, "email required, password must be at least 8 characters")
-		return
-	}
 
-	hash, err := utils.HashPassword(req.Password)
+	admin, err := h.auth.Bootstrap(r.Context(), services.BootstrapInput{
+		Email:           req.Email,
+		Password:        req.Password,
+		DisplayName:     req.DisplayName,
+		BootstrapSecret: r.Header.Get("X-Bootstrap-Secret"),
+	})
 	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, "could not hash password")
-		return
-	}
-
-	admin := &models.Admin{
-		Email:        req.Email,
-		PasswordHash: hash,
-		DisplayName:  req.DisplayName,
-		MFARequired:  true,
-	}
-	if err := h.admins.CreateAdmin(r.Context(), admin); err != nil {
-		utils.Error(w, http.StatusInternalServerError, "could not create admin")
+		switch {
+		case errors.Is(err, services.ErrBootstrapForbidden):
+			utils.Error(w, http.StatusForbidden, "bootstrap already completed")
+		case errors.Is(err, services.ErrInvalidInput):
+			utils.Error(w, http.StatusBadRequest, "email required, password must be at least 8 characters")
+		default:
+			utils.Error(w, http.StatusInternalServerError, "could not create admin")
+		}
 		return
 	}
 
@@ -84,7 +60,7 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-// Login verifies email + password, then returns a signed Bearer JWT.
+// Login verifies email + password, then returns a signed Bearer JWT (HTTP layer only).
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -92,26 +68,19 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	admin, err := h.admins.GetByEmail(r.Context(), req.Email)
+	result, err := h.auth.Login(r.Context(), services.LoginInput{
+		Email:    req.Email,
+		Password: req.Password,
+	})
 	if err != nil {
-		if errors.Is(err, repository.ErrAdminNotFound) {
+		switch {
+		case errors.Is(err, services.ErrInvalidCredentials):
 			utils.Error(w, http.StatusUnauthorized, "invalid email or password")
-			return
+		default:
+			utils.Error(w, http.StatusInternalServerError, "login failed")
 		}
-		utils.Error(w, http.StatusInternalServerError, "login failed")
 		return
 	}
 
-	if !utils.CheckPassword(req.Password, admin.PasswordHash) {
-		utils.Error(w, http.StatusUnauthorized, "invalid email or password")
-		return
-	}
-
-	token, err := utils.GenerateJWT(admin.ID.String(), admin.Email, "admin", h.jwtSecret, 24*time.Hour)
-	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, "could not generate token")
-		return
-	}
-
-	utils.JSON(w, http.StatusOK, map[string]string{"token": token})
+	utils.JSON(w, http.StatusOK, result)
 }

@@ -14,6 +14,7 @@ import (
 	"myapp/internal/handlers"
 	"myapp/internal/repository"
 	"myapp/internal/routes"
+	"myapp/internal/services"
 )
 
 func main() {
@@ -45,8 +46,11 @@ func main() {
 	}
 
 	admins := repository.NewAdminRepository(pool)
-	authHandler := handlers.NewAuthHandler(admins, jwtSecret)
-	adminHandler := handlers.NewAdminHandler()
+	authService := services.NewAuthService(admins, jwtSecret)
+	adminService := services.NewAdminService(admins)
+
+	authHandler := handlers.NewAuthHandler(authService)
+	adminHandler := handlers.NewAdminHandler(adminService)
 
 	router := routes.New(authHandler, adminHandler, jwtSecret)
 

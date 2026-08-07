@@ -31,23 +31,44 @@ func (r *AdminRepository) CountAdmins(ctx context.Context) (int, error) {
 // CreateAdmin inserts a new admin row and fills in the generated fields.
 func (r *AdminRepository) CreateAdmin(ctx context.Context, a *models.Admin) error {
 	query := `
-		insert into admin.admin_users (email, password_hash, display_name, mfa_required, status)
-		values ($1, $2, $3, $4, 'active')
-		returning id, status, created_at, updated_at`
-	return r.db.QueryRow(ctx, query, a.Email, a.PasswordHash, a.DisplayName, a.MFARequired).
-		Scan(&a.ID, &a.Status, &a.CreatedAt, &a.UpdatedAt)
+		insert into admin.admin_users (email, password_hash, display_name, role, mfa_required, status)
+		values ($1, $2, $3, $4, $5, 'active')
+		returning id, role, status, created_at, updated_at`
+	role := a.Role
+	if role == "" {
+		role = "superadmin"
+	}
+	return r.db.QueryRow(ctx, query, a.Email, a.PasswordHash, a.DisplayName, role, a.MFARequired).
+		Scan(&a.ID, &a.Role, &a.Status, &a.CreatedAt, &a.UpdatedAt)
 }
 
 // GetByEmail fetches an active admin by email, for login.
 func (r *AdminRepository) GetByEmail(ctx context.Context, email string) (*models.Admin, error) {
 	query := `
-		select id, email, password_hash, display_name, status, mfa_required, created_at, updated_at
+		select id, email, password_hash, display_name, role, status, mfa_required, created_at, updated_at
 		from admin.admin_users
 		where email = $1
 		  and status = 'active'`
 	a := &models.Admin{}
 	err := r.db.QueryRow(ctx, query, email).Scan(
-		&a.ID, &a.Email, &a.PasswordHash, &a.DisplayName, &a.Status, &a.MFARequired, &a.CreatedAt, &a.UpdatedAt,
+		&a.ID, &a.Email, &a.PasswordHash, &a.DisplayName, &a.Role, &a.Status, &a.MFARequired, &a.CreatedAt, &a.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAdminNotFound
+	}
+	return a, err
+}
+
+// GetByID fetches an active admin by id.
+func (r *AdminRepository) GetByID(ctx context.Context, id string) (*models.Admin, error) {
+	query := `
+		select id, email, password_hash, display_name, role, status, mfa_required, created_at, updated_at
+		from admin.admin_users
+		where id = $1
+		  and status = 'active'`
+	a := &models.Admin{}
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&a.ID, &a.Email, &a.PasswordHash, &a.DisplayName, &a.Role, &a.Status, &a.MFARequired, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrAdminNotFound
