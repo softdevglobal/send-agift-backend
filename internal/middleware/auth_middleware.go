@@ -10,11 +10,14 @@ import (
 
 type contextKey string
 
-const AdminIDContextKey contextKey = "admin_id"
+const (
+	AdminIDContextKey contextKey = "admin_id"
+	UserIDContextKey  contextKey = "user_id"
+	RoleContextKey    contextKey = "role"
+)
 
 // RequireAuth reads "Authorization: Bearer <token>", validates the JWT,
-// and stores the admin id (the "sub" claim) on the request context so
-// downstream handlers can read it via r.Context().Value(AdminIDContextKey).
+// and stores subject + role on the request context.
 func RequireAuth(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +35,8 @@ func RequireAuth(secret string) func(http.Handler) http.Handler {
 			}
 
 			ctx := context.WithValue(r.Context(), AdminIDContextKey, claims.Subject)
+			ctx = context.WithValue(ctx, UserIDContextKey, claims.Subject)
+			ctx = context.WithValue(ctx, RoleContextKey, claims.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -46,13 +46,23 @@ func main() {
 	}
 
 	admins := repository.NewAdminRepository(pool)
+	countries := repository.NewCountryRepository(pool)
+	customers := repository.NewCustomerRepository(pool)
+	sellers := repository.NewSellerRepository(pool)
+
 	authService := services.NewAuthService(admins, jwtSecret)
 	adminService := services.NewAdminService(admins)
+	countryService := services.NewCountryService(countries)
+	customerService := services.NewCustomerService(customers, countries, jwtSecret)
+	sellerService := services.NewSellerService(sellers, countries, jwtSecret)
 
 	authHandler := handlers.NewAuthHandler(authService)
 	adminHandler := handlers.NewAdminHandler(adminService)
+	countryHandler := handlers.NewCountryHandler(countryService)
+	customerHandler := handlers.NewCustomerHandler(customerService)
+	sellerHandler := handlers.NewSellerHandler(sellerService)
 
-	router := routes.New(authHandler, adminHandler, jwtSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, jwtSecret)
 
 	addr := ":" + port
 	fmt.Printf("✅ Database connected: %s\n", os.Getenv("DB_NAME"))
