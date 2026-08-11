@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 
 	"myapp/internal/models"
@@ -18,12 +17,19 @@ var (
 )
 
 type AuthService struct {
-	admins    *repository.AdminRepository
-	jwtSecret string
+	admins          *repository.AdminRepository
+	jwtSecret       string
+	jwtExpiry       time.Duration
+	bootstrapSecret string
 }
 
-func NewAuthService(admins *repository.AdminRepository, jwtSecret string) *AuthService {
-	return &AuthService{admins: admins, jwtSecret: jwtSecret}
+func NewAuthService(admins *repository.AdminRepository, jwtSecret, bootstrapSecret string, jwtExpiry time.Duration) *AuthService {
+	return &AuthService{
+		admins:          admins,
+		jwtSecret:       jwtSecret,
+		jwtExpiry:       jwtExpiry,
+		bootstrapSecret: bootstrapSecret,
+	}
 }
 
 type BootstrapInput struct {
@@ -49,8 +55,7 @@ func (s *AuthService) Bootstrap(ctx context.Context, in BootstrapInput) (*models
 		return nil, err
 	}
 
-	expectedSecret := os.Getenv("BOOTSTRAP_SECRET")
-	if count > 0 && (expectedSecret == "" || in.BootstrapSecret != expectedSecret) {
+	if count > 0 && (s.bootstrapSecret == "" || in.BootstrapSecret != s.bootstrapSecret) {
 		return nil, ErrBootstrapForbidden
 	}
 
@@ -100,7 +105,7 @@ func (s *AuthService) Login(ctx context.Context, in LoginInput) (*LoginResult, e
 		role = "admin"
 	}
 
-	token, err := utils.GenerateJWT(admin.ID.String(), admin.Email, role, s.jwtSecret, 24*time.Hour)
+	token, err := utils.GenerateJWT(admin.ID.String(), admin.Email, role, s.jwtSecret, s.jwtExpiry)
 	if err != nil {
 		return nil, err
 	}

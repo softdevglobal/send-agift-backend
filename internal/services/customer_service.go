@@ -25,14 +25,16 @@ type CustomerService struct {
 	customers *repository.CustomerRepository
 	countries *repository.CountryRepository
 	jwtSecret string
+	jwtExpiry time.Duration
 }
 
 func NewCustomerService(
 	customers *repository.CustomerRepository,
 	countries *repository.CountryRepository,
 	jwtSecret string,
+	jwtExpiry time.Duration,
 ) *CustomerService {
-	return &CustomerService{customers: customers, countries: countries, jwtSecret: jwtSecret}
+	return &CustomerService{customers: customers, countries: countries, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry}
 }
 
 type CustomerRegisterInput struct {
@@ -168,7 +170,7 @@ func (s *CustomerService) Login(ctx context.Context, email, password string) (*C
 		return nil, ErrInvalidCredentials
 	}
 
-	token, err := utils.GenerateJWT(customer.ID.String(), customer.Email, "customer", s.jwtSecret, 24*time.Hour)
+	token, err := utils.GenerateJWT(customer.ID.String(), customer.Email, "customer", s.jwtSecret, s.jwtExpiry)
 	if err != nil {
 		return nil, err
 	}

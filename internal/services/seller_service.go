@@ -29,14 +29,16 @@ type SellerService struct {
 	sellers   *repository.SellerRepository
 	countries *repository.CountryRepository
 	jwtSecret string
+	jwtExpiry time.Duration
 }
 
 func NewSellerService(
 	sellers *repository.SellerRepository,
 	countries *repository.CountryRepository,
 	jwtSecret string,
+	jwtExpiry time.Duration,
 ) *SellerService {
-	return &SellerService{sellers: sellers, countries: countries, jwtSecret: jwtSecret}
+	return &SellerService{sellers: sellers, countries: countries, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry}
 }
 
 type SellerRegisterInput struct {
@@ -180,7 +182,7 @@ func (s *SellerService) Login(ctx context.Context, email, password string) (*Sel
 	if !utils.CheckPassword(password, seller.PasswordHash) {
 		return nil, ErrInvalidCredentials
 	}
-	token, err := utils.GenerateJWT(seller.ID.String(), seller.Email, "seller", s.jwtSecret, 24*time.Hour)
+	token, err := utils.GenerateJWT(seller.ID.String(), seller.Email, "seller", s.jwtSecret, s.jwtExpiry)
 	if err != nil {
 		return nil, err
 	}

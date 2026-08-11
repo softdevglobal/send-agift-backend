@@ -6,15 +6,17 @@ import (
 	"os"
 	"time"
 
-	"github.com/joho/godotenv"
-
+	"myapp/internal/config"
 	"myapp/internal/database"
 )
 
 func main() {
-	_ = godotenv.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config error: %v", err)
+	}
 
-	pool, err := database.Connect()
+	pool, err := database.Connect(cfg)
 	if err != nil {
 		log.Fatalf("database error: %v", err)
 	}

@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
-	"github.com/joho/godotenv"
-
+	"myapp/internal/config"
 	"myapp/internal/database"
 	"myapp/internal/handlers"
 	"myapp/internal/repository"
@@ -18,27 +16,17 @@ import (
 )
 
 func main() {
-	// Load environment variables from .env (ignored if the file is missing)
-	_ = godotenv.Load()
-
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		log.Fatal("JWT_SECRET is required")
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config error: %v", err)
 	}
 
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	// Open a connection pool to Postgres using DB_* values from the environment
-	pool, err := database.Connect()
+	pool, err := database.Connect(cfg)
 	if err != nil {
 		log.Fatalf("database error: %v", err)
 	}
 	defer pool.Close()
 
-	// Apply pending SQL migrations so every developer shares the same schema via Git
 	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer migCancel()
 	if err := database.MigrateUp(migCtx, pool); err != nil {
@@ -50,11 +38,11 @@ func main() {
 	customers := repository.NewCustomerRepository(pool)
 	sellers := repository.NewSellerRepository(pool)
 
-	authService := services.NewAuthService(admins, jwtSecret)
+	authService := services.NewAuthService(admins, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry)
 	adminService := services.NewAdminService(admins)
 	countryService := services.NewCountryService(countries)
-	customerService := services.NewCustomerService(customers, countries, jwtSecret)
-	sellerService := services.NewSellerService(sellers, countries, jwtSecret)
+	customerService := services.NewCustomerService(customers, countries, cfg.JWTSecret, cfg.JWTExpiry)
+	sellerService := services.NewSellerService(sellers, countries, cfg.JWTSecret, cfg.JWTExpiry)
 
 	authHandler := handlers.NewAuthHandler(authService)
 	adminHandler := handlers.NewAdminHandler(adminService)
@@ -62,10 +50,10 @@ func main() {
 	customerHandler := handlers.NewCustomerHandler(customerService)
 	sellerHandler := handlers.NewSellerHandler(sellerService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, jwtSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, cfg.JWTSecret)
 
-	addr := ":" + port
-	fmt.Printf("✅ Database connected: %s\n", os.Getenv("DB_NAME"))
+	addr := ":" + cfg.AppPort
+	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)
 	fmt.Printf("🚀 Server listening on http://localhost%s\n", addr)
 
 	if err := http.ListenAndServe(addr, router); err != nil {
