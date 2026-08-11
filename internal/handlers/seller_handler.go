@@ -33,11 +33,6 @@ type sellerRegisterRequest struct {
 	Shop        *services.ShopInput           `json:"shop"`
 }
 
-type sellerLoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
 type sellerUpdateRequest struct {
 	CountryID   string  `json:"country_id"`
 	SellerType  string  `json:"seller_type"`
@@ -68,24 +63,6 @@ func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.JSON(w, http.StatusCreated, details)
-}
-
-func (h *SellerHandler) Login(w http.ResponseWriter, r *http.Request) {
-	var req sellerLoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.Error(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	result, err := h.sellers.Login(r.Context(), req.Email, req.Password)
-	if err != nil {
-		if errors.Is(err, services.ErrInvalidCredentials) {
-			utils.Error(w, http.StatusUnauthorized, "invalid email or password")
-			return
-		}
-		utils.Error(w, http.StatusInternalServerError, "login failed")
-		return
-	}
-	utils.JSON(w, http.StatusOK, result)
 }
 
 func (h *SellerHandler) Me(w http.ResponseWriter, r *http.Request) {

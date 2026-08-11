@@ -32,11 +32,6 @@ type customerRegisterRequest struct {
 	Addresses    []services.AddressInput  `json:"addresses"`
 }
 
-type customerLoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
 type customerUpdateRequest struct {
 	CountryID    string  `json:"country_id"`
 	Phone        *string `json:"phone"`
@@ -68,25 +63,6 @@ func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.JSON(w, http.StatusCreated, details)
-}
-
-func (h *CustomerHandler) Login(w http.ResponseWriter, r *http.Request) {
-	var req customerLoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.Error(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	result, err := h.customers.Login(r.Context(), req.Email, req.Password)
-	if err != nil {
-		if errors.Is(err, services.ErrInvalidCredentials) {
-			utils.Error(w, http.StatusUnauthorized, "invalid email or password")
-			return
-		}
-		utils.Error(w, http.StatusInternalServerError, "login failed")
-		return
-	}
-	utils.JSON(w, http.StatusOK, result)
 }
 
 func (h *CustomerHandler) Me(w http.ResponseWriter, r *http.Request) {

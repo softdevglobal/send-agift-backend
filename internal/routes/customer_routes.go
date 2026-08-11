@@ -10,7 +10,6 @@ import (
 // RegisterCustomerRoutes mounts customer auth and profile/address routes.
 func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, jwtSecret string) {
 	r.Post("/customers/register", customers.Register)
-	r.Post("/customers/login", customers.Login)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))

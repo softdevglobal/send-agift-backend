@@ -38,7 +38,7 @@ func main() {
 	customers := repository.NewCustomerRepository(pool)
 	sellers := repository.NewSellerRepository(pool)
 
-	authService := services.NewAuthService(admins, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry)
+	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry)
 	adminService := services.NewAdminService(admins)
 	countryService := services.NewCountryService(countries)
 	customerService := services.NewCustomerService(customers, countries, cfg.JWTSecret, cfg.JWTExpiry)

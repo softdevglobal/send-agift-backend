@@ -6,10 +6,9 @@ import (
 	"myapp/internal/handlers"
 )
 
-// RegisterAuthRoutes mounts public auth endpoints (login).
-// POST /api/v1/auth/login
+// RegisterAuthRoutes mounts the shared login for admin, customer, and seller.
 func RegisterAuthRoutes(r chi.Router, auth *handlers.AuthHandler) {
-	r.Route("/auth", func(r chi.Router) {
-		r.Post("/login", auth.Login)
-	})
+	r.Post("/auth/login", auth.Login)
+	r.Post("/customers/login", auth.Login)
+	r.Post("/sellers/login", auth.Login)
 }

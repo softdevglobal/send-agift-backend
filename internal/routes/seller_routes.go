@@ -10,7 +10,6 @@ import (
 // RegisterSellerRoutes mounts seller auth, profile, address, and shop routes.
 func RegisterSellerRoutes(r chi.Router, sellers *handlers.SellerHandler, jwtSecret string) {
 	r.Post("/sellers/register", sellers.Register)
-	r.Post("/sellers/login", sellers.Login)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
