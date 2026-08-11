@@ -1,14 +1,15 @@
 package handlers
 
 import (
-	"errors"
-	"net/http"
+	"errors" // errors is used to handle errors
+	"net/http" // net/http is used to create and manage HTTP servers and clients
 
-	"myapp/internal/middleware"
-	"myapp/internal/services"
-	"myapp/internal/utils"
+	"myapp/internal/middleware" // middleware is used to handle the middleware of the application
+	"myapp/internal/services" // services is used to handle the services of the application
+	"myapp/internal/utils" // utils is used to handle the utilities of the application
 )
 
+// AdminHandler is a struct that contains the admin service
 type AdminHandler struct {
 	admins *services.AdminService
 }

@@ -10,6 +10,7 @@ import (
 // RequireRole allows the request only when the JWT role is one of the allowed values.
 // Use after RequireAuth. Treats "superadmin" as admin-capable.
 func RequireRole(allowed ...string) func(http.Handler) http.Handler {
+	// allowedSet is a map of allowed roles
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, role := range allowed {
 		allowedSet[strings.ToLower(role)] = struct{}{}
