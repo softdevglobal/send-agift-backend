@@ -27,6 +27,8 @@ func New(
 	customers *handlers.CustomerHandler,
 	// Handler instance that manages seller-related operations
 	sellers *handlers.SellerHandler,
+	// Handler instance that manages seller products and inventory
+	products *handlers.ProductHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -92,7 +94,7 @@ func New(
 		
 		// Register seller-related routes (requires valid JWT token)
 		// Example: GET /api/v1/sellers, POST /api/v1/sellers
-		RegisterSellerRoutes(r, sellers, jwtSecret)
+		RegisterSellerRoutes(r, sellers, products, jwtSecret)
 	})
 
 	// Return the fully configured router

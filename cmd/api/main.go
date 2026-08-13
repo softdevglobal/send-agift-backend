@@ -42,20 +42,23 @@ func main() {
 	countries := repository.NewCountryRepository(pool) // create a new country repository
 	customers := repository.NewCustomerRepository(pool) // create a new customer repository
 	sellers := repository.NewSellerRepository(pool) // create a new seller repository
+	products := repository.NewProductRepository(pool)
 
 	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry) // create a new auth service
 	adminService := services.NewAdminService(admins) // create a new admin service
 	countryService := services.NewCountryService(countries)
 	customerService := services.NewCustomerService(customers, countries, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
 	sellerService := services.NewSellerService(sellers, countries, cfg.JWTSecret, cfg.JWTExpiry)
+	productService := services.NewProductService(products, sellers)
 
 	authHandler := handlers.NewAuthHandler(authService) // create a new auth handler
 	adminHandler := handlers.NewAdminHandler(adminService) // create a new admin handler
 	countryHandler := handlers.NewCountryHandler(countryService) // create a new country handler
 	customerHandler := handlers.NewCustomerHandler(customerService) // create a new customer handler
 	sellerHandler := handlers.NewSellerHandler(sellerService) // create a new seller handler
+	productHandler := handlers.NewProductHandler(productService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, productHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name
