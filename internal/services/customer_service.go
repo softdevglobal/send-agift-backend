@@ -46,6 +46,7 @@ type CustomerRegisterInput struct {
 	CustomerType string         // Customer type for the customer
 	DateOfBirth  string         // Date of birth for the customer
 	Addresses    []AddressInput // Addresses for the customer
+	ImageURL     *string
 }
 
 type CustomerUpdateInput struct {
@@ -55,6 +56,7 @@ type CustomerUpdateInput struct {
 	CustomerType string  // Customer type for the customer
 	DateOfBirth  string  // Date of birth for the customer
 	Status       string  // Status for the customer
+	ImageURL     *string
 }
 
 type AddressInput struct {
@@ -121,6 +123,7 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 		CustomerType: in.CustomerType,
 		DateOfBirth:  dob,
 		Status:       "active",
+		ImageURL:     in.ImageURL,
 	}
 	if err := s.customers.Create(ctx, customer); err != nil {
 		if errors.Is(err, repository.ErrCustomerDuplicate) {
@@ -232,6 +235,9 @@ func (s *CustomerService) Update(ctx context.Context, customerID string, in Cust
 	}
 	if strings.TrimSpace(in.Status) != "" {
 		customer.Status = strings.TrimSpace(in.Status)
+	}
+	if in.ImageURL != nil {
+		customer.ImageURL = in.ImageURL
 	}
 
 	if err := s.customers.Update(ctx, customer); err != nil {

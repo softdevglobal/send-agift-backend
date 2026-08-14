@@ -29,11 +29,11 @@ func NewCustomerRepository(db *pgxpool.Pool) *CustomerRepository {
 func (r *CustomerRepository) Create(ctx context.Context, c *models.Customer) error {
 	err := r.db.QueryRow(ctx, `
 		insert into customer.customers (
-			country_id, email, phone, password_hash, display_name, customer_type, date_of_birth, status
-		) values ($1,$2,$3,$4,$5,$6,$7,$8)
-		returning id, created_at, updated_at`,
-		c.CountryID, c.Email, c.Phone, c.PasswordHash, c.DisplayName, c.CustomerType, c.DateOfBirth, c.Status,
-	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
+			country_id, email, phone, password_hash, display_name, customer_type, date_of_birth, status, image_url
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		returning id, created_at, updated_at, image_url`,
+		c.CountryID, c.Email, c.Phone, c.PasswordHash, c.DisplayName, c.CustomerType, c.DateOfBirth, c.Status, c.ImageURL,
+	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt, &c.ImageURL)
 	return mapCustomerWriteError(err)
 }
 
@@ -42,13 +42,13 @@ func (r *CustomerRepository) GetByEmail(ctx context.Context, email string) (*mod
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, email, phone, password_hash, display_name, customer_type,
 		       date_of_birth, age_verified_at, identity_verified_at, status,
-		       created_at, updated_at, deleted_at
+		       created_at, updated_at, deleted_at, image_url
 		from customer.customers
 		where email = $1 and deleted_at is null and status = 'active'`, email,
 	).Scan(
 		&c.ID, &c.CountryID, &c.Email, &c.Phone, &c.PasswordHash, &c.DisplayName, &c.CustomerType,
 		&c.DateOfBirth, &c.AgeVerifiedAt, &c.IdentityVerifiedAt, &c.Status,
-		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
+		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrCustomerNotFound
@@ -61,13 +61,13 @@ func (r *CustomerRepository) GetByID(ctx context.Context, id string) (*models.Cu
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, email, phone, password_hash, display_name, customer_type,
 		       date_of_birth, age_verified_at, identity_verified_at, status,
-		       created_at, updated_at, deleted_at
+		       created_at, updated_at, deleted_at, image_url
 		from customer.customers
 		where id = $1 and deleted_at is null`, id,
 	).Scan(
 		&c.ID, &c.CountryID, &c.Email, &c.Phone, &c.PasswordHash, &c.DisplayName, &c.CustomerType,
 		&c.DateOfBirth, &c.AgeVerifiedAt, &c.IdentityVerifiedAt, &c.Status,
-		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
+		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrCustomerNotFound
@@ -84,10 +84,11 @@ func (r *CustomerRepository) Update(ctx context.Context, c *models.Customer) err
 		    customer_type = $5,
 		    date_of_birth = $6,
 		    status = $7,
+		    image_url = $8,
 		    updated_at = now()
 		where id = $1 and deleted_at is null
 		returning updated_at`,
-		c.ID, c.CountryID, c.Phone, c.DisplayName, c.CustomerType, c.DateOfBirth, c.Status,
+		c.ID, c.CountryID, c.Phone, c.DisplayName, c.CustomerType, c.DateOfBirth, c.Status, c.ImageURL,
 	).Scan(&c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrCustomerNotFound
@@ -98,7 +99,7 @@ func (r *CustomerRepository) Update(ctx context.Context, c *models.Customer) err
 func (r *CustomerRepository) SoftDelete(ctx context.Context, id string) error {
 	tag, err := r.db.Exec(ctx, `
 		update customer.customers
-		set deleted_at = now(), updated_at = now(), status = 'deleted'
+		set deleted_at = now(), updated_at = now(), status = 'deleted', 
 		where id = $1 and deleted_at is null`, id)
 	if err != nil {
 		return err

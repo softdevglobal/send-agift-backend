@@ -33,11 +33,11 @@ func (r *ProductRepository) Create(ctx context.Context, p *models.Product) error
 	err := r.db.QueryRow(ctx, `
 		insert into seller.products (
 			shop_id, name, slug, description, product_type, price_amount, currency,
-			status, occasion_tags, customer_type_visibility, points_display_enabled, prep_minutes
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			status, occasion_tags, customer_type_visibility, points_display_enabled, prep_minutes, image_url
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		returning id, status, created_at, updated_at`,
 		p.ShopID, p.Name, p.Slug, p.Description, p.ProductType, p.PriceAmount, p.Currency,
-		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes,
+		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
 	).Scan(&p.ID, &p.Status, &p.CreatedAt, &p.UpdatedAt)
 	return mapProductWriteError(err)
 }
@@ -59,11 +59,12 @@ func (r *ProductRepository) Update(ctx context.Context, p *models.Product) error
 		    customer_type_visibility = $10,
 		    points_display_enabled = $11,
 		    prep_minutes = $12,
+		    image_url = $13,
 		    updated_at = now()
 		where id = $1
 		returning updated_at`,
 		p.ID, p.Name, p.Slug, p.Description, p.ProductType, p.PriceAmount, p.Currency,
-		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes,
+		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
 	).Scan(&p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrProductNotFound
@@ -87,14 +88,14 @@ func (r *ProductRepository) GetByIDForSeller(ctx context.Context, sellerID, prod
 	err := r.db.QueryRow(ctx, `
 		select p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 		       p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at
+		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.id = $1 and s.seller_id = $2`, productID, sellerID,
 	).Scan(
 		&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
 		&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-		&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt,
+		&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrProductNotFound
@@ -109,7 +110,7 @@ func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, s
 	rows, err := r.db.Query(ctx, `
 		select p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 		       p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at
+		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.shop_id = $1 and s.seller_id = $2
@@ -125,7 +126,7 @@ func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, s
 		if err := rows.Scan(
 			&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
 			&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt,
+			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
 		); err != nil {
 			return nil, err
 		}

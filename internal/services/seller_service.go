@@ -49,6 +49,7 @@ type SellerRegisterInput struct {	// SellerRegisterInput is a struct that contai
 	Email       string	// email for the seller
 	Password    string	// password for the seller
 	Phone       *string	// phone for the seller	
+	ImageURL    *string
 	Addresses   []SellerAddressInput	// addresses for the seller
 	Shop        *ShopInput // nil / omitted = blank (no shop)
 }
@@ -59,6 +60,7 @@ type SellerUpdateInput struct {	// SellerUpdateInput is a struct that contains t
 	LegalName   string	// legal name for the seller
 	TradingName *string	// trading name for the seller
 	Phone       *string	// phone for the seller
+	ImageURL    *string
 }
 
 type SellerAddressInput struct {
@@ -83,6 +85,7 @@ type ShopInput struct {
 	CustomerVisibleLocation *string `json:"customer_visible_location"`	// customer visible location for the shop
 	Status                  string  `json:"status"`	// status for the shop
 	AddressID               *string `json:"address_id"`
+	ImageURL                *string `json:"image_url"`
 }	// ShopInput is a struct that contains the input for the shop
 
 type SellerLoginResult struct {
@@ -126,6 +129,7 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 		PasswordHash:       hash,
 		VerificationStatus: "unverified",
 		Status:             "active",
+		ImageURL:           in.ImageURL,
 	}
 	if err := s.sellers.Create(ctx, seller); err != nil {
 		if errors.Is(err, repository.ErrSellerDuplicate) {
@@ -241,6 +245,9 @@ func (s *SellerService) Update(ctx context.Context, sellerID string, in SellerUp
 	if in.Phone != nil {
 		seller.Phone = in.Phone	// phone for the seller
 	}
+	if in.ImageURL != nil {
+		seller.ImageURL = in.ImageURL
+	}
 	if err := s.sellers.Update(ctx, seller); err != nil {
 		return nil, err	// return an error if the seller is not updated
 	}
@@ -336,6 +343,9 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 			shop.AddressID = &aid
 		}
 	}
+	if in.ImageURL != nil {
+		shop.ImageURL = in.ImageURL
+	}
 	if err := s.sellers.UpdateShop(ctx, shop); err != nil {
 		if errors.Is(err, repository.ErrShopDuplicate) {
 			return nil, ErrShopConflict
@@ -386,6 +396,7 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		CustomerVisibleLocation: in.CustomerVisibleLocation,
 		Status:                  status,
 		AddressID:               addressID,
+		ImageURL:                in.ImageURL,
 	}
 	if err := s.sellers.CreateShop(ctx, shop); err != nil {
 		if errors.Is(err, repository.ErrShopDuplicate) {

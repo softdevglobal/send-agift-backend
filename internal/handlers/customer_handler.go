@@ -30,6 +30,7 @@ type customerRegisterRequest struct {
 	CustomerType string                   `json:"customer_type"`
 	DateOfBirth  string                   `json:"date_of_birth"`
 	Addresses    []services.AddressInput  `json:"addresses"`
+	ImageURL     *string                  `json:"image_url"`
 }
 
 type customerUpdateRequest struct {
@@ -39,6 +40,7 @@ type customerUpdateRequest struct {
 	CustomerType string  `json:"customer_type"`
 	DateOfBirth  string  `json:"date_of_birth"`
 	Status       string  `json:"status"`
+	ImageURL     *string `json:"image_url"`
 }
 
 func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +59,7 @@ func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		CustomerType: req.CustomerType,
 		DateOfBirth:  req.DateOfBirth,
 		Addresses:    req.Addresses,
+		ImageURL:     req.ImageURL,
 	})
 	if err != nil {
 		h.writeCustomerError(w, err, "could not register customer")
@@ -90,6 +93,7 @@ func (h *CustomerHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		CustomerType: req.CustomerType,
 		DateOfBirth:  req.DateOfBirth,
 		Status:       req.Status,
+		ImageURL:     req.ImageURL,
 	})
 	if err != nil {
 		h.writeCustomerError(w, err, "could not update customer")

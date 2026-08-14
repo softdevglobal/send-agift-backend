@@ -23,6 +23,7 @@ type Product struct {
 	PrepMinutes            int       `json:"prep_minutes"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
+	ImageURL               *string   `json:"image_url,omitempty"`
 }
 
 // Inventory maps to seller.inventory.

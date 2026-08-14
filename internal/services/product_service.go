@@ -41,6 +41,7 @@ type ProductInput struct {
 	CustomerTypeVisibility string   `json:"customer_type_visibility"`
 	PointsDisplayEnabled   bool     `json:"points_display_enabled"`
 	PrepMinutes            int      `json:"prep_minutes"`
+	ImageURL               *string  `json:"image_url"`
 	Inventory              *InventoryInput `json:"inventory"`
 }
 
@@ -244,6 +245,7 @@ func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput) (*models.Pr
 		CustomerTypeVisibility: in.CustomerTypeVisibility,
 		PointsDisplayEnabled:   in.PointsDisplayEnabled,
 		PrepMinutes:            in.PrepMinutes,
+		ImageURL:               in.ImageURL,
 	}, nil
 }
 

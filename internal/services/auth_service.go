@@ -49,6 +49,7 @@ type BootstrapInput struct {
 	Email           string
 	Password        string
 	DisplayName     string
+	ImageURL        *string
 	BootstrapSecret string
 }
 
@@ -90,6 +91,7 @@ func (s *AuthService) Bootstrap(ctx context.Context, in BootstrapInput) (*models
 		DisplayName:  in.DisplayName,
 		Role:         "superadmin",
 		MFARequired:  true,
+		ImageURL:     in.ImageURL,
 	}
 	if err := s.admins.CreateAdmin(ctx, admin); err != nil {
 		return nil, err // return an error if the admin is not created

@@ -22,6 +22,7 @@ type Customer struct {
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 	DeletedAt           *time.Time `json:"deleted_at,omitempty"`
+	ImageURL            *string    `json:"image_url,omitempty"`
 }
 
 // CustomerAddress maps to customer.customer_addresses.
