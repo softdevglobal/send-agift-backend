@@ -7,7 +7,7 @@ import (
 	"myapp/internal/middleware"
 )
 
-// RegisterCustomerRoutes mounts customer auth and profile/address routes.
+// RegisterCustomerRoutes mounts customer auth, profile, address, and saved-gift routes.
 func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, jwtSecret string) {
 	r.Post("/customers/register", customers.Register) // register a new customer	
 
@@ -19,5 +19,10 @@ func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, j
 		r.Delete("/customers/me", customers.DeleteMe) // delete the customer's profile
 		r.Post("/customers/me/addresses", customers.AddAddress) // add a new address to the customer's profile
 		r.Delete("/customers/me/addresses/{id}", customers.DeleteAddress) // delete an address from the customer's profile
+
+		// Saved gifts (wishlist) — no PUT; change = delete + create
+		r.Get("/customers/me/saved-gifts", customers.ListSavedGifts)
+		r.Post("/customers/me/saved-gifts", customers.AddSavedGift)
+		r.Delete("/customers/me/saved-gifts/{id}", customers.DeleteSavedGift)
 	})
 }

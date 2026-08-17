@@ -47,7 +47,7 @@ func main() {
 	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry) // create a new auth service
 	adminService := services.NewAdminService(admins) // create a new admin service
 	countryService := services.NewCountryService(countries)
-	customerService := services.NewCustomerService(customers, countries, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
+	customerService := services.NewCustomerService(customers, countries, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
 	sellerService := services.NewSellerService(sellers, countries, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers)
 

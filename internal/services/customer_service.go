@@ -14,16 +14,20 @@ import (
 )
 
 var (
-	ErrCustomerNotFound = errors.New("customer not found")      // error for the service
-	ErrCustomerConflict = errors.New("customer already exists") // error for the service
-	ErrAddressNotFound  = errors.New("address not found")       // error for the service
-	ErrInvalidCountry   = errors.New("invalid country")         // error for the service
-	ErrInvalidAddress   = errors.New("invalid address")         // error for the service
+	ErrCustomerNotFound   = errors.New("customer not found")      // error for the service
+	ErrCustomerConflict   = errors.New("customer already exists") // error for the service
+	ErrAddressNotFound    = errors.New("address not found")       // error for the service
+	ErrInvalidCountry     = errors.New("invalid country")         // error for the service
+	ErrInvalidAddress     = errors.New("invalid address")         // error for the service
+	ErrSavedGiftNotFound  = errors.New("saved gift not found")
+	ErrSavedGiftConflict  = errors.New("product already saved")
+	ErrSavedGiftProduct   = errors.New("product not found")
 ) // error for the service
 
 type CustomerService struct {
 	customers *repository.CustomerRepository // repository for the service
 	countries *repository.CountryRepository  // repository for the service
+	products  *repository.ProductRepository  // for validating product_id on saved gifts
 	jwtSecret string                         // secret for the JWT
 	jwtExpiry time.Duration                  // expiry for the JWT
 }
@@ -31,10 +35,17 @@ type CustomerService struct {
 func NewCustomerService(
 	customers *repository.CustomerRepository,
 	countries *repository.CountryRepository,
+	products *repository.ProductRepository,
 	jwtSecret string,
 	jwtExpiry time.Duration,
 ) *CustomerService { // NewCustomerService is a function that creates a new CustomerService
-	return &CustomerService{customers: customers, countries: countries, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry}
+	return &CustomerService{
+		customers: customers,
+		countries: countries,
+		products:  products,
+		jwtSecret: jwtSecret,
+		jwtExpiry: jwtExpiry,
+	}
 }
 
 type CustomerRegisterInput struct {
@@ -292,6 +303,74 @@ func (s *CustomerService) DeleteAddress(ctx context.Context, customerID, address
 		return ErrAddressNotFound // return an error if the address is not found
 	}
 	return err // return an error if the address is not deleted
+}
+
+// AddSavedGift validates the customer and product, then inserts a wishlist row.
+// Duplicate customer+product returns ErrSavedGiftConflict.
+func (s *CustomerService) AddSavedGift(ctx context.Context, customerID, productID string) (*models.SavedGift, error) {
+	// Ensure the logged-in customer still exists.
+	if _, err := s.customers.GetByID(ctx, customerID); err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return nil, ErrCustomerNotFound
+		}
+		return nil, err
+	}
+
+	cid, err := uuid.Parse(customerID)
+	if err != nil {
+		return nil, ErrCustomerNotFound
+	}
+	pid, err := uuid.Parse(productID)
+	if err != nil {
+		return nil, ErrSavedGiftProduct
+	}
+
+	// Product must exist in seller.products before it can be saved.
+	exists, err := s.products.ExistsByID(ctx, pid.String())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrSavedGiftProduct
+	}
+
+	gift := &models.SavedGift{
+		CustomerID: cid,
+		ProductID:  pid,
+	}
+	if err := s.customers.CreateSavedGift(ctx, gift); err != nil {
+		if errors.Is(err, repository.ErrSavedGiftDuplicate) {
+			return nil, ErrSavedGiftConflict
+		}
+		return nil, err
+	}
+	return gift, nil
+}
+
+// ListSavedGifts returns all saved gifts for the logged-in customer, with product details.
+func (s *CustomerService) ListSavedGifts(ctx context.Context, customerID string) ([]models.SavedGiftDetails, error) {
+	if _, err := s.customers.GetByID(ctx, customerID); err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return nil, ErrCustomerNotFound
+		}
+		return nil, err
+	}
+	return s.customers.ListSavedGifts(ctx, customerID)
+}
+
+// DeleteSavedGift removes a saved gift only if it belongs to this customer.
+func (s *CustomerService) DeleteSavedGift(ctx context.Context, customerID, savedGiftID string) error {
+	if _, err := s.customers.GetByID(ctx, customerID); err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return ErrCustomerNotFound
+		}
+		return err
+	}
+	err := s.customers.DeleteSavedGift(ctx, customerID, savedGiftID)
+	if errors.Is(err, repository.ErrSavedGiftNotFound) {
+		return ErrSavedGiftNotFound
+	}
+	return err
 }
 
 func (s *CustomerService) buildAddress(customerID uuid.UUID, in AddressInput) (*models.CustomerAddress, error) { // buildAddress is a function that builds an address

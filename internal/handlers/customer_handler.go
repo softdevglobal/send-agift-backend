@@ -137,6 +137,51 @@ func (h *CustomerHandler) DeleteAddress(w http.ResponseWriter, r *http.Request) 
 	utils.JSON(w, http.StatusOK, map[string]string{"message": "address deleted"})
 }
 
+type savedGiftRequest struct {
+	ProductID string `json:"product_id"`
+}
+
+// AddSavedGift saves a product to the customer's wishlist.
+// Body: { "product_id": "uuid" }
+func (h *CustomerHandler) AddSavedGift(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	var req savedGiftRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	gift, err := h.customers.AddSavedGift(r.Context(), customerID, req.ProductID)
+	if err != nil {
+		h.writeCustomerError(w, err, "could not save gift")
+		return
+	}
+	utils.JSON(w, http.StatusCreated, gift)
+}
+
+// ListSavedGifts returns all saved gifts for the logged-in customer.
+// No body.
+func (h *CustomerHandler) ListSavedGifts(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	items, err := h.customers.ListSavedGifts(r.Context(), customerID)
+	if err != nil {
+		h.writeCustomerError(w, err, "could not list saved gifts")
+		return
+	}
+	utils.JSON(w, http.StatusOK, items)
+}
+
+// DeleteSavedGift removes one saved gift by id (must belong to this customer).
+// No body — use URL {id}.
+func (h *CustomerHandler) DeleteSavedGift(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	savedGiftID := chi.URLParam(r, "id")
+	if err := h.customers.DeleteSavedGift(r.Context(), customerID, savedGiftID); err != nil {
+		h.writeCustomerError(w, err, "could not delete saved gift")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]string{"message": "saved gift deleted"})
+}
+
 func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, services.ErrInvalidInput):
@@ -147,10 +192,16 @@ func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, f
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, and city")
 	case errors.Is(err, services.ErrCustomerConflict):
 		utils.Error(w, http.StatusConflict, "email already registered")
+	case errors.Is(err, services.ErrSavedGiftConflict):
+		utils.Error(w, http.StatusConflict, "product already saved")
+	case errors.Is(err, services.ErrSavedGiftProduct):
+		utils.Error(w, http.StatusBadRequest, "invalid or missing product_id")
 	case errors.Is(err, services.ErrCustomerNotFound):
 		utils.Error(w, http.StatusNotFound, "customer not found")
 	case errors.Is(err, services.ErrAddressNotFound):
 		utils.Error(w, http.StatusNotFound, "address not found")
+	case errors.Is(err, services.ErrSavedGiftNotFound):
+		utils.Error(w, http.StatusNotFound, "saved gift not found")
 	default:
 		log.Printf("customer handler error: %v", err)
 		utils.Error(w, http.StatusInternalServerError, fallback)

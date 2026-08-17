@@ -83,6 +83,15 @@ func (r *ProductRepository) Delete(ctx context.Context, productID string) error 
 	return nil
 }
 
+// ExistsByID returns true when a product row exists (used by customer saved gifts).
+func (r *ProductRepository) ExistsByID(ctx context.Context, productID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		select exists(select 1 from seller.products where id = $1)`, productID,
+	).Scan(&exists)
+	return exists, err
+}
+
 func (r *ProductRepository) GetByIDForSeller(ctx context.Context, sellerID, productID string) (*models.Product, error) {
 	p := &models.Product{}
 	err := r.db.QueryRow(ctx, `
