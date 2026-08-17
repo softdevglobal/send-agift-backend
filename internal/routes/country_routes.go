@@ -7,15 +7,11 @@ import (
 	"myapp/internal/middleware"
 )
 
-// RegisterCountryRoutes mounts country read (auth roles) and admin write routes.
+// RegisterCountryRoutes mounts public country read routes and admin write routes.
 func RegisterCountryRoutes(r chi.Router, countries *handlers.CountryHandler, jwtSecret string) {
-	// Read: admin, customer, or seller only
-	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireAuth(jwtSecret))
-		r.Use(middleware.RequireRole("admin", "customer", "seller"))
-		r.Get("/countries", countries.List)
-		r.Get("/countries/{id}", countries.GetByID)
-	})
+	// Read: public (needed for registration forms before login)
+	r.Get("/countries", countries.List)
+	r.Get("/countries/{id}", countries.GetByID)
 
 	// Write: admin / superadmin only
 	r.Group(func(r chi.Router) {
