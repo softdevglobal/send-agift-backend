@@ -18,9 +18,10 @@ func NewAuthHandler(auth *services.AuthService) *AuthHandler {
 }
 
 type bootstrapRequest struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	DisplayName string `json:"display_name"`
+	Email       string  `json:"email"`
+	Password    string  `json:"password"`
+	DisplayName string  `json:"display_name"`
+	ImageURL    *string `json:"image_url"`
 }
 
 // Bootstrap creates the very first superadmin (HTTP layer only).
@@ -35,6 +36,7 @@ func (h *AuthHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		Email:           req.Email,
 		Password:        req.Password,
 		DisplayName:     req.DisplayName,
+		ImageURL:        req.ImageURL,
 		BootstrapSecret: r.Header.Get("X-Bootstrap-Secret"),
 	})
 	if err != nil {

@@ -20,6 +20,7 @@ type Seller struct {
 	Status             string    `json:"status"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
+	ImageURL           *string   `json:"image_url,omitempty"`
 }
 
 // SellerAddress maps to seller.seller_addresses.
@@ -54,6 +55,7 @@ type Shop struct {
 	AddressID               *uuid.UUID `json:"address_id,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
+	ImageURL                *string    `json:"image_url,omitempty"`
 }
 
 // SellerDetails is seller profile with addresses and shops.

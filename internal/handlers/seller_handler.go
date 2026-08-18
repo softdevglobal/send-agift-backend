@@ -29,6 +29,7 @@ type sellerRegisterRequest struct {
 	Email       string                        `json:"email"`
 	Password    string                        `json:"password"`
 	Phone       *string                       `json:"phone"`
+	ImageURL    *string                       `json:"image_url"`
 	Addresses   []services.SellerAddressInput `json:"addresses"`
 	Shop        *services.ShopInput           `json:"shop"`
 }
@@ -39,6 +40,7 @@ type sellerUpdateRequest struct {
 	LegalName   string  `json:"legal_name"`
 	TradingName *string `json:"trading_name"`
 	Phone       *string `json:"phone"`
+	ImageURL    *string `json:"image_url"`
 }
 
 func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,7 @@ func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Email:       req.Email,
 		Password:    req.Password,
 		Phone:       req.Phone,
+		ImageURL:    req.ImageURL,
 		Addresses:   req.Addresses,
 		Shop:        req.Shop,
 	})
@@ -88,6 +91,7 @@ func (h *SellerHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		LegalName:   req.LegalName,
 		TradingName: req.TradingName,
 		Phone:       req.Phone,
+		ImageURL:    req.ImageURL,
 	})
 	if err != nil {
 		h.writeError(w, err, "could not update seller")
