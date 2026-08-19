@@ -232,12 +232,12 @@ func (r *SellerRepository) DeleteAddress(ctx context.Context, sellerID, addressI
 func (r *SellerRepository) CreateShop(ctx context.Context, s *models.Shop) error {
 	err := r.db.QueryRow(ctx, `
 		insert into seller.shops (
-			seller_id, name, slug, description, return_address_mode,
-			customer_visible_location, status, address_id, image_url
+			seller_id, name, slug, description,
+			customer_visible_location, status, address_id, return_address_id, image_url
 		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		returning id, status, created_at, updated_at`,
-		s.SellerID, s.Name, s.Slug, s.Description, s.ReturnAddressMode,
-		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ImageURL,
+		s.SellerID, s.Name, s.Slug, s.Description,
+		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ReturnAddressID, s.ImageURL,
 	).Scan(&s.ID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	return mapShopWriteError(err)
 }
@@ -248,16 +248,16 @@ func (r *SellerRepository) UpdateShop(ctx context.Context, s *models.Shop) error
 		set name = $3,
 		    slug = $4,
 		    description = $5,
-		    return_address_mode = $6,
-		    customer_visible_location = $7,
-		    status = $8,
-		    address_id = $9,
+		    customer_visible_location = $6,
+		    status = $7,
+		    address_id = $8,
+		    return_address_id = $9,
 		    image_url = $10,
 		    updated_at = now()
 		where id = $1 and seller_id = $2
 		returning updated_at`,
-		s.ID, s.SellerID, s.Name, s.Slug, s.Description, s.ReturnAddressMode,
-		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ImageURL,
+		s.ID, s.SellerID, s.Name, s.Slug, s.Description,
+		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ReturnAddressID, s.ImageURL,
 	).Scan(&s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrShopNotFound
@@ -279,8 +279,8 @@ func (r *SellerRepository) DeleteShop(ctx context.Context, sellerID, shopID stri
 
 func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
-		select id, seller_id, name, slug, description, return_address_mode,
-		       customer_visible_location, status, address_id, created_at, updated_at, image_url
+		select id, seller_id, name, slug, description,
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
 		from seller.shops
 		where seller_id = $1
 		order by created_at asc`, sellerID)
@@ -293,8 +293,8 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 	for rows.Next() {
 		var s models.Shop
 		if err := rows.Scan(
-			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description, &s.ReturnAddressMode,
-			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 		); err != nil {
 			return nil, err
 		}
@@ -309,13 +309,13 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 func (r *SellerRepository) GetShopByID(ctx context.Context, sellerID, shopID string) (*models.Shop, error) {
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
-		select id, seller_id, name, slug, description, return_address_mode,
-		       customer_visible_location, status, address_id, created_at, updated_at, image_url
+		select id, seller_id, name, slug, description,
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
 		from seller.shops
 		where id = $1 and seller_id = $2`, shopID, sellerID,
 	).Scan(
-		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description, &s.ReturnAddressMode,
-		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShopNotFound

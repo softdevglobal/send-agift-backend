@@ -81,10 +81,10 @@ type ShopInput struct {
 	Name                    string  `json:"name"`	// name for the shop		
 	Slug                    string  `json:"slug"`	// slug for the shop
 	Description             *string `json:"description"`	// description for the shop
-	ReturnAddressMode       string  `json:"return_address_mode"`	// return address mode for the shop
 	CustomerVisibleLocation *string `json:"customer_visible_location"`	// customer visible location for the shop
 	Status                  string  `json:"status"`	// status for the shop
 	AddressID               *string `json:"address_id"`
+	ReturnAddressID         *string `json:"return_address_id"`
 	ImageURL                *string `json:"image_url"`
 }	// ShopInput is a struct that contains the input for the shop
 
@@ -360,9 +360,6 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 	shop.Name = strings.TrimSpace(in.Name)
 	shop.Slug = slugOrFromName(in.Slug, in.Name)
 	shop.Description = in.Description
-	if strings.TrimSpace(in.ReturnAddressMode) != "" {
-		shop.ReturnAddressMode = strings.TrimSpace(in.ReturnAddressMode)
-	}
 	shop.CustomerVisibleLocation = in.CustomerVisibleLocation
 	if strings.TrimSpace(in.Status) != "" {
 		shop.Status = strings.TrimSpace(in.Status)
@@ -376,6 +373,17 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 				return nil, ErrInvalidAddress
 			}
 			shop.AddressID = &aid
+		}
+	}
+	if in.ReturnAddressID != nil {
+		if *in.ReturnAddressID == "" {
+			shop.ReturnAddressID = nil
+		} else {
+			rid, err := uuid.Parse(*in.ReturnAddressID)
+			if err != nil {
+				return nil, ErrInvalidAddress
+			}
+			shop.ReturnAddressID = &rid
 		}
 	}
 	if in.ImageURL != nil {
@@ -406,11 +414,7 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 	if in.Name == "" {
 		return nil, ErrInvalidShop
 	}
-	mode := strings.TrimSpace(in.ReturnAddressMode)
-	if mode == "" {
-		mode = "shop"
-	}
-	status := strings.TrimSpace(in.Status)	
+	status := strings.TrimSpace(in.Status)
 	if status == "" {
 		status = "active"
 	}
@@ -422,15 +426,23 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		}
 		addressID = &aid
 	}
+	var returnAddressID *uuid.UUID
+	if in.ReturnAddressID != nil && *in.ReturnAddressID != "" {
+		rid, err := uuid.Parse(*in.ReturnAddressID)
+		if err != nil {
+			return nil, ErrInvalidAddress
+		}
+		returnAddressID = &rid
+	}
 	shop := &models.Shop{
 		SellerID:                sellerID,
 		Name:                    in.Name,
 		Slug:                    slugOrFromName(in.Slug, in.Name),
 		Description:             in.Description,
-		ReturnAddressMode:       mode,
 		CustomerVisibleLocation: in.CustomerVisibleLocation,
 		Status:                  status,
 		AddressID:               addressID,
+		ReturnAddressID:         returnAddressID,
 		ImageURL:                in.ImageURL,
 	}
 	if err := s.sellers.CreateShop(ctx, shop); err != nil {

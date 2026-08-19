@@ -49,10 +49,10 @@ type Shop struct {
 	Name                    string     `json:"name"`
 	Slug                    string     `json:"slug"`
 	Description             *string    `json:"description,omitempty"`
-	ReturnAddressMode       string     `json:"return_address_mode"`
 	CustomerVisibleLocation *string    `json:"customer_visible_location,omitempty"`
 	Status                  string     `json:"status"`
 	AddressID               *uuid.UUID `json:"address_id,omitempty"`
+	ReturnAddressID         *uuid.UUID `json:"return_address_id,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
 	ImageURL                *string    `json:"image_url,omitempty"`
