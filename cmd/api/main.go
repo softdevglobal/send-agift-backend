@@ -38,6 +38,11 @@ func main() {
 	customers := repository.NewCustomerRepository(pool)
 	sellers := repository.NewSellerRepository(pool)
 
+	s3Service, err := services.NewS3Service(cfg)
+	if err != nil {
+		log.Fatalf("s3 error: %v", err)
+	}
+
 	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry)
 	adminService := services.NewAdminService(admins)
 	countryService := services.NewCountryService(countries)
@@ -49,8 +54,9 @@ func main() {
 	countryHandler := handlers.NewCountryHandler(countryService)
 	customerHandler := handlers.NewCustomerHandler(customerService)
 	sellerHandler := handlers.NewSellerHandler(sellerService)
+	mediaHandler := handlers.NewMediaHandler(s3Service)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, cfg.JWTSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, mediaHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)

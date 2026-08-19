@@ -49,6 +49,7 @@ type SellerRegisterInput struct {
 	Email       string
 	Password    string
 	Phone       *string
+	ImageURL    *string
 	Addresses   []SellerAddressInput
 	Shop        *ShopInput // nil / omitted = blank (no shop)
 }
@@ -59,6 +60,7 @@ type SellerUpdateInput struct {
 	LegalName   string
 	TradingName *string
 	Phone       *string
+	ImageURL    *string
 }
 
 type SellerAddressInput struct {
@@ -123,6 +125,7 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 		TradingName:        in.TradingName,
 		Email:              in.Email,
 		Phone:              in.Phone,
+		ImageURL:           in.ImageURL,
 		PasswordHash:       hash,
 		VerificationStatus: "unverified",
 		Status:             "active",
@@ -241,6 +244,9 @@ func (s *SellerService) Update(ctx context.Context, sellerID string, in SellerUp
 	if in.Phone != nil {
 		seller.Phone = in.Phone
 	}
+	if in.ImageURL != nil {
+		seller.ImageURL = in.ImageURL
+	}
 	if err := s.sellers.Update(ctx, seller); err != nil {
 		return nil, err
 	}
@@ -277,6 +283,41 @@ func (s *SellerService) AddAddress(ctx context.Context, sellerID string, in Sell
 		return nil, err
 	}
 	if err := s.sellers.CreateAddress(ctx, addr); err != nil {
+		return nil, err
+	}
+	return addr, nil
+}
+
+func (s *SellerService) UpdateAddress(ctx context.Context, sellerID, addressID string, in SellerAddressInput) (*models.SellerAddress, error) {
+	if _, err := s.sellers.GetByID(ctx, sellerID); err != nil {
+		if errors.Is(err, repository.ErrSellerNotFound) {
+			return nil, ErrSellerNotFound
+		}
+		return nil, err
+	}
+	sid, err := uuid.Parse(sellerID)
+	if err != nil {
+		return nil, ErrSellerNotFound
+	}
+	aid, err := uuid.Parse(addressID)
+	if err != nil {
+		return nil, ErrSellerAddrNotFound
+	}
+	addr, err := s.buildAddress(sid, in)
+	if err != nil {
+		return nil, err
+	}
+	addr.ID = aid
+	if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return nil, ErrInvalidCountry
+		}
+		return nil, err
+	}
+	if err := s.sellers.UpdateAddress(ctx, addr); err != nil {
+		if errors.Is(err, repository.ErrSellerAddrNotFound) {
+			return nil, ErrSellerAddrNotFound
+		}
 		return nil, err
 	}
 	return addr, nil

@@ -15,6 +15,7 @@ type Seller struct {
 	TradingName        *string   `json:"trading_name,omitempty"`
 	Email              string    `json:"email"`
 	Phone              *string   `json:"phone,omitempty"`
+	ImageURL           *string   `json:"image_url,omitempty"`
 	PasswordHash       string    `json:"-"`
 	VerificationStatus string    `json:"verification_status"`
 	Status             string    `json:"status"`

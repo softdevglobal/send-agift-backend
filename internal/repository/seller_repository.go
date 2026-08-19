@@ -31,11 +31,11 @@ func (r *SellerRepository) Create(ctx context.Context, s *models.Seller) error {
 	err := r.db.QueryRow(ctx, `
 		insert into seller.sellers (
 			country_id, seller_type, legal_name, trading_name, email, phone,
-			password_hash, verification_status, status
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			image_url, password_hash, verification_status, status
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		returning id, verification_status, status, created_at, updated_at`,
 		s.CountryID, s.SellerType, s.LegalName, s.TradingName, s.Email, s.Phone,
-		s.PasswordHash, s.VerificationStatus, s.Status,
+		s.ImageURL, s.PasswordHash, s.VerificationStatus, s.Status,
 	).Scan(&s.ID, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	return mapSellerWriteError(err)
 }
@@ -44,12 +44,12 @@ func (r *SellerRepository) GetByEmail(ctx context.Context, email string) (*model
 	s := &models.Seller{}
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, seller_type, legal_name, trading_name, email, phone,
-		       password_hash, verification_status, status, created_at, updated_at
+		       image_url, password_hash, verification_status, status, created_at, updated_at
 		from seller.sellers
 		where email = $1 and status = 'active'`, email,
 	).Scan(
 		&s.ID, &s.CountryID, &s.SellerType, &s.LegalName, &s.TradingName, &s.Email, &s.Phone,
-		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt,
+		&s.ImageURL, &s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSellerNotFound
@@ -61,12 +61,12 @@ func (r *SellerRepository) GetByID(ctx context.Context, id string) (*models.Sell
 	s := &models.Seller{}
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, seller_type, legal_name, trading_name, email, phone,
-		       password_hash, verification_status, status, created_at, updated_at
+		       image_url, password_hash, verification_status, status, created_at, updated_at
 		from seller.sellers
 		where id = $1`, id,
 	).Scan(
 		&s.ID, &s.CountryID, &s.SellerType, &s.LegalName, &s.TradingName, &s.Email, &s.Phone,
-		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt,
+		&s.ImageURL, &s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSellerNotFound
@@ -82,10 +82,11 @@ func (r *SellerRepository) Update(ctx context.Context, s *models.Seller) error {
 		    legal_name = $4,
 		    trading_name = $5,
 		    phone = $6,
+		    image_url = $7,
 		    updated_at = now()
 		where id = $1
 		returning updated_at`,
-		s.ID, s.CountryID, s.SellerType, s.LegalName, s.TradingName, s.Phone,
+		s.ID, s.CountryID, s.SellerType, s.LegalName, s.TradingName, s.Phone, s.ImageURL,
 	).Scan(&s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrSellerNotFound
@@ -164,6 +165,49 @@ func (r *SellerRepository) ListAddresses(ctx context.Context, sellerID string) (
 		items = []models.SellerAddress{}
 	}
 	return items, rows.Err()
+}
+
+func (r *SellerRepository) UpdateAddress(ctx context.Context, a *models.SellerAddress) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if a.IsDefault {
+		if _, err := tx.Exec(ctx, `
+			update seller.seller_addresses set is_default = false, updated_at = now()
+			where seller_id = $1 and id <> $2`, a.SellerID, a.ID); err != nil {
+			return err
+		}
+	}
+
+	err = tx.QueryRow(ctx, `
+		update seller.seller_addresses
+		set country_id = $3,
+		    label = $4,
+		    address_type = $5,
+		    line1 = $6,
+		    line2 = $7,
+		    city = $8,
+		    region = $9,
+		    postal_code = $10,
+		    latitude = $11,
+		    longitude = $12,
+		    is_default = $13,
+		    updated_at = now()
+		where id = $1 and seller_id = $2
+		returning created_at, updated_at`,
+		a.ID, a.SellerID, a.CountryID, a.Label, a.AddressType, a.Line1, a.Line2, a.City,
+		a.Region, a.PostalCode, a.Latitude, a.Longitude, a.IsDefault,
+	).Scan(&a.CreatedAt, &a.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrSellerAddrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *SellerRepository) DeleteAddress(ctx context.Context, sellerID, addressID string) error {

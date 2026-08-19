@@ -29,6 +29,7 @@ type sellerRegisterRequest struct {
 	Email       string                        `json:"email"`
 	Password    string                        `json:"password"`
 	Phone       *string                       `json:"phone"`
+	ImageURL    *string                       `json:"image_url"`
 	Addresses   []services.SellerAddressInput `json:"addresses"`
 	Shop        *services.ShopInput           `json:"shop"`
 }
@@ -39,6 +40,7 @@ type sellerUpdateRequest struct {
 	LegalName   string  `json:"legal_name"`
 	TradingName *string `json:"trading_name"`
 	Phone       *string `json:"phone"`
+	ImageURL    *string `json:"image_url"`
 }
 
 func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,7 @@ func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Email:       req.Email,
 		Password:    req.Password,
 		Phone:       req.Phone,
+		ImageURL:    req.ImageURL,
 		Addresses:   req.Addresses,
 		Shop:        req.Shop,
 	})
@@ -88,6 +91,7 @@ func (h *SellerHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		LegalName:   req.LegalName,
 		TradingName: req.TradingName,
 		Phone:       req.Phone,
+		ImageURL:    req.ImageURL,
 	})
 	if err != nil {
 		h.writeError(w, err, "could not update seller")
@@ -118,6 +122,22 @@ func (h *SellerHandler) AddAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.JSON(w, http.StatusCreated, addr)
+}
+
+func (h *SellerHandler) UpdateAddress(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	addressID := chi.URLParam(r, "id")
+	var req services.SellerAddressInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	addr, err := h.sellers.UpdateAddress(r.Context(), sellerID, addressID, req)
+	if err != nil {
+		h.writeError(w, err, "could not update address")
+		return
+	}
+	utils.JSON(w, http.StatusOK, addr)
 }
 
 func (h *SellerHandler) DeleteAddress(w http.ResponseWriter, r *http.Request) {

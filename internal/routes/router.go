@@ -16,6 +16,7 @@ func New(
 	countries *handlers.CountryHandler,
 	customers *handlers.CustomerHandler,
 	sellers *handlers.SellerHandler,
+	media *handlers.MediaHandler,
 	jwtSecret string,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -37,6 +38,7 @@ func New(
 		RegisterCountryRoutes(r, countries, jwtSecret)
 		RegisterCustomerRoutes(r, customers, jwtSecret)
 		RegisterSellerRoutes(r, sellers, jwtSecret)
+		RegisterMediaRoutes(r, media, jwtSecret)
 	})
 
 	return r
