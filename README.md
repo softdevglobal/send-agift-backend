@@ -452,6 +452,270 @@ Example URL: `http://localhost:8081/api/v1/customers/me/saved-gifts/saved-gift-u
 { "message": "saved gift deleted" }
 ```
 
+### POST `http://localhost:8081/api/v1/customers/me/recipients`
+
+- Auth: customer JWT
+- Creates a gift recipient (person you send gifts to)
+- Optional `addresses` on create only — first address becomes default if `is_default` is not set
+- **POST body:**
+
+```json
+{
+  "name": "Amma",
+  "relationship": "mother",
+  "email": "amma@example.com",
+  "phone": "+94771234567",
+  "image_url": "https://res.cloudinary.com/demo/image/upload/v1/recipient.jpg",
+  "preferences": {
+    "favorite_colors": ["red", "gold"],
+    "no_alcohol": true
+  },
+  "addresses": [
+    {
+      "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+      "label": "Home",
+      "address_type": "shipping",
+      "line1": "12 Temple Road",
+      "line2": null,
+      "city": "Colombo",
+      "region": "Western",
+      "postal_code": "00300",
+      "latitude": 6.927,
+      "longitude": 79.861,
+      "is_default": true
+    }
+  ]
+}
+```
+
+**Response 201** — **Return type:** `RecipientDetails` (same JSON shape as GET `/recipients/{id}`)
+
+```json
+{
+  "id": "recipient-uuid",
+  "customer_id": "customer-uuid",
+  "name": "Amma",
+  "relationship": "mother",
+  "email": "amma@example.com",
+  "phone": "+94771234567",
+  "image_url": "https://res.cloudinary.com/demo/image/upload/v1/recipient.jpg",
+  "default_address_id": "recipient-address-uuid",
+  "preferences": {
+    "favorite_colors": ["red", "gold"],
+    "no_alcohol": true
+  },
+  "created_at": "2026-08-19T10:00:00+05:30",
+  "updated_at": "2026-08-19T10:00:00+05:30",
+  "addresses": [
+    {
+      "id": "recipient-address-uuid",
+      "recipient_id": "recipient-uuid",
+      "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+      "label": "Home",
+      "address_type": "shipping",
+      "line1": "12 Temple Road",
+      "city": "Colombo",
+      "region": "Western",
+      "postal_code": "00300",
+      "is_default": true,
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ]
+}
+```
+
+### GET `http://localhost:8081/api/v1/customers/me/recipients`
+
+- Auth: customer JWT
+- **GET body:** none
+- **Return type:** `Recipient[]` — array of recipient objects **without** nested `addresses`
+
+**Response 200**
+
+```json
+[
+  {
+    "id": "recipient-uuid",
+    "customer_id": "customer-uuid",
+    "name": "Amma",
+    "relationship": "mother",
+    "email": "amma@example.com",
+    "phone": "+94771234567",
+    "image_url": "https://res.cloudinary.com/demo/image/upload/v1/recipient.jpg",
+    "default_address_id": "recipient-address-uuid",
+    "preferences": {},
+    "created_at": "2026-08-19T10:00:00+05:30",
+    "updated_at": "2026-08-19T10:00:00+05:30"
+  }
+]
+```
+
+**Recipient fields:** `id`, `customer_id`, `name`, `relationship`, `email`, `phone`, `image_url`, `default_address_id`, `preferences`, `created_at`, `updated_at`
+
+### GET `http://localhost:8081/api/v1/customers/me/recipients/{id}`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uuid`
+
+- Auth: customer JWT
+- **GET body:** none
+- **Return type:** `RecipientDetails` — one recipient + `addresses[]`
+
+**Response 200**
+
+```json
+{
+  "id": "recipient-uuid",
+  "customer_id": "customer-uuid",
+  "name": "Amma",
+  "relationship": "mother",
+  "email": "amma@example.com",
+  "phone": "+94771234567",
+  "image_url": "https://res.cloudinary.com/demo/image/upload/v1/recipient.jpg",
+  "default_address_id": "recipient-address-uuid",
+  "preferences": {
+    "favorite_colors": ["red", "gold"],
+    "no_alcohol": true
+  },
+  "created_at": "2026-08-19T10:00:00+05:30",
+  "updated_at": "2026-08-19T10:00:00+05:30",
+  "addresses": [
+    {
+      "id": "recipient-address-uuid",
+      "recipient_id": "recipient-uuid",
+      "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+      "label": "Home",
+      "address_type": "shipping",
+      "line1": "12 Temple Road",
+      "line2": null,
+      "city": "Colombo",
+      "region": "Western",
+      "postal_code": "00300",
+      "latitude": 6.927,
+      "longitude": 79.861,
+      "is_default": true,
+      "created_at": "2026-08-19T10:00:00+05:30",
+      "updated_at": "2026-08-19T10:00:00+05:30"
+    }
+  ]
+}
+```
+
+**RecipientAddress fields:** `id`, `recipient_id`, `country_id`, `label`, `address_type`, `line1`, `line2`, `city`, `region`, `postal_code`, `latitude`, `longitude`, `is_default`, `created_at`, `updated_at`
+
+### PUT `http://localhost:8081/api/v1/customers/me/recipients/{id}`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uuid`
+
+- Auth: customer JWT
+- Updates the **person** only (name, contact, image, preferences, default address pointer)
+- `addresses` in body is **ignored** on PUT — use recipient address routes below to change street/city
+- **PUT body:**
+
+```json
+{
+  "name": "Amma Perera",
+  "relationship": "mother",
+  "email": "amma.new@example.com",
+  "phone": "+94771234567",
+  "image_url": "https://res.cloudinary.com/demo/image/upload/v1/recipient-new.jpg",
+  "default_address_id": "recipient-address-uuid",
+  "preferences": {
+    "favorite_colors": ["blue"],
+    "no_alcohol": true
+  }
+}
+```
+
+`default_address_id` must already exist on this recipient. Omit or send `null` to clear it.
+
+**Response 200** — **Return type:** `RecipientDetails` (same JSON shape as GET `/recipients/{id}`)
+
+### DELETE `http://localhost:8081/api/v1/customers/me/recipients/{id}`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uuid`
+
+- Auth: customer JWT
+- **DELETE body:** none
+- Cascades delete of all recipient addresses
+
+**Response 200**
+
+```json
+{ "message": "recipient deleted" }
+```
+
+### POST `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uuid/addresses`
+
+- Auth: customer JWT
+- Adds a delivery address for this recipient
+- If `is_default: true`, sets `recipients.default_address_id` automatically
+- **POST body:** same fields as customer address
+
+```json
+{
+  "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+  "label": "Office",
+  "address_type": "shipping",
+  "line1": "45 Galle Road",
+  "line2": "Floor 2",
+  "city": "Colombo",
+  "region": "Western",
+  "postal_code": "00300",
+  "latitude": 6.927,
+  "longitude": 79.861,
+  "is_default": false
+}
+```
+
+**Response 201** — **Return type:** `RecipientAddress` object
+
+```json
+{
+  "id": "recipient-address-uuid",
+  "recipient_id": "recipient-uuid",
+  "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+  "label": "Office",
+  "address_type": "shipping",
+  "line1": "45 Galle Road",
+  "line2": "Floor 2",
+  "city": "Colombo",
+  "region": "Western",
+  "postal_code": "00300",
+  "latitude": 6.927,
+  "longitude": 79.861,
+  "is_default": false,
+  "created_at": "2026-08-19T10:00:00+05:30",
+  "updated_at": "2026-08-19T10:00:00+05:30"
+}
+```
+
+### PUT `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses/{addressId}`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uuid/addresses/recipient-address-uuid`
+
+- Auth: customer JWT
+- Updates one recipient address (use this to change line1, city, etc.)
+- **PUT body:** same as POST address above
+
+**Response 200** — **Return type:** `RecipientAddress` (same fields as POST address response above)
+
+### DELETE `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses/{addressId}`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uuid/addresses/recipient-address-uuid`
+
+- Auth: customer JWT
+- **DELETE body:** none
+- If deleted address was the default, DB sets `default_address_id` to null (`ON DELETE SET NULL`)
+
+**Response 200**
+
+```json
+{ "message": "address deleted" }
+```
+
 ---
 
 ## 6. Sellers
@@ -898,44 +1162,52 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 
 ## URL + body cheat sheet
 
-| Method | Full URL | Body |
-|---|---|---|
-| GET | `http://localhost:8081/health` | none |
-| POST | `http://localhost:8081/api/v1/admin/register` | `{ email, password, display_name, image_url }` |
-| POST | `http://localhost:8081/api/v1/auth/login` | `{ email, password }` |
-| POST | `http://localhost:8081/api/v1/customers/login` | `{ email, password }` |
-| POST | `http://localhost:8081/api/v1/sellers/login` | `{ email, password }` |
-| GET | `http://localhost:8081/api/v1/admin/me` | none |
-| PUT | `http://localhost:8081/api/v1/admin/me` | `{ display_name, image_url }` |
-| GET | `http://localhost:8081/api/v1/countries` | none |
-| GET | `http://localhost:8081/api/v1/countries/{id}` | none (id in URL) |
-| POST | `http://localhost:8081/api/v1/admin/countries` | `{ iso_code, name, default_currency, default_timezone, status }` |
-| PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST |
-| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none (id in URL) |
-| POST | `http://localhost:8081/api/v1/customers/register` | see customer register body |
-| GET | `http://localhost:8081/api/v1/customers/me` | none |
-| PUT | `http://localhost:8081/api/v1/customers/me` | `{ country_id, phone, display_name, customer_type, date_of_birth, status, image_url }` |
-| DELETE | `http://localhost:8081/api/v1/customers/me` | none |
-| POST | `http://localhost:8081/api/v1/customers/me/addresses` | address body |
-| DELETE | `http://localhost:8081/api/v1/customers/me/addresses/{id}` | none (id in URL) |
-| GET | `http://localhost:8081/api/v1/customers/me/saved-gifts` | none |
-| POST | `http://localhost:8081/api/v1/customers/me/saved-gifts` | `{ product_id }` |
-| DELETE | `http://localhost:8081/api/v1/customers/me/saved-gifts/{id}` | none (saved-gift id in URL) |
-| POST | `http://localhost:8081/api/v1/sellers/register` | see seller register body |
-| GET | `http://localhost:8081/api/v1/sellers/me` | none |
-| PUT | `http://localhost:8081/api/v1/sellers/me` | `{ country_id, seller_type, legal_name, trading_name, phone, image_url }` |
-| DELETE | `http://localhost:8081/api/v1/sellers/me` | none |
-| POST | `http://localhost:8081/api/v1/sellers/me/addresses` | address body |
-| DELETE | `http://localhost:8081/api/v1/sellers/me/addresses/{id}` | none (id in URL) |
-| POST | `http://localhost:8081/api/v1/sellers/me/shops` | shop body |
-| PUT | `http://localhost:8081/api/v1/sellers/me/shops/{id}` | shop body |
-| DELETE | `http://localhost:8081/api/v1/sellers/me/shops/{id}` | none (id in URL) |
-| GET | `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/products` | none (shopID in URL) |
-| POST | `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/products` | product + optional inventory |
-| GET | `http://localhost:8081/api/v1/sellers/me/products/{id}` | none (id in URL) |
-| PUT | `http://localhost:8081/api/v1/sellers/me/products/{id}` | product body |
-| DELETE | `http://localhost:8081/api/v1/sellers/me/products/{id}` | none (id in URL) |
-| GET | `http://localhost:8081/api/v1/sellers/me/products/{id}/inventory` | none (id in URL) |
-| PUT | `http://localhost:8081/api/v1/sellers/me/products/{id}/inventory` | `{ available_qty, reserved_qty, low_stock_threshold, unavailable_dates }` |
+| Method | Full URL | Body | Response (GET) |
+|---|---|---|---|
+| GET | `http://localhost:8081/health` | none | `{ "status": "ok" }` |
+| POST | `http://localhost:8081/api/v1/admin/register` | `{ email, password, display_name, image_url }` | — |
+| POST | `http://localhost:8081/api/v1/auth/login` | `{ email, password }` | — |
+| POST | `http://localhost:8081/api/v1/customers/login` | `{ email, password }` | — |
+| POST | `http://localhost:8081/api/v1/sellers/login` | `{ email, password }` | — |
+| GET | `http://localhost:8081/api/v1/admin/me` | none | Admin object |
+| PUT | `http://localhost:8081/api/v1/admin/me` | `{ display_name, image_url }` | — |
+| GET | `http://localhost:8081/api/v1/countries` | none | `Country[]` |
+| GET | `http://localhost:8081/api/v1/countries/{id}` | none (id in URL) | `Country` |
+| POST | `http://localhost:8081/api/v1/admin/countries` | `{ iso_code, name, default_currency, default_timezone, status }` | — |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST | — |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none (id in URL) | — |
+| POST | `http://localhost:8081/api/v1/customers/register` | see customer register body | — |
+| GET | `http://localhost:8081/api/v1/customers/me` | none | `CustomerDetails` (profile + `addresses[]`) |
+| PUT | `http://localhost:8081/api/v1/customers/me` | `{ country_id, phone, display_name, customer_type, date_of_birth, status, image_url }` | — |
+| DELETE | `http://localhost:8081/api/v1/customers/me` | none | — |
+| POST | `http://localhost:8081/api/v1/customers/me/addresses` | address body | — |
+| DELETE | `http://localhost:8081/api/v1/customers/me/addresses/{id}` | none (id in URL) | — |
+| GET | `http://localhost:8081/api/v1/customers/me/saved-gifts` | none | `SavedGiftDetails[]` (each includes `product`) |
+| POST | `http://localhost:8081/api/v1/customers/me/saved-gifts` | `{ product_id }` | — |
+| DELETE | `http://localhost:8081/api/v1/customers/me/saved-gifts/{id}` | none (saved-gift id in URL) | — |
+| POST | `http://localhost:8081/api/v1/customers/me/recipients` | recipient body + optional `addresses` | — |
+| GET | `http://localhost:8081/api/v1/customers/me/recipients` | none | `Recipient[]` (no nested addresses) |
+| GET | `http://localhost:8081/api/v1/customers/me/recipients/{id}` | none (recipient id in URL) | `RecipientDetails` (recipient + `addresses[]`) |
+| PUT | `http://localhost:8081/api/v1/customers/me/recipients/{id}` | person fields + `default_address_id` (no address edit) | — |
+| DELETE | `http://localhost:8081/api/v1/customers/me/recipients/{id}` | none (recipient id in URL) | — |
+| POST | `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses` | address body | — |
+| PUT | `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses/{addressId}` | address body | — |
+| DELETE | `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses/{addressId}` | none (ids in URL) | `{ "message": "address deleted" }` |
+| POST | `http://localhost:8081/api/v1/sellers/register` | see seller register body | — |
+| GET | `http://localhost:8081/api/v1/sellers/me` | none | `SellerDetails` (profile + addresses + shops) |
+| PUT | `http://localhost:8081/api/v1/sellers/me` | `{ country_id, seller_type, legal_name, trading_name, phone, image_url }` | — |
+| DELETE | `http://localhost:8081/api/v1/sellers/me` | none | — |
+| POST | `http://localhost:8081/api/v1/sellers/me/addresses` | address body | — |
+| DELETE | `http://localhost:8081/api/v1/sellers/me/addresses/{id}` | none (id in URL) | — |
+| POST | `http://localhost:8081/api/v1/sellers/me/shops` | shop body | — |
+| PUT | `http://localhost:8081/api/v1/sellers/me/shops/{id}` | shop body | — |
+| DELETE | `http://localhost:8081/api/v1/sellers/me/shops/{id}` | none (id in URL) | — |
+| GET | `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/products` | none (shopID in URL) | `Product[]` |
+| POST | `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/products` | product + optional inventory | — |
+| GET | `http://localhost:8081/api/v1/sellers/me/products/{id}` | none (id in URL) | `Product` |
+| PUT | `http://localhost:8081/api/v1/sellers/me/products/{id}` | product body | — |
+| DELETE | `http://localhost:8081/api/v1/sellers/me/products/{id}` | none (id in URL) | — |
+| GET | `http://localhost:8081/api/v1/sellers/me/products/{id}/inventory` | none (id in URL) | `Inventory` |
+| PUT | `http://localhost:8081/api/v1/sellers/me/products/{id}/inventory` | `{ available_qty, reserved_qty, low_stock_threshold, unavailable_dates }` | — |
 
-GET and DELETE never take a JSON body. IDs always go in the URL.
+GET and DELETE never take a JSON body. IDs always go in the URL. See each section above for full JSON examples.

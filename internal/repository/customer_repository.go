@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -18,6 +19,7 @@ var (
 	ErrAddressNotFound    = errors.New("address not found")
 	ErrSavedGiftNotFound  = errors.New("saved gift not found")
 	ErrSavedGiftDuplicate = errors.New("product already saved")
+	ErrRecipientNotFound = errors.New("recipient not found")
 )
 
 type CustomerRepository struct {
@@ -260,6 +262,271 @@ func (r *CustomerRepository) DeleteSavedGift(ctx context.Context, customerID, sa
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrSavedGiftNotFound
+	}
+	return nil
+}
+
+// CreateRecipient inserts a new row and scans back DB-generated fields.
+func (r *CustomerRepository) CreateRecipient(ctx context.Context, rec *models.Recipient) error {
+	prefs := rec.Preferences
+	if len(prefs) == 0 {
+		prefs = json.RawMessage(`{}`)
+	}
+	return r.db.QueryRow(ctx, `
+		insert into customer.recipients (
+			customer_id, name, relationship, email, phone, image_url, default_address_id, preferences
+		) values ($1,$2,$3,$4,$5,$6,$7,$8)
+		returning id, created_at, updated_at`,
+		rec.CustomerID, rec.Name, rec.Relationship, rec.Email, rec.Phone, rec.ImageURL, rec.DefaultAddressID, prefs,
+	).Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt)
+}
+
+// ListRecipients returns every recipient for one customer, newest first.
+func (r *CustomerRepository) ListRecipients(ctx context.Context, customerID string) ([]models.Recipient, error) {
+	rows, err := r.db.Query(ctx, `
+		select id, customer_id, name, relationship, email, phone, image_url,
+		       default_address_id, preferences, created_at, updated_at
+		from customer.recipients
+		where customer_id = $1
+		order by created_at desc`, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []models.Recipient{}
+	for rows.Next() {
+		var rec models.Recipient
+		if err := rows.Scan(
+			&rec.ID, &rec.CustomerID, &rec.Name, &rec.Relationship, &rec.Email, &rec.Phone, &rec.ImageURL,
+			&rec.DefaultAddressID, &rec.Preferences, &rec.CreatedAt, &rec.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, rec)
+	}
+	return items, rows.Err()
+}
+
+// GetRecipientByID fetches one recipient, scoped to id AND customer_id.
+func (r *CustomerRepository) GetRecipientByID(ctx context.Context, customerID, recipientID string) (*models.Recipient, error) {
+	rec := &models.Recipient{}
+	err := r.db.QueryRow(ctx, `
+		select id, customer_id, name, relationship, email, phone, image_url,
+		       default_address_id, preferences, created_at, updated_at
+		from customer.recipients
+		where id = $1 and customer_id = $2`, recipientID, customerID,
+	).Scan(
+		&rec.ID, &rec.CustomerID, &rec.Name, &rec.Relationship, &rec.Email, &rec.Phone, &rec.ImageURL,
+		&rec.DefaultAddressID, &rec.Preferences, &rec.CreatedAt, &rec.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrRecipientNotFound
+	}
+	return rec, err
+}
+
+// UpdateRecipient does a full field overwrite (not a PATCH-style partial update).
+func (r *CustomerRepository) UpdateRecipient(ctx context.Context, rec *models.Recipient) error {
+	prefs := rec.Preferences
+	if len(prefs) == 0 {
+		prefs = json.RawMessage(`{}`)
+	}
+	err := r.db.QueryRow(ctx, `
+		update customer.recipients
+		set name = $3,
+		    relationship = $4,
+		    email = $5,
+		    phone = $6,
+		    image_url = $7,
+		    default_address_id = $8,
+		    preferences = $9,
+		    updated_at = now()
+		where id = $1 and customer_id = $2
+		returning updated_at`,
+		rec.ID, rec.CustomerID, rec.Name, rec.Relationship, rec.Email, rec.Phone,
+		rec.ImageURL, rec.DefaultAddressID, prefs,
+	).Scan(&rec.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrRecipientNotFound
+	}
+	return err
+}
+
+// DeleteRecipient checks RowsAffected instead of relying on an error.
+func (r *CustomerRepository) DeleteRecipient(ctx context.Context, customerID, recipientID string) error {
+	tag, err := r.db.Exec(ctx, `
+		delete from customer.recipients
+		where id = $1 and customer_id = $2`, recipientID, customerID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRecipientNotFound
+	}
+	return nil
+}
+
+// RecipientAddressBelongsToRecipient is a guard used before letting a
+// PUT request set default_address_id.
+func (r *CustomerRepository) RecipientAddressBelongsToRecipient(ctx context.Context, recipientID, addressID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		select exists(
+			select 1 from customer.recipient_addresses
+			where id = $1 and recipient_id = $2
+		)`, addressID, recipientID,
+	).Scan(&exists)
+	return exists, err
+}
+
+// ListRecipientAddresses returns addresses for one recipient, default first.
+func (r *CustomerRepository) ListRecipientAddresses(ctx context.Context, recipientID string) ([]models.RecipientAddress, error) {
+	rows, err := r.db.Query(ctx, `
+		select id, recipient_id, country_id, label, address_type, line1, line2, city, region,
+		       postal_code, latitude, longitude, is_default, created_at, updated_at
+		from customer.recipient_addresses
+		where recipient_id = $1
+		order by is_default desc, created_at asc`, recipientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []models.RecipientAddress{}
+	for rows.Next() {
+		var a models.RecipientAddress
+		if err := rows.Scan(
+			&a.ID, &a.RecipientID, &a.CountryID, &a.Label, &a.AddressType, &a.Line1, &a.Line2,
+			&a.City, &a.Region, &a.PostalCode, &a.Latitude, &a.Longitude, &a.IsDefault,
+			&a.CreatedAt, &a.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, a)
+	}
+	return items, rows.Err()
+}
+
+func (r *CustomerRepository) CreateRecipientAddress(ctx context.Context, a *models.RecipientAddress) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if a.IsDefault {
+		if _, err := tx.Exec(ctx, `
+			update customer.recipient_addresses set is_default = false, updated_at = now()
+			where recipient_id = $1`, a.RecipientID); err != nil {
+			return err
+		}
+	}
+
+	err = tx.QueryRow(ctx, `
+		insert into customer.recipient_addresses (
+			recipient_id, country_id, label, address_type, line1, line2, city, region,
+			postal_code, latitude, longitude, is_default
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		returning id, created_at, updated_at`,
+		a.RecipientID, a.CountryID, a.Label, a.AddressType, a.Line1, a.Line2, a.City, a.Region,
+		a.PostalCode, a.Latitude, a.Longitude, a.IsDefault,
+	).Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return err
+	}
+
+	if a.IsDefault {
+		if _, err := tx.Exec(ctx, `
+			update customer.recipients
+			set default_address_id = $2, updated_at = now()
+			where id = $1`, a.RecipientID, a.ID); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *CustomerRepository) GetRecipientAddressByID(ctx context.Context, recipientID, addressID string) (*models.RecipientAddress, error) {
+	a := &models.RecipientAddress{}
+	err := r.db.QueryRow(ctx, `
+		select id, recipient_id, country_id, label, address_type, line1, line2, city, region,
+		       postal_code, latitude, longitude, is_default, created_at, updated_at
+		from customer.recipient_addresses
+		where id = $1 and recipient_id = $2`, addressID, recipientID,
+	).Scan(
+		&a.ID, &a.RecipientID, &a.CountryID, &a.Label, &a.AddressType, &a.Line1, &a.Line2,
+		&a.City, &a.Region, &a.PostalCode, &a.Latitude, &a.Longitude, &a.IsDefault,
+		&a.CreatedAt, &a.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAddressNotFound
+	}
+	return a, err
+}
+
+func (r *CustomerRepository) UpdateRecipientAddress(ctx context.Context, a *models.RecipientAddress) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if a.IsDefault {
+		if _, err := tx.Exec(ctx, `
+			update customer.recipient_addresses set is_default = false, updated_at = now()
+			where recipient_id = $1 and id <> $2`, a.RecipientID, a.ID); err != nil {
+			return err
+		}
+	}
+
+	err = tx.QueryRow(ctx, `
+		update customer.recipient_addresses
+		set country_id = $3,
+		    label = $4,
+		    address_type = $5,
+		    line1 = $6,
+		    line2 = $7,
+		    city = $8,
+		    region = $9,
+		    postal_code = $10,
+		    latitude = $11,
+		    longitude = $12,
+		    is_default = $13,
+		    updated_at = now()
+		where id = $1 and recipient_id = $2
+		returning updated_at`,
+		a.ID, a.RecipientID, a.CountryID, a.Label, a.AddressType, a.Line1, a.Line2, a.City,
+		a.Region, a.PostalCode, a.Latitude, a.Longitude, a.IsDefault,
+	).Scan(&a.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrAddressNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	if a.IsDefault {
+		if _, err := tx.Exec(ctx, `
+			update customer.recipients
+			set default_address_id = $2, updated_at = now()
+			where id = $1`, a.RecipientID, a.ID); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *CustomerRepository) DeleteRecipientAddress(ctx context.Context, recipientID, addressID string) error {
+	tag, err := r.db.Exec(ctx, `
+		delete from customer.recipient_addresses
+		where id = $1 and recipient_id = $2`, addressID, recipientID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAddressNotFound
 	}
 	return nil
 }
