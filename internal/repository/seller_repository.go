@@ -167,6 +167,49 @@ func (r *SellerRepository) ListAddresses(ctx context.Context, sellerID string) (
 	return items, rows.Err()
 }
 
+func (r *SellerRepository) UpdateAddress(ctx context.Context, a *models.SellerAddress) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if a.IsDefault {
+		if _, err := tx.Exec(ctx, `
+			update seller.seller_addresses set is_default = false, updated_at = now()
+			where seller_id = $1 and id <> $2`, a.SellerID, a.ID); err != nil {
+			return err
+		}
+	}
+
+	err = tx.QueryRow(ctx, `
+		update seller.seller_addresses
+		set country_id = $3,
+		    label = $4,
+		    address_type = $5,
+		    line1 = $6,
+		    line2 = $7,
+		    city = $8,
+		    region = $9,
+		    postal_code = $10,
+		    latitude = $11,
+		    longitude = $12,
+		    is_default = $13,
+		    updated_at = now()
+		where id = $1 and seller_id = $2
+		returning created_at, updated_at`,
+		a.ID, a.SellerID, a.CountryID, a.Label, a.AddressType, a.Line1, a.Line2, a.City,
+		a.Region, a.PostalCode, a.Latitude, a.Longitude, a.IsDefault,
+	).Scan(&a.CreatedAt, &a.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrSellerAddrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (r *SellerRepository) DeleteAddress(ctx context.Context, sellerID, addressID string) error {
 	// clear shop links first
 	if _, err := r.db.Exec(ctx, `

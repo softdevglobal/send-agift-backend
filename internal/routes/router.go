@@ -31,6 +31,8 @@ func New(
 	sellers *handlers.SellerHandler,
 	// Handler instance that manages seller products and inventory
 	products *handlers.ProductHandler,
+	// Handler instance that issues presigned S3 upload/download URLs
+	media *handlers.MediaHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -104,10 +106,14 @@ func New(
 		// Register customer-related routes (requires valid JWT token)
 		// Example: GET /api/v1/customers, POST /api/v1/customers
 		RegisterCustomerRoutes(r, customers, jwtSecret)
-		
+
 		// Register seller-related routes (requires valid JWT token)
 		// Example: GET /api/v1/sellers, POST /api/v1/sellers
 		RegisterSellerRoutes(r, sellers, products, jwtSecret)
+
+		// Register media routes for presigned S3 uploads (requires valid JWT token)
+		// Example: POST /api/v1/media/presign-upload
+		RegisterMediaRoutes(r, media, jwtSecret)
 	})
 
 	// Return the fully configured router

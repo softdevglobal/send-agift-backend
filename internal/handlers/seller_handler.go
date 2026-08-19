@@ -124,6 +124,22 @@ func (h *SellerHandler) AddAddress(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusCreated, addr)
 }
 
+func (h *SellerHandler) UpdateAddress(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	addressID := chi.URLParam(r, "id")
+	var req services.SellerAddressInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	addr, err := h.sellers.UpdateAddress(r.Context(), sellerID, addressID, req)
+	if err != nil {
+		h.writeError(w, err, "could not update address")
+		return
+	}
+	utils.JSON(w, http.StatusOK, addr)
+}
+
 func (h *SellerHandler) DeleteAddress(w http.ResponseWriter, r *http.Request) {
 	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
 	addressID := chi.URLParam(r, "id")

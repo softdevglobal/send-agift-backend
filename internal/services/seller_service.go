@@ -289,6 +289,41 @@ func (s *SellerService) AddAddress(ctx context.Context, sellerID string, in Sell
 	return addr, nil	// return the address
 }
 
+func (s *SellerService) UpdateAddress(ctx context.Context, sellerID, addressID string, in SellerAddressInput) (*models.SellerAddress, error) {
+	if _, err := s.sellers.GetByID(ctx, sellerID); err != nil {
+		if errors.Is(err, repository.ErrSellerNotFound) {
+			return nil, ErrSellerNotFound
+		}
+		return nil, err
+	}
+	sid, err := uuid.Parse(sellerID)
+	if err != nil {
+		return nil, ErrSellerNotFound
+	}
+	aid, err := uuid.Parse(addressID)
+	if err != nil {
+		return nil, ErrSellerAddrNotFound
+	}
+	addr, err := s.buildAddress(sid, in)
+	if err != nil {
+		return nil, err
+	}
+	addr.ID = aid
+	if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return nil, ErrInvalidCountry
+		}
+		return nil, err
+	}
+	if err := s.sellers.UpdateAddress(ctx, addr); err != nil {
+		if errors.Is(err, repository.ErrSellerAddrNotFound) {
+			return nil, ErrSellerAddrNotFound
+		}
+		return nil, err
+	}
+	return addr, nil
+}
+
 func (s *SellerService) DeleteAddress(ctx context.Context, sellerID, addressID string) error { // DeleteAddress is a function that deletes an address from a seller
 	err := s.sellers.DeleteAddress(ctx, sellerID, addressID)
 	if errors.Is(err, repository.ErrSellerAddrNotFound) {

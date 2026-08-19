@@ -44,6 +44,12 @@ func main() {
 	sellers := repository.NewSellerRepository(pool) // create a new seller repository
 	products := repository.NewProductRepository(pool)
 
+	// s3Service issues presigned URLs so clients upload straight to the bucket
+	s3Service, err := services.NewS3Service(cfg)
+	if err != nil {
+		log.Fatalf("s3 error: %v", err)
+	}
+
 	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry) // create a new auth service
 	adminService := services.NewAdminService(admins) // create a new admin service
 	countryService := services.NewCountryService(countries)
@@ -57,8 +63,9 @@ func main() {
 	customerHandler := handlers.NewCustomerHandler(customerService) // create a new customer handler
 	sellerHandler := handlers.NewSellerHandler(sellerService) // create a new seller handler
 	productHandler := handlers.NewProductHandler(productService)
+	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, productHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, productHandler, mediaHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name

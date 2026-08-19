@@ -11,16 +11,20 @@ import (
 
 // Config holds process settings loaded from .env / environment.
 type Config struct {
-	AppPort          string
-	DBHost           string
-	DBPort           string
-	DBUser           string
-	DBPassword       string
-	DBName           string
-	DBSSLMode        string
-	JWTSecret        string
-	JWTExpiry        time.Duration
-	BootstrapSecret  string
+	AppPort         string
+	DBHost          string
+	DBPort          string
+	DBUser          string
+	DBPassword      string
+	DBName          string
+	DBSSLMode       string
+	JWTSecret       string
+	JWTExpiry       time.Duration
+	BootstrapSecret string
+	AWSRegion       string
+	AWSAccessKeyID  string
+	AWSSecretKey    string
+	S3Bucket        string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -38,6 +42,10 @@ func Load() (*Config, error) {
 		JWTSecret:       os.Getenv("JWT_SECRET"),
 		JWTExpiry:       minutesOr("JWT_EXPIRY_MINUTES", 24*60),
 		BootstrapSecret: os.Getenv("BOOTSTRAP_SECRET"),
+		AWSRegion:       envOr("AWS_REGION", "ap-southeast-2"),
+		AWSAccessKeyID:  os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey:    os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		S3Bucket:        os.Getenv("S3_BUCKET"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -47,6 +55,9 @@ func Load() (*Config, error) {
 	// if the database user or name is not set, return an error
 	if cfg.DBUser == "" || cfg.DBName == "" {
 		return nil, fmt.Errorf("DB_USER and DB_NAME are required")
+	}
+	if cfg.S3Bucket == "" || cfg.AWSAccessKeyID == "" || cfg.AWSSecretKey == "" {
+		return nil, fmt.Errorf("S3_BUCKET, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
 	}
 
 	return cfg, nil // return the configuration

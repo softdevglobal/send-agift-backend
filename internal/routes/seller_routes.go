@@ -24,6 +24,7 @@ func RegisterSellerRoutes(
 		r.Delete("/sellers/me", sellers.DeleteMe)
 
 		r.Post("/sellers/me/addresses", sellers.AddAddress)
+		r.Put("/sellers/me/addresses/{id}", sellers.UpdateAddress)
 		r.Delete("/sellers/me/addresses/{id}", sellers.DeleteAddress)
 
 		r.Post("/sellers/me/shops", sellers.CreateShop)
