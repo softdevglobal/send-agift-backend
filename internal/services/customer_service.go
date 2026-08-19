@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -22,6 +23,9 @@ var (
 	ErrSavedGiftNotFound  = errors.New("saved gift not found")
 	ErrSavedGiftConflict  = errors.New("product already saved")
 	ErrSavedGiftProduct   = errors.New("product not found")
+	ErrRecipientNotFound  = errors.New("recipient not found")
+	ErrInvalidRecipient   = errors.New("invalid recipient")
+	ErrInvalidDefaultAddr = errors.New("invalid default_address_id")
 ) // error for the service
 
 type CustomerService struct {
@@ -82,6 +86,19 @@ type AddressInput struct {
 	Latitude    *float64 `json:"latitude"`     // Latitude for the address
 	Longitude   *float64 `json:"longitude"`    // Longitude for the address
 	IsDefault   bool     `json:"is_default"`   // Is default for the address
+}
+
+// RecipientInput is the request-body shape for create/update of the person.
+// Addresses can be sent on CREATE only; PUT does not replace the address list.
+type RecipientInput struct {
+	Name             string          `json:"name"`
+	Relationship     *string         `json:"relationship"`
+	Email            *string         `json:"email"`
+	Phone            *string         `json:"phone"`
+	ImageURL         *string         `json:"image_url"`
+	DefaultAddressID *string         `json:"default_address_id"`
+	Preferences      json.RawMessage `json:"preferences"`
+	Addresses        []AddressInput  `json:"addresses"`
 }
 
 type CustomerLoginResult struct {
@@ -373,6 +390,8 @@ func (s *CustomerService) DeleteSavedGift(ctx context.Context, customerID, saved
 	return err
 }
 
+
+
 func (s *CustomerService) buildAddress(customerID uuid.UUID, in AddressInput) (*models.CustomerAddress, error) { // buildAddress is a function that builds an address
 	in.Line1 = strings.TrimSpace(in.Line1)
 	in.City = strings.TrimSpace(in.City)
@@ -400,5 +419,248 @@ func (s *CustomerService) buildAddress(customerID uuid.UUID, in AddressInput) (*
 		Latitude:    in.Latitude,
 		Longitude:   in.Longitude,
 		IsDefault:   in.IsDefault,
-	}, nil // return the address
-} // buildAddress is a function that builds an address
+	}, nil
+}
+
+func (s *CustomerService) CreateRecipient(ctx context.Context, customerID string, in RecipientInput) (*models.RecipientDetails, error) {
+	if _, err := s.customers.GetByID(ctx, customerID); err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return nil, ErrCustomerNotFound
+		}
+		return nil, err
+	}
+	cid, err := uuid.Parse(customerID)
+	if err != nil {
+		return nil, ErrCustomerNotFound
+	}
+	rec, err := s.buildRecipient(cid, uuid.Nil, in)
+	if err != nil {
+		return nil, err
+	}
+	rec.DefaultAddressID = nil
+	if err := s.customers.CreateRecipient(ctx, rec); err != nil {
+		return nil, err
+	}
+
+	addresses := make([]models.RecipientAddress, 0, len(in.Addresses))
+	for i, addrIn := range in.Addresses {
+		if i == 0 && !addrIn.IsDefault && len(in.Addresses) == 1 {
+			addrIn.IsDefault = true
+		}
+		addr, err := s.addRecipientAddress(ctx, rec.ID, addrIn)
+		if err != nil {
+			return nil, err
+		}
+		addresses = append(addresses, *addr)
+	}
+
+	updated, err := s.customers.GetRecipientByID(ctx, customerID, rec.ID.String())
+	if err != nil {
+		return nil, err
+	}
+	return &models.RecipientDetails{Recipient: *updated, Addresses: addresses}, nil
+}
+
+func (s *CustomerService) ListRecipients(ctx context.Context, customerID string) ([]models.Recipient, error) {
+	if _, err := s.customers.GetByID(ctx, customerID); err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return nil, ErrCustomerNotFound
+		}
+		return nil, err
+	}
+	return s.customers.ListRecipients(ctx, customerID)
+}
+
+func (s *CustomerService) GetRecipient(ctx context.Context, customerID, recipientID string) (*models.RecipientDetails, error) {
+	rec, err := s.customers.GetRecipientByID(ctx, customerID, recipientID)
+	if err != nil {
+		if errors.Is(err, repository.ErrRecipientNotFound) {
+			return nil, ErrRecipientNotFound
+		}
+		return nil, err
+	}
+	addrs, err := s.customers.ListRecipientAddresses(ctx, rec.ID.String())
+	if err != nil {
+		return nil, err
+	}
+	return &models.RecipientDetails{Recipient: *rec, Addresses: addrs}, nil
+}
+
+func (s *CustomerService) UpdateRecipient(ctx context.Context, customerID, recipientID string, in RecipientInput) (*models.RecipientDetails, error) {
+	existing, err := s.customers.GetRecipientByID(ctx, customerID, recipientID)
+	if err != nil {
+		if errors.Is(err, repository.ErrRecipientNotFound) {
+			return nil, ErrRecipientNotFound
+		}
+		return nil, err
+	}
+	rec, err := s.buildRecipient(existing.CustomerID, existing.ID, in)
+	if err != nil {
+		return nil, err
+	}
+	if in.DefaultAddressID != nil && *in.DefaultAddressID != "" {
+		ok, err := s.customers.RecipientAddressBelongsToRecipient(ctx, recipientID, *in.DefaultAddressID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrInvalidDefaultAddr
+		}
+		aid, _ := uuid.Parse(*in.DefaultAddressID)
+		rec.DefaultAddressID = &aid
+	} else {
+		rec.DefaultAddressID = nil
+	}
+	if err := s.customers.UpdateRecipient(ctx, rec); err != nil {
+		return nil, err
+	}
+	return s.GetRecipient(ctx, customerID, recipientID)
+}
+
+func (s *CustomerService) DeleteRecipient(ctx context.Context, customerID, recipientID string) error {
+	err := s.customers.DeleteRecipient(ctx, customerID, recipientID)
+	if errors.Is(err, repository.ErrRecipientNotFound) {
+		return ErrRecipientNotFound
+	}
+	return err
+}
+
+func (s *CustomerService) AddRecipientAddress(ctx context.Context, customerID, recipientID string, in AddressInput) (*models.RecipientAddress, error) {
+	rec, err := s.customers.GetRecipientByID(ctx, customerID, recipientID)
+	if err != nil {
+		if errors.Is(err, repository.ErrRecipientNotFound) {
+			return nil, ErrRecipientNotFound
+		}
+		return nil, err
+	}
+	return s.addRecipientAddress(ctx, rec.ID, in)
+}
+
+func (s *CustomerService) UpdateRecipientAddress(ctx context.Context, customerID, recipientID, addressID string, in AddressInput) (*models.RecipientAddress, error) {
+	if _, err := s.customers.GetRecipientByID(ctx, customerID, recipientID); err != nil {
+		if errors.Is(err, repository.ErrRecipientNotFound) {
+			return nil, ErrRecipientNotFound
+		}
+		return nil, err
+	}
+	existing, err := s.customers.GetRecipientAddressByID(ctx, recipientID, addressID)
+	if err != nil {
+		if errors.Is(err, repository.ErrAddressNotFound) {
+			return nil, ErrAddressNotFound
+		}
+		return nil, err
+	}
+	addr, err := s.buildRecipientAddress(existing.RecipientID, in)
+	if err != nil {
+		return nil, err
+	}
+	addr.ID = existing.ID
+	if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return nil, ErrInvalidCountry
+		}
+		return nil, err
+	}
+	if err := s.customers.UpdateRecipientAddress(ctx, addr); err != nil {
+		if errors.Is(err, repository.ErrAddressNotFound) {
+			return nil, ErrAddressNotFound
+		}
+		return nil, err
+	}
+	return addr, nil
+}
+
+func (s *CustomerService) DeleteRecipientAddress(ctx context.Context, customerID, recipientID, addressID string) error {
+	if _, err := s.customers.GetRecipientByID(ctx, customerID, recipientID); err != nil {
+		if errors.Is(err, repository.ErrRecipientNotFound) {
+			return ErrRecipientNotFound
+		}
+		return err
+	}
+	err := s.customers.DeleteRecipientAddress(ctx, recipientID, addressID)
+	if errors.Is(err, repository.ErrAddressNotFound) {
+		return ErrAddressNotFound
+	}
+	return err
+}
+
+func (s *CustomerService) addRecipientAddress(ctx context.Context, recipientID uuid.UUID, in AddressInput) (*models.RecipientAddress, error) {
+	addr, err := s.buildRecipientAddress(recipientID, in)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return nil, ErrInvalidCountry
+		}
+		return nil, err
+	}
+	if err := s.customers.CreateRecipientAddress(ctx, addr); err != nil {
+		return nil, err
+	}
+	return addr, nil
+}
+
+func (s *CustomerService) buildRecipient(customerID, recipientID uuid.UUID, in RecipientInput) (*models.Recipient, error) {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return nil, ErrInvalidRecipient
+	}
+	prefs := in.Preferences
+	if len(prefs) == 0 {
+		prefs = json.RawMessage(`{}`)
+	}
+	if !json.Valid(prefs) {
+		return nil, ErrInvalidRecipient
+	}
+	var email *string
+	if in.Email != nil {
+		v := strings.TrimSpace(strings.ToLower(*in.Email))
+		if v != "" {
+			email = &v
+		}
+	}
+	rec := &models.Recipient{
+		CustomerID:   customerID,
+		Name:         name,
+		Relationship: in.Relationship,
+		Email:        email,
+		Phone:        in.Phone,
+		ImageURL:     in.ImageURL,
+		Preferences:  prefs,
+	}
+	if recipientID != uuid.Nil {
+		rec.ID = recipientID
+	}
+	return rec, nil
+}
+
+func (s *CustomerService) buildRecipientAddress(recipientID uuid.UUID, in AddressInput) (*models.RecipientAddress, error) {
+	in.Line1 = strings.TrimSpace(in.Line1)
+	in.City = strings.TrimSpace(in.City)
+	in.AddressType = strings.TrimSpace(in.AddressType)
+	if in.AddressType == "" {
+		in.AddressType = "shipping"
+	}
+	if in.Line1 == "" || in.City == "" || in.CountryID == "" {
+		return nil, ErrInvalidAddress
+	}
+	countryID, err := uuid.Parse(in.CountryID)
+	if err != nil {
+		return nil, ErrInvalidCountry
+	}
+	return &models.RecipientAddress{
+		RecipientID: recipientID,
+		CountryID:   countryID,
+		Label:       in.Label,
+		AddressType: in.AddressType,
+		Line1:       in.Line1,
+		Line2:       in.Line2,
+		City:        in.City,
+		Region:      in.Region,
+		PostalCode:  in.PostalCode,
+		Latitude:    in.Latitude,
+		Longitude:   in.Longitude,
+		IsDefault:   in.IsDefault,
+	}, nil
+}

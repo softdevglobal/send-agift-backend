@@ -24,5 +24,14 @@ func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, j
 		r.Get("/customers/me/saved-gifts", customers.ListSavedGifts)
 		r.Post("/customers/me/saved-gifts", customers.AddSavedGift)
 		r.Delete("/customers/me/saved-gifts/{id}", customers.DeleteSavedGift)
+
+		r.Post("/customers/me/recipients", customers.CreateRecipient)
+		r.Get("/customers/me/recipients", customers.ListRecipients)
+		r.Get("/customers/me/recipients/{id}", customers.GetRecipient)
+		r.Put("/customers/me/recipients/{id}", customers.UpdateRecipient)
+		r.Delete("/customers/me/recipients/{id}", customers.DeleteRecipient)
+		r.Post("/customers/me/recipients/{id}/addresses", customers.AddRecipientAddress)
+		r.Put("/customers/me/recipients/{id}/addresses/{addressId}", customers.UpdateRecipientAddress)
+		r.Delete("/customers/me/recipients/{id}/addresses/{addressId}", customers.DeleteRecipientAddress)
 	})
 }
