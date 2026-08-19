@@ -12,5 +12,6 @@ func RegisterAdminProtectedRoutes(r chi.Router, admin *handlers.AdminHandler, jw
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Get("/admin/me", admin.Me)
+		r.Put("/admin/me", admin.UpdateMe)
 	})
 }

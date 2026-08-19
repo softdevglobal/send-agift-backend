@@ -48,9 +48,11 @@ func Load() (*Config, error) {
 		S3Bucket:        os.Getenv("S3_BUCKET"),
 	}
 
+	// if the JWT secret is not set, return an error
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
 	}
+	// if the database user or name is not set, return an error
 	if cfg.DBUser == "" || cfg.DBName == "" {
 		return nil, fmt.Errorf("DB_USER and DB_NAME are required")
 	}
@@ -58,10 +60,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("S3_BUCKET, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
 	}
 
-	return cfg, nil
+	return cfg, nil // return the configuration
 }
 
 // DSN builds a Postgres connection string.
+// This string is used to connect to the database 
 func (c *Config) DSN() string {
 	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
@@ -69,6 +72,7 @@ func (c *Config) DSN() string {
 	)
 }
 
+// This function is used to get the value of an environment variable or return a fallback value
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -76,6 +80,7 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// This function is used to get the value of an environment variable or return a fallback value
 func minutesOr(key string, fallback int) time.Duration {
 	raw := os.Getenv(key)
 	if raw == "" {

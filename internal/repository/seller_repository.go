@@ -31,11 +31,11 @@ func (r *SellerRepository) Create(ctx context.Context, s *models.Seller) error {
 	err := r.db.QueryRow(ctx, `
 		insert into seller.sellers (
 			country_id, seller_type, legal_name, trading_name, email, phone,
-			image_url, password_hash, verification_status, status
+			password_hash, verification_status, status, image_url
 		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		returning id, verification_status, status, created_at, updated_at`,
 		s.CountryID, s.SellerType, s.LegalName, s.TradingName, s.Email, s.Phone,
-		s.ImageURL, s.PasswordHash, s.VerificationStatus, s.Status,
+		s.PasswordHash, s.VerificationStatus, s.Status, s.ImageURL,
 	).Scan(&s.ID, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	return mapSellerWriteError(err)
 }
@@ -44,12 +44,12 @@ func (r *SellerRepository) GetByEmail(ctx context.Context, email string) (*model
 	s := &models.Seller{}
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, seller_type, legal_name, trading_name, email, phone,
-		       image_url, password_hash, verification_status, status, created_at, updated_at
+		       password_hash, verification_status, status, created_at, updated_at, image_url
 		from seller.sellers
 		where email = $1 and status = 'active'`, email,
 	).Scan(
 		&s.ID, &s.CountryID, &s.SellerType, &s.LegalName, &s.TradingName, &s.Email, &s.Phone,
-		&s.ImageURL, &s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt,
+		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSellerNotFound
@@ -61,12 +61,12 @@ func (r *SellerRepository) GetByID(ctx context.Context, id string) (*models.Sell
 	s := &models.Seller{}
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, seller_type, legal_name, trading_name, email, phone,
-		       image_url, password_hash, verification_status, status, created_at, updated_at
+		       password_hash, verification_status, status, created_at, updated_at, image_url
 		from seller.sellers
 		where id = $1`, id,
 	).Scan(
 		&s.ID, &s.CountryID, &s.SellerType, &s.LegalName, &s.TradingName, &s.Email, &s.Phone,
-		&s.ImageURL, &s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt,
+		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSellerNotFound
@@ -233,11 +233,11 @@ func (r *SellerRepository) CreateShop(ctx context.Context, s *models.Shop) error
 	err := r.db.QueryRow(ctx, `
 		insert into seller.shops (
 			seller_id, name, slug, description, return_address_mode,
-			customer_visible_location, status, address_id
-		) values ($1,$2,$3,$4,$5,$6,$7,$8)
+			customer_visible_location, status, address_id, image_url
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		returning id, status, created_at, updated_at`,
 		s.SellerID, s.Name, s.Slug, s.Description, s.ReturnAddressMode,
-		s.CustomerVisibleLocation, s.Status, s.AddressID,
+		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ImageURL,
 	).Scan(&s.ID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	return mapShopWriteError(err)
 }
@@ -252,11 +252,12 @@ func (r *SellerRepository) UpdateShop(ctx context.Context, s *models.Shop) error
 		    customer_visible_location = $7,
 		    status = $8,
 		    address_id = $9,
+		    image_url = $10,
 		    updated_at = now()
 		where id = $1 and seller_id = $2
 		returning updated_at`,
 		s.ID, s.SellerID, s.Name, s.Slug, s.Description, s.ReturnAddressMode,
-		s.CustomerVisibleLocation, s.Status, s.AddressID,
+		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ImageURL,
 	).Scan(&s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrShopNotFound
@@ -279,7 +280,7 @@ func (r *SellerRepository) DeleteShop(ctx context.Context, sellerID, shopID stri
 func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
 		select id, seller_id, name, slug, description, return_address_mode,
-		       customer_visible_location, status, address_id, created_at, updated_at
+		       customer_visible_location, status, address_id, created_at, updated_at, image_url
 		from seller.shops
 		where seller_id = $1
 		order by created_at asc`, sellerID)
@@ -293,7 +294,7 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 		var s models.Shop
 		if err := rows.Scan(
 			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description, &s.ReturnAddressMode,
-			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.CreatedAt, &s.UpdatedAt,
+			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 		); err != nil {
 			return nil, err
 		}
@@ -309,12 +310,12 @@ func (r *SellerRepository) GetShopByID(ctx context.Context, sellerID, shopID str
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
 		select id, seller_id, name, slug, description, return_address_mode,
-		       customer_visible_location, status, address_id, created_at, updated_at
+		       customer_visible_location, status, address_id, created_at, updated_at, image_url
 		from seller.shops
 		where id = $1 and seller_id = $2`, shopID, sellerID,
 	).Scan(
 		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description, &s.ReturnAddressMode,
-		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.CreatedAt, &s.UpdatedAt,
+		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShopNotFound

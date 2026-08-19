@@ -9,5 +9,5 @@ import (
 // RegisterAdminRoutes mounts the one-time superadmin registration (bootstrap) route.
 // POST /api/v1/admin/register
 func RegisterAdminRoutes(r chi.Router, auth *handlers.AuthHandler) {
-	r.Post("/admin/register", auth.Bootstrap)
+	r.Post("/admin/register", auth.Bootstrap) // register a new admin
 }

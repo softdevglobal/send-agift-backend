@@ -7,17 +7,31 @@ import (
 	"myapp/internal/middleware"
 )
 
-// RegisterCustomerRoutes mounts customer auth and profile/address routes.
+// RegisterCustomerRoutes mounts customer auth, profile, address, and saved-gift routes.
 func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, jwtSecret string) {
-	r.Post("/customers/register", customers.Register)
+	r.Post("/customers/register", customers.Register) // register a new customer	
 
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireAuth(jwtSecret))
-		r.Use(middleware.RequireRole("customer"))
-		r.Get("/customers/me", customers.Me)
-		r.Put("/customers/me", customers.UpdateMe)
-		r.Delete("/customers/me", customers.DeleteMe)
-		r.Post("/customers/me/addresses", customers.AddAddress)
-		r.Delete("/customers/me/addresses/{id}", customers.DeleteAddress)
+		r.Use(middleware.RequireAuth(jwtSecret)) // require authentication
+		r.Use(middleware.RequireRole("customer")) // require role
+		r.Get("/customers/me", customers.Me) // get the customer's profile
+		r.Put("/customers/me", customers.UpdateMe) // update the customer's profile
+		r.Delete("/customers/me", customers.DeleteMe) // delete the customer's profile
+		r.Post("/customers/me/addresses", customers.AddAddress) // add a new address to the customer's profile
+		r.Delete("/customers/me/addresses/{id}", customers.DeleteAddress) // delete an address from the customer's profile
+
+		// Saved gifts (wishlist) — no PUT; change = delete + create
+		r.Get("/customers/me/saved-gifts", customers.ListSavedGifts)
+		r.Post("/customers/me/saved-gifts", customers.AddSavedGift)
+		r.Delete("/customers/me/saved-gifts/{id}", customers.DeleteSavedGift)
+
+		r.Post("/customers/me/recipients", customers.CreateRecipient)
+		r.Get("/customers/me/recipients", customers.ListRecipients)
+		r.Get("/customers/me/recipients/{id}", customers.GetRecipient)
+		r.Put("/customers/me/recipients/{id}", customers.UpdateRecipient)
+		r.Delete("/customers/me/recipients/{id}", customers.DeleteRecipient)
+		r.Post("/customers/me/recipients/{id}/addresses", customers.AddRecipientAddress)
+		r.Put("/customers/me/recipients/{id}/addresses/{addressId}", customers.UpdateRecipientAddress)
+		r.Delete("/customers/me/recipients/{id}/addresses/{addressId}", customers.DeleteRecipientAddress)
 	})
 }

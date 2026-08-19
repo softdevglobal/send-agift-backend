@@ -7,9 +7,9 @@ import (
 	"myapp/internal/middleware"
 )
 
-// RegisterCountryRoutes mounts public country read routes and admin write routes.
+// RegisterCountryRoutes mounts public country read and admin write routes.
 func RegisterCountryRoutes(r chi.Router, countries *handlers.CountryHandler, jwtSecret string) {
-	// Read: public (needed for registration forms before login)
+	// Read: public (no JWT)
 	r.Get("/countries", countries.List)
 	r.Get("/countries/{id}", countries.GetByID)
 

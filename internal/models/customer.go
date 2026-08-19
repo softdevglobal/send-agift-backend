@@ -22,6 +22,7 @@ type Customer struct {
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 	DeletedAt           *time.Time `json:"deleted_at,omitempty"`
+	ImageURL            *string    `json:"image_url,omitempty"`
 }
 
 // CustomerAddress maps to customer.customer_addresses.
@@ -41,6 +42,22 @@ type CustomerAddress struct {
 	IsDefault   bool      `json:"is_default"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type SavedGift struct {
+	ID         uuid.UUID `json:"id"`
+	CustomerID uuid.UUID `json:"customer_id"`
+	ProductID  uuid.UUID `json:"product_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// SavedGiftDetails is a saved gift with full product details from seller.products.
+type SavedGiftDetails struct {
+	ID         uuid.UUID `json:"id"`
+	CustomerID uuid.UUID `json:"customer_id"`
+	ProductID  uuid.UUID `json:"product_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	Product    Product   `json:"product"`
 }
 
 // CustomerDetails is a customer profile with all addresses.
