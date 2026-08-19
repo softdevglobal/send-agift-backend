@@ -6,6 +6,8 @@ import (
 
 	// Chi router library - a lightweight HTTP router for Go
 	"github.com/go-chi/chi/v5"
+	// Chi CORS - allows browsers on other origins (e.g. localhost:3000) to call this API
+	"github.com/go-chi/cors"
 	// Chi middleware package - pre-built middleware functions
 	chimw "github.com/go-chi/chi/v5/middleware"
 
@@ -39,6 +41,17 @@ func New(
 	
 	// Register middleware that runs on EVERY request
 	// These are applied to all routes in order
+
+	// CORS: needed for browser frontends (React/Vite on another port).
+	// Postman / curl do not use CORS — they already work without this.
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Bootstrap-Secret"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
 	
 	// Middleware 1: RequestID - adds a unique ID to each request
 	// Useful for tracking requests through logs
