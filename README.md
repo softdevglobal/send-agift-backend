@@ -1,6 +1,6 @@
 # SendAGift API
 
-Go REST API for admin, countries, customers, sellers, shops, products, inventory, and saved gifts.
+Go REST API for admin, countries, customers, recipients, orders, sellers, shops, products, inventory, and saved gifts.
 
 Base URL: `http://localhost:8081`
 
@@ -718,7 +718,117 @@ Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uui
 
 ---
 
-## 6. Sellers
+## 6. Customer orders
+
+Auth: customer JWT. `customer_id` comes from the token.
+
+One checkout = one `marketplace.orders` row + one `marketplace.order_items` row per product. Prices are copied from the product at checkout (`unit_amount` / `total_amount`) so later catalog price changes do not change past orders.
+
+- Order `status` starts as `pending_payment`
+- Each item `fulfilment_status` starts as `pending`
+- Product must be `published` and its shop `active`
+- `customer_type_visibility` on the product must be `both` or match `customer_type`
+- All items must share the same `currency`
+- `recipient_id` is optional but must belong to this customer if sent
+- `delivery_amount` defaults to `0` (minor units)
+
+### POST `http://localhost:8081/api/v1/customers/me/orders`
+
+- **POST body:**
+
+```json
+{
+  "recipient_id": "recipient-uuid",
+  "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+  "customer_type": "personal",
+  "delivery_date": "2026-08-25",
+  "gift_message": "Happy birthday Amma",
+  "delivery_amount": 50000,
+  "items": [
+    {
+      "product_id": "product-uuid",
+      "quantity": 2
+    }
+  ]
+}
+```
+
+`recipient_id` and `gift_message` can be omitted. `customer_type`: `personal` | `corporate`.
+
+**Response 201** — **Return type:** `OrderDetails` (order + `items[]`)
+
+```json
+{
+  "id": "order-uuid",
+  "order_number": "SAG-20260820-A1B2C3D4",
+  "customer_id": "customer-uuid",
+  "recipient_id": "recipient-uuid",
+  "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+  "customer_type": "personal",
+  "delivery_date": "2026-08-25T00:00:00Z",
+  "status": "pending_payment",
+  "subtotal_amount": 500000,
+  "delivery_amount": 50000,
+  "total_amount": 550000,
+  "currency": "LKR",
+  "gift_message": "Happy birthday Amma",
+  "created_at": "...",
+  "updated_at": "...",
+  "items": [
+    {
+      "id": "order-item-uuid",
+      "order_id": "order-uuid",
+      "seller_id": "seller-uuid",
+      "shop_id": "shop-uuid",
+      "product_id": "product-uuid",
+      "quantity": 2,
+      "unit_amount": 250000,
+      "total_amount": 500000,
+      "fulfilment_status": "pending",
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ]
+}
+```
+
+### GET `http://localhost:8081/api/v1/customers/me/orders`
+
+- **GET body:** none
+- **Return type:** `Order[]` — headers only, no `items`
+
+**Response 200** — array of order objects (same fields as the header above, without `items`).
+
+### GET `http://localhost:8081/api/v1/customers/me/orders/{id}`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/orders/order-uuid`
+
+- **GET body:** none
+- **Return type:** `OrderDetails` (same as POST create)
+
+**Response 200** — one order + `items[]`.
+
+### POST `http://localhost:8081/api/v1/customers/me/orders/{id}/cancel`
+
+Example URL: `http://localhost:8081/api/v1/customers/me/orders/order-uuid/cancel`
+
+- Auth: customer JWT
+- **POST body:** none
+- Sets order `status` to `cancelled` and item `fulfilment_status` to `cancelled`
+- Allowed only when order status is `draft`, `pending_payment`, `paid`, `accepted`, or `preparing`
+- Blocked when already `dispatched`, `delivered`, `cancelled`, or `refunded` (409)
+
+**Response 200** — **Return type:** `OrderDetails` (same as GET one, with cancelled statuses)
+
+**Response 409**
+
+```json
+{ "error": "order cannot be cancelled in its current status" }
+```
+
+---
+
+## 7. Sellers
 
 ### POST `http://localhost:8081/api/v1/sellers/register`
 
@@ -968,7 +1078,7 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/shops/shop-uuid`
 
 ---
 
-## 7. Products and inventory
+## 8. Products and inventory
 
 Auth: seller JWT  
 `seller_id` from token. Shop must belong to that seller.
@@ -1176,6 +1286,8 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 | POST | `http://localhost:8081/api/v1/admin/countries` | `{ iso_code, name, default_currency, default_timezone, status }` | — |
 | PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST | — |
 | DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none (id in URL) | — |
+| GET | `http://localhost:8081/api/v1/shops` | none | `Shop[]` |
+| GET | `http://localhost:8081/api/v1/shops/{shopId}/products` | none (use `?customer_type=personal|corporate`) | `Product[]` |
 | POST | `http://localhost:8081/api/v1/customers/register` | see customer register body | — |
 | GET | `http://localhost:8081/api/v1/customers/me` | none | `CustomerDetails` (profile + `addresses[]`) |
 | PUT | `http://localhost:8081/api/v1/customers/me` | `{ country_id, phone, display_name, customer_type, date_of_birth, status, image_url }` | — |
@@ -1193,6 +1305,10 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 | POST | `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses` | address body | — |
 | PUT | `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses/{addressId}` | address body | — |
 | DELETE | `http://localhost:8081/api/v1/customers/me/recipients/{id}/addresses/{addressId}` | none (ids in URL) | `{ "message": "address deleted" }` |
+| POST | `http://localhost:8081/api/v1/customers/me/orders` | `{ recipient_id, country_id, customer_type, delivery_date, gift_message, delivery_amount, items }` | `OrderDetails` |
+| GET | `http://localhost:8081/api/v1/customers/me/orders` | none | `Order[]` (no items) |
+| GET | `http://localhost:8081/api/v1/customers/me/orders/{id}` | none (order id in URL) | `OrderDetails` (order + `items[]`) |
+| POST | `http://localhost:8081/api/v1/customers/me/orders/{id}/cancel` | none | cancelled `OrderDetails` |
 | POST | `http://localhost:8081/api/v1/sellers/register` | see seller register body | — |
 | GET | `http://localhost:8081/api/v1/sellers/me` | none | `SellerDetails` (profile + addresses + shops) |
 | PUT | `http://localhost:8081/api/v1/sellers/me` | `{ country_id, seller_type, legal_name, trading_name, phone, image_url }` | — |

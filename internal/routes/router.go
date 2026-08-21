@@ -27,6 +27,9 @@ func New(
 	countries *handlers.CountryHandler,
 	// Handler instance that manages customer-related operations
 	customers *handlers.CustomerHandler,
+	orders *handlers.OrderHandler,
+	// Handler instance that manages public marketplace browsing
+	shops *handlers.ShopsHandler,
 	// Handler instance that manages seller-related operations
 	sellers *handlers.SellerHandler,
 	// Handler instance that manages seller products and inventory
@@ -87,6 +90,9 @@ func New(
 	// All routes registered inside this function will have /api/v1 prefix
 	// For example: /api/v1/login, /api/v1/users, etc.
 	r.Route("/api/v1", func(r chi.Router) {
+		// Public marketplace browsing (no JWT required)
+		RegisterMarketplaceRoutes(r, shops)
+
 		// Register admin routes (without authentication required)
 		// Example: POST /api/v1/admin/register (create first admin)
 		RegisterAdminRoutes(r, auth)
@@ -105,7 +111,7 @@ func New(
 		
 		// Register customer-related routes (requires valid JWT token)
 		// Example: GET /api/v1/customers, POST /api/v1/customers
-		RegisterCustomerRoutes(r, customers, jwtSecret)
+		RegisterCustomerRoutes(r, customers, orders, jwtSecret)
 
 		// Register seller-related routes (requires valid JWT token)
 		// Example: GET /api/v1/sellers, POST /api/v1/sellers

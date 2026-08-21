@@ -147,6 +147,48 @@ func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, s
 	return items, rows.Err()
 }
 
+// ListPublishedByShopForCustomerType returns only published products for a given shop,
+// where the shop is active and the product is visible for the given customer_type.
+// customerType must be 'personal' or 'corporate'.
+func (r *ProductRepository) ListPublishedByShopForCustomerType(
+	ctx context.Context,
+	shopID string,
+	customerType string,
+) ([]models.Product, error) {
+	rows, err := r.db.Query(ctx, `
+		select p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
+		       p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
+		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
+		from seller.products p
+		inner join seller.shops s on s.id = p.shop_id
+		where p.shop_id = $1
+		  and s.status = 'active'
+		  and p.status = 'published'
+		  and (p.customer_type_visibility = 'both' or p.customer_type_visibility = $2)
+		order by p.created_at desc`, shopID, customerType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []models.Product{}
+	for rows.Next() {
+		var p models.Product
+		if err := rows.Scan(
+			&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
+			&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
+			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
+		); err != nil {
+			return nil, err
+		}
+		if p.OccasionTags == nil {
+			p.OccasionTags = []string{}
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
 func (r *ProductRepository) CreateInventory(ctx context.Context, inv *models.Inventory) error {
 	if inv.UnavailableDates == nil {
 		inv.UnavailableDates = []time.Time{}

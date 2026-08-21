@@ -43,6 +43,7 @@ func main() {
 	customers := repository.NewCustomerRepository(pool) // create a new customer repository
 	sellers := repository.NewSellerRepository(pool) // create a new seller repository
 	products := repository.NewProductRepository(pool)
+	orders := repository.NewOrderRepository(pool)
 
 	// s3Service issues presigned URLs so clients upload straight to the bucket
 	s3Service, err := services.NewS3Service(cfg)
@@ -54,6 +55,7 @@ func main() {
 	adminService := services.NewAdminService(admins) // create a new admin service
 	countryService := services.NewCountryService(countries)
 	customerService := services.NewCustomerService(customers, countries, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
+	orderService := services.NewOrderService(orders, customers, countries)
 	sellerService := services.NewSellerService(sellers, countries, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers)
 
@@ -61,11 +63,14 @@ func main() {
 	adminHandler := handlers.NewAdminHandler(adminService) // create a new admin handler
 	countryHandler := handlers.NewCountryHandler(countryService) // create a new country handler
 	customerHandler := handlers.NewCustomerHandler(customerService) // create a new customer handler
+	orderHandler := handlers.NewOrderHandler(orderService)
+	marketplaceService := services.NewMarketplaceService(sellers, products)
+	shopsHandler := handlers.NewShopsHandler(marketplaceService)
 	sellerHandler := handlers.NewSellerHandler(sellerService) // create a new seller handler
 	productHandler := handlers.NewProductHandler(productService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, sellerHandler, productHandler, mediaHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, productHandler, mediaHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name
