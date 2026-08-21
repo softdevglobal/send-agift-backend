@@ -306,6 +306,34 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 	return items, rows.Err()
 }
 
+// ListActiveShops returns all shops with status='active' across all sellers.
+// Used by customer-facing marketplace browsing.
+func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, error) {
+	rows, err := r.db.Query(ctx, `
+		select id, seller_id, name, slug, description,
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
+		from seller.shops
+		where status = 'active'
+		order by created_at asc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []models.Shop{}
+	for rows.Next() {
+		var s models.Shop
+		if err := rows.Scan(
+			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, s)
+	}
+	return items, rows.Err()
+}
+
 func (r *SellerRepository) GetShopByID(ctx context.Context, sellerID, shopID string) (*models.Shop, error) {
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
