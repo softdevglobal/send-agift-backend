@@ -70,7 +70,11 @@ func main() {
 	productHandler := handlers.NewProductHandler(productService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, productHandler, mediaHandler, cfg.JWTSecret) // create a new router
+	// placesService proxies Google Places so the API key stays on the server
+	placesService := services.NewPlacesService(cfg)
+	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
+
+	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, productHandler, mediaHandler, placesHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name

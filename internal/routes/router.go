@@ -36,6 +36,8 @@ func New(
 	products *handlers.ProductHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
+	// Handler instance that proxies Google Places address lookups
+	places *handlers.PlacesHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -120,6 +122,10 @@ func New(
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload
 		RegisterMediaRoutes(r, media, jwtSecret)
+
+		// Register Google Places address lookup routes (public, rate limited)
+		// Example: GET /api/v1/places/autocomplete?input=221b+baker
+		RegisterPlacesRoutes(r, places)
 	})
 
 	// Return the fully configured router

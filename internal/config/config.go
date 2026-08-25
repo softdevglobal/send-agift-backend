@@ -25,6 +25,7 @@ type Config struct {
 	AWSAccessKeyID  string
 	AWSSecretKey    string
 	S3Bucket        string
+	GoogleMapsKey   string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -46,6 +47,7 @@ func Load() (*Config, error) {
 		AWSAccessKeyID:  os.Getenv("AWS_ACCESS_KEY_ID"),
 		AWSSecretKey:    os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		S3Bucket:        os.Getenv("S3_BUCKET"),
+		GoogleMapsKey:   os.Getenv("GOOGLE_MAPS_API_KEY"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -58,6 +60,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.S3Bucket == "" || cfg.AWSAccessKeyID == "" || cfg.AWSSecretKey == "" {
 		return nil, fmt.Errorf("S3_BUCKET, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
+	}
+	if cfg.GoogleMapsKey == "" {
+		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")
 	}
 
 	return cfg, nil // return the configuration
