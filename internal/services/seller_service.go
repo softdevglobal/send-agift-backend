@@ -26,19 +26,21 @@ var (
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)	// return a regular expression that matches any non-alphanumeric character
 
 type SellerService struct {
-	sellers   *repository.SellerRepository	// repository for the seller
-	countries *repository.CountryRepository	// repository for the country
-	jwtSecret string	// secret for the JWT
-	jwtExpiry time.Duration	// expiry for the JWT
+	sellers      *repository.SellerRepository // repository for the seller
+	countries    *repository.CountryRepository // repository for the country
+	capabilities *CountryCapabilityService
+	jwtSecret    string // secret for the JWT
+	jwtExpiry    time.Duration // expiry for the JWT
 }
 
 func NewSellerService(
-	sellers *repository.SellerRepository,	// repository for the seller
-	countries *repository.CountryRepository,	// repository for the country
+	sellers *repository.SellerRepository, // repository for the seller
+	countries *repository.CountryRepository, // repository for the country
+	capabilities *CountryCapabilityService,
 	jwtSecret string,
-	jwtExpiry time.Duration,	// expiry for the JWT
+	jwtExpiry time.Duration, // expiry for the JWT
 ) *SellerService {
-	return &SellerService{sellers: sellers, countries: countries, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry}	// return a new SellerService
+	return &SellerService{sellers: sellers, countries: countries, capabilities: capabilities, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry} // return a new SellerService
 }
 
 type SellerRegisterInput struct {	// SellerRegisterInput is a struct that contains the input for the seller register
@@ -112,6 +114,9 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 			return nil, ErrInvalidCountry	// return an error if the country is not found
 		}
 		return nil, err	// return an error if the country is not found
+	}
+	if err := s.capabilities.EnsureSellerRegistrationAllowed(ctx, countryID.String()); err != nil {
+		return nil, err
 	}
 
 	hash, err := utils.HashPassword(in.Password)

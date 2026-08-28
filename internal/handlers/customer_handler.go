@@ -298,6 +298,8 @@ func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, f
 		utils.Error(w, http.StatusBadRequest, "email required, password must be at least 8 characters")
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
+	case errors.Is(err, services.ErrCustomerRegistrationDisabled):
+		utils.Error(w, http.StatusForbidden, "customer registration is disabled for this country")
 	case errors.Is(err, services.ErrInvalidAddress):
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, and city")
 	case errors.Is(err, services.ErrCustomerConflict):

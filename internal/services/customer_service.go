@@ -29,26 +29,29 @@ var (
 ) // error for the service
 
 type CustomerService struct {
-	customers *repository.CustomerRepository // repository for the service
-	countries *repository.CountryRepository  // repository for the service
-	products  *repository.ProductRepository  // for validating product_id on saved gifts
-	jwtSecret string                         // secret for the JWT
-	jwtExpiry time.Duration                  // expiry for the JWT
+	customers      *repository.CustomerRepository // repository for the service
+	countries      *repository.CountryRepository  // repository for the service
+	capabilities   *CountryCapabilityService
+	products       *repository.ProductRepository  // for validating product_id on saved gifts
+	jwtSecret      string                         // secret for the JWT
+	jwtExpiry      time.Duration                  // expiry for the JWT
 }
 
 func NewCustomerService(
 	customers *repository.CustomerRepository,
 	countries *repository.CountryRepository,
+	capabilities *CountryCapabilityService,
 	products *repository.ProductRepository,
 	jwtSecret string,
 	jwtExpiry time.Duration,
 ) *CustomerService { // NewCustomerService is a function that creates a new CustomerService
 	return &CustomerService{
-		customers: customers,
-		countries: countries,
-		products:  products,
-		jwtSecret: jwtSecret,
-		jwtExpiry: jwtExpiry,
+		customers:    customers,
+		countries:    countries,
+		capabilities: capabilities,
+		products:     products,
+		jwtSecret:    jwtSecret,
+		jwtExpiry:    jwtExpiry,
 	}
 }
 
@@ -124,6 +127,9 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 			return nil, ErrInvalidCountry // return an error if the country is not found
 		}
 		return nil, err // return an error if the country is not found
+	}
+	if err := s.capabilities.EnsureCustomerRegistrationAllowed(ctx, countryID.String()); err != nil {
+		return nil, err
 	}
 
 	dob, err := repository.ParseDate(in.DateOfBirth)

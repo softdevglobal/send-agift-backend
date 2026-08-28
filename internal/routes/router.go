@@ -25,6 +25,8 @@ func New(
 	admin *handlers.AdminHandler,
 	// Handler instance that manages country-related operations
 	countries *handlers.CountryHandler,
+	// Handler instance that manages country capability gates
+	countryCapabilities *handlers.CountryCapabilityHandler,
 	// Handler instance that manages customer-related operations
 	customers *handlers.CustomerHandler,
 	orders *handlers.OrderHandler,
@@ -107,9 +109,8 @@ func New(
 		// Example: GET /api/v1/admin/dashboard, DELETE /api/v1/admin/users/:id
 		RegisterAdminProtectedRoutes(r, admin, jwtSecret)
 		
-		// Register country-related routes (requires valid JWT token)
-		// Example: GET /api/v1/countries, POST /api/v1/countries
-		RegisterCountryRoutes(r, countries, jwtSecret)
+		// Countries (public read) + admin country/capability CRUD
+		RegisterCountryRoutes(r, countries, countryCapabilities, jwtSecret)
 		
 		// Register customer-related routes (requires valid JWT token)
 		// Example: GET /api/v1/customers, POST /api/v1/customers
