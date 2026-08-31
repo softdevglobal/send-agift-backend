@@ -40,6 +40,7 @@ func main() {
 	// admins, countries, customers, sellers are the repositories for the admin, country, customer, and seller entities
 	admins := repository.NewAdminRepository(pool) // create a new admin repository
 	countries := repository.NewCountryRepository(pool) // create a new country repository
+	countryCapabilities := repository.NewCountryCapabilityRepository(pool)
 	customers := repository.NewCustomerRepository(pool) // create a new customer repository
 	sellers := repository.NewSellerRepository(pool) // create a new seller repository
 	products := repository.NewProductRepository(pool)
@@ -54,14 +55,16 @@ func main() {
 	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry) // create a new auth service
 	adminService := services.NewAdminService(admins) // create a new admin service
 	countryService := services.NewCountryService(countries)
-	customerService := services.NewCustomerService(customers, countries, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
+	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
+	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
 	orderService := services.NewOrderService(orders, customers, countries)
-	sellerService := services.NewSellerService(sellers, countries, cfg.JWTSecret, cfg.JWTExpiry)
+	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers)
 
 	authHandler := handlers.NewAuthHandler(authService) // create a new auth handler
 	adminHandler := handlers.NewAdminHandler(adminService) // create a new admin handler
 	countryHandler := handlers.NewCountryHandler(countryService) // create a new country handler
+	countryCapabilityHandler := handlers.NewCountryCapabilityHandler(countryCapabilityService)
 	customerHandler := handlers.NewCustomerHandler(customerService) // create a new customer handler
 	orderHandler := handlers.NewOrderHandler(orderService)
 	marketplaceService := services.NewMarketplaceService(sellers, products)
@@ -74,7 +77,7 @@ func main() {
 	placesService := services.NewPlacesService(cfg)
 	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
 
-	router := routes.New(authHandler, adminHandler, countryHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, productHandler, mediaHandler, placesHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, productHandler, mediaHandler, placesHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name

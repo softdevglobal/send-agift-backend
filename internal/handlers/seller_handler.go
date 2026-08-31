@@ -197,6 +197,8 @@ func (h *SellerHandler) writeError(w http.ResponseWriter, err error, fallback st
 		utils.Error(w, http.StatusBadRequest, "legal_name, email required; password must be at least 8 characters")
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
+	case errors.Is(err, services.ErrSellerRegistrationDisabled):
+		utils.Error(w, http.StatusForbidden, "seller registration is disabled for this country")
 	case errors.Is(err, services.ErrInvalidAddress):
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, city; address_type must be pickup|return|both")
 	case errors.Is(err, services.ErrInvalidShop):

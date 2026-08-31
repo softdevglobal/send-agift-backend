@@ -144,10 +144,22 @@ Header: `Authorization: Bearer <admin_token>`
 
 ## 4. Countries
 
+Public read endpoints (no JWT). Create, update, and delete require admin JWT.
+
+**Postman headers (admin write routes only)**
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `Authorization` | `Bearer <admin_token>` |
+
+Get `<admin_token>` from `POST /api/v1/auth/login` (admin account).
+
 ### GET `http://localhost:8081/api/v1/countries`
 
 - Auth: none
-- **GET body:** none
+- **Headers:** none required
+- **Body:** none
 
 **Response 200**
 
@@ -171,14 +183,16 @@ Header: `Authorization: Bearer <admin_token>`
 Example URL: `http://localhost:8081/api/v1/countries/3478b972-3c85-49ea-ac32-7afcace17129`
 
 - Auth: none
-- **GET body:** none
+- **Headers:** none required
+- **Body:** none
 - ID in URL
 
 **Response 200** — one country object (same fields as above).
 
 ### POST `http://localhost:8081/api/v1/admin/countries`
 
-- Auth: admin JWT
+- Auth: admin JWT (`admin` or `superadmin`)
+- **Headers:** `Content-Type: application/json`, `Authorization: Bearer <admin_token>`
 - **POST body:**
 
 ```json
@@ -191,14 +205,36 @@ Example URL: `http://localhost:8081/api/v1/countries/3478b972-3c85-49ea-ac32-7af
 }
 ```
 
+| Field | Required | Notes |
+|---|---|---|
+| `iso_code` | yes | 2-letter country code (e.g. `LK`, `US`) |
+| `name` | yes | Country display name |
+| `default_currency` | yes | ISO 4217 code: `USD`, `EUR`, `GBP`, `INR`, `LKR`, `AUD`, `CAD`, `SGD`, `AED`, `JPY`, `CNY`, `CHF`, `NZD`, `HKD`, `MYR`, `THB`, `IDR`, `PHP`, `PKR`, `BDT`, `SAR` |
+| `default_timezone` | yes | IANA timezone (e.g. `Asia/Colombo`) |
+| `status` | no | Defaults to `active` if omitted |
+
 **Response 201** — country object with `id`. Use that `id` as `country_id` for customers and sellers.
+
+```json
+{
+  "id": "3478b972-3c85-49ea-ac32-7afcace17129",
+  "iso_code": "LK",
+  "name": "Sri Lanka",
+  "default_currency": "LKR",
+  "default_timezone": "Asia/Colombo",
+  "status": "active",
+  "created_at": "2026-08-11T08:00:00Z",
+  "updated_at": "2026-08-11T08:00:00Z"
+}
+```
 
 ### PUT `http://localhost:8081/api/v1/admin/countries/{id}`
 
 Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129`
 
 - Auth: admin JWT
-- **PUT body:**
+- **Headers:** `Content-Type: application/json`, `Authorization: Bearer <admin_token>`
+- **PUT body:** same shape as POST (all fields required)
 
 ```json
 {
@@ -206,18 +242,19 @@ Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac
   "name": "Sri Lanka",
   "default_currency": "LKR",
   "default_timezone": "Asia/Colombo",
-  "status": "active"
+  "status": "inactive"
 }
 ```
 
-**Response 200** — updated country object.
+**Response 200** — updated country object (same shape as POST response).
 
 ### DELETE `http://localhost:8081/api/v1/admin/countries/{id}`
 
 Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129`
 
 - Auth: admin JWT
-- **DELETE body:** none
+- **Headers:** `Authorization: Bearer <admin_token>`
+- **Body:** none
 - ID in URL
 
 **Response 200**
@@ -226,13 +263,189 @@ Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac
 { "message": "country deleted" }
 ```
 
+**Postman quick copy**
+
+| Method | URL | Body |
+|---|---|---|
+| GET | `http://localhost:8081/api/v1/countries` | none |
+| GET | `http://localhost:8081/api/v1/countries/{id}` | none |
+| POST | `http://localhost:8081/api/v1/admin/countries` | `{ "iso_code": "LK", "name": "Sri Lanka", "default_currency": "LKR", "default_timezone": "Asia/Colombo", "status": "active" }` |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none |
+
 ---
 
-## 5. Customers
+## 5. Country capabilities
+
+Admin-only CRUD for `core.country_capabilities` (country feature gates).  
+One capability row per country. **`{id}` in the URL is the `country_id`** (FK to `core.countries`).
+
+**Postman headers**
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `Authorization` | `Bearer <admin_token>` |
+
+**Request body (POST and PUT)** — boolean flags only; `country_id` comes from the URL
+
+```json
+{
+  "customer_registration_enabled": true,
+  "seller_registration_enabled": true,
+  "seller_payouts_enabled": true,
+  "domestic_delivery_enabled": true,
+  "international_delivery_enabled": true,
+  "memberships_enabled": true,
+  "points_earning_enabled": true,
+  "points_usage_enabled": true,
+  "skill_competitions_enabled": false,
+  "app_store_available": true
+}
+```
+
+| Field | Notes |
+|---|---|
+| boolean flags | Set each gate explicitly on POST and PUT |
+| `rule_version` | Read-only; starts at `1`, auto-incremented on PUT |
+| `country_id` | In URL only — do not send in body |
+
+### GET `http://localhost:8081/api/v1/admin/country-capabilities`
+
+- Auth: admin JWT
+- **Body:** none
+
+**Response 200**
+
+```json
+[
+  {
+    "country": {
+      "id": "3478b972-3c85-49ea-ac32-7afcace17129",
+      "iso_code": "LK",
+      "name": "Sri Lanka",
+      "default_currency": "LKR",
+      "default_timezone": "Asia/Colombo",
+      "status": "active",
+      "created_at": "2026-08-11T08:00:00Z",
+      "updated_at": "2026-08-11T08:00:00Z"
+    },
+    "capability": {
+      "id": "eb840357-5918-4b3a-a95f-b04096f9b52b",
+      "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+      "customer_registration_enabled": false,
+      "seller_registration_enabled": true,
+      "seller_payouts_enabled": true,
+      "domestic_delivery_enabled": true,
+      "international_delivery_enabled": true,
+      "memberships_enabled": true,
+      "points_earning_enabled": true,
+      "points_usage_enabled": true,
+      "skill_competitions_enabled": false,
+      "app_store_available": true,
+      "rule_version": 2,
+      "created_at": "2026-08-28T10:23:18.184418+05:30",
+      "updated_at": "2026-08-28T10:24:23.909594+05:30"
+    }
+  }
+]
+```
+
+### GET `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
+
+Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+
+- Auth: admin JWT
+- **Body:** none
+- `{id}` = `country_id`
+
+**Response 200**
+
+```json
+{
+  "country": {
+    "id": "3478b972-3c85-49ea-ac32-7afcace17129",
+    "iso_code": "LK",
+    "name": "Sri Lanka",
+    "default_currency": "LKR",
+    "default_timezone": "Asia/Colombo",
+    "status": "active",
+    "created_at": "2026-08-11T08:00:00Z",
+    "updated_at": "2026-08-11T08:00:00Z"
+  },
+  "capability": {
+    "id": "eb840357-5918-4b3a-a95f-b04096f9b52b",
+    "country_id": "3478b972-3c85-49ea-ac32-7afcace17129",
+    "customer_registration_enabled": false,
+    "seller_registration_enabled": true,
+    "seller_payouts_enabled": true,
+    "domestic_delivery_enabled": true,
+    "international_delivery_enabled": true,
+    "memberships_enabled": true,
+    "points_earning_enabled": true,
+    "points_usage_enabled": true,
+    "skill_competitions_enabled": false,
+    "app_store_available": true,
+    "rule_version": 2,
+    "created_at": "2026-08-28T10:23:18.184418+05:30",
+    "updated_at": "2026-08-28T10:24:23.909594+05:30"
+  }
+}
+```
+
+### POST `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
+
+Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+
+- Auth: admin JWT
+- **Body:** boolean flags above
+- `{id}` = `country_id` (must exist in `core.countries`)
+
+**Response 201** — created capability object.
+
+### PUT `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
+
+Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+
+- Auth: admin JWT
+- **Body:** boolean flags above
+- `{id}` = `country_id`
+- `rule_version` increments automatically on each update
+
+**Response 200** — updated capability object.
+
+### DELETE `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
+
+Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+
+- Auth: admin JWT
+- **Body:** none
+- `{id}` = `country_id`
+
+**Response 200**
+
+```json
+{ "message": "country capability deleted" }
+```
+
+**Postman quick copy**
+
+| Method | URL | Body |
+|---|---|---|
+| GET | `http://localhost:8081/api/v1/admin/country-capabilities` | none |
+| GET | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none |
+| POST | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags above |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags above |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none |
+
+---
+
+## 6. Customers
 
 ### POST `http://localhost:8081/api/v1/customers/register`
 
 - Auth: none
+- Blocked with **403** when `customer_registration_enabled` is `false` for `country_id` in country capabilities
 - Does not return a token — login after
 - **POST body:**
 
@@ -718,7 +931,7 @@ Example URL: `http://localhost:8081/api/v1/customers/me/recipients/recipient-uui
 
 ---
 
-## 6. Customer orders
+## 7. Customer orders
 
 Auth: customer JWT. `customer_id` comes from the token.
 
@@ -828,11 +1041,12 @@ Example URL: `http://localhost:8081/api/v1/customers/me/orders/order-uuid/cancel
 
 ---
 
-## 7. Sellers
+## 8. Sellers
 
 ### POST `http://localhost:8081/api/v1/sellers/register`
 
 - Auth: none
+- Blocked with **403** when `seller_registration_enabled` is `false` for `country_id` in country capabilities
 - Does not return a token — login after
 - **POST body:**
 
@@ -1078,7 +1292,7 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/shops/shop-uuid`
 
 ---
 
-## 8. Products and inventory
+## 9. Products and inventory
 
 Auth: seller JWT  
 `seller_id` from token. Shop must belong to that seller.
@@ -1283,9 +1497,14 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 | PUT | `http://localhost:8081/api/v1/admin/me` | `{ display_name, image_url }` | — |
 | GET | `http://localhost:8081/api/v1/countries` | none | `Country[]` |
 | GET | `http://localhost:8081/api/v1/countries/{id}` | none (id in URL) | `Country` |
-| POST | `http://localhost:8081/api/v1/admin/countries` | `{ iso_code, name, default_currency, default_timezone, status }` | — |
-| PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST | — |
-| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none (id in URL) | — |
+| POST | `http://localhost:8081/api/v1/admin/countries` | `{ "iso_code": "LK", "name": "Sri Lanka", "default_currency": "LKR", "default_timezone": "Asia/Colombo", "status": "active" }` | `Country` |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST | `Country` |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none (id in URL) | `{ "message": "country deleted" }` |
+| GET | `http://localhost:8081/api/v1/admin/country-capabilities` | none | `CountryCapabilityDetails[]` |
+| GET | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none | `CountryCapabilityDetails` |
+| POST | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none | `{ "message": "country capability deleted" }` |
 | GET | `http://localhost:8081/api/v1/shops` | none | `Shop[]` |
 | GET | `http://localhost:8081/api/v1/shops/{shopId}/products` | none (use `?customer_type=personal|corporate`) | `Product[]` |
 | POST | `http://localhost:8081/api/v1/customers/register` | see customer register body | — |
