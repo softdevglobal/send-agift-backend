@@ -11,6 +11,7 @@ import (
 func RegisterSellerRoutes(
 	r chi.Router,
 	sellers *handlers.SellerHandler,
+	sellerOrders *handlers.SellerOrderHandler,
 	products *handlers.ProductHandler,
 	jwtSecret string,
 ) {
@@ -40,5 +41,9 @@ func RegisterSellerRoutes(
 
 		r.Get("/sellers/me/products/{id}/inventory", products.GetInventory)
 		r.Put("/sellers/me/products/{id}/inventory", products.UpdateInventory)
+
+		r.Get("/sellers/me/order-items", sellerOrders.ListItems)
+		r.Get("/sellers/me/order-items/{id}", sellerOrders.GetItem)
+		r.Patch("/sellers/me/order-items/{id}/accept", sellerOrders.AcceptItem)
 	})
 }

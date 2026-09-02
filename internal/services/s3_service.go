@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -44,12 +45,18 @@ func NewS3Service(cfg *config.Config) (*S3Service, error) {
 
 // Upload stores an object under the given key prefix and returns the object key.
 func (s *S3Service) Upload(ctx context.Context, keyPrefix, filename string, body io.Reader, contentType string) (string, error) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return "", fmt.Errorf("read upload body: %w", err)
+	}
+
 	key := fmt.Sprintf("%s/%s-%s", keyPrefix, uuid.NewString(), filename)
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(s.bucket),
-		Key:         aws.String(key),
-		Body:        body,
-		ContentType: aws.String(contentType),
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ContentType:   aws.String(contentType),
 	})
 	if err != nil {
 		return "", fmt.Errorf("upload object: %w", err)

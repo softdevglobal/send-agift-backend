@@ -16,6 +16,19 @@ Migrations run on startup.
 go run ./cmd/migrate
 ```
 
+Copy `.env.example` to `.env` and fill in values. Shippo uses a **test API key** (`shippo_test_...`) in development; the app sends it as `Authorization: ShippoToken <key>` on every Shippo request ([auth docs](https://docs.goshippo.com/docs/guides_general/authentication/)).
+
+| Variable | Purpose |
+|---|---|
+| `SHIPPO_API_KEY` | Shippo test or live API token |
+| `SHIPPO_LABEL_BUCKET` | S3 bucket name stored on label records — set to the **same value as `S3_BUCKET`** |
+
+Webhook URL for tracking updates (configure in the [Shippo API portal](https://docs.goshippo.com/docs/tracking/webhooks/)):
+
+`POST http://localhost:8081/api/v1/webhooks/shippo/tracking`
+
+Event type: `track_updated`. Respond with `2xx` within 3 seconds.
+
 ## Postman rules
 
 | | |
@@ -273,21 +286,37 @@ Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac
 | PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST |
 | DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none |
 
+Country capability routes (same admin JWT) — see **section 5**.
+
 ---
 
 ## 5. Country capabilities
 
-Admin-only CRUD for `core.country_capabilities` (country feature gates).  
-One capability row per country. **`{id}` in the URL is the `country_id`** (FK to `core.countries`).
+Admin-only routes for `core.country_capabilities` (country feature gates).  
+Registered in `country_routes.go` together with country routes. All require admin JWT.
 
-**Postman headers**
+**Routes** (`{id}` = `country_id` from `core.countries`)
+
+| Method | URL | Body |
+|---|---|---|
+| GET | `http://localhost:8081/api/v1/admin/country-capabilities` | none |
+| GET | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none |
+| POST | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags below |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags below |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none |
+
+One capability row per country (`country_id` is unique in the database).
+
+**Postman headers** (all routes above)
 
 | Header | Value |
 |---|---|
 | `Content-Type` | `application/json` |
 | `Authorization` | `Bearer <admin_token>` |
 
-**Request body (POST and PUT)** — boolean flags only; `country_id` comes from the URL
+Get `<admin_token>` from `POST /api/v1/auth/login` (admin account).
+
+**Request body (POST and PUT only)** — boolean flags; do **not** send `country_id` in the body
 
 ```json
 {
@@ -308,9 +337,11 @@ One capability row per country. **`{id}` in the URL is the `country_id`** (FK to
 |---|---|
 | boolean flags | Set each gate explicitly on POST and PUT |
 | `rule_version` | Read-only; starts at `1`, auto-incremented on PUT |
-| `country_id` | In URL only — do not send in body |
+| `{id}` in URL | The country's `id` (same as `country_id` FK) |
 
 ### GET `http://localhost:8081/api/v1/admin/country-capabilities`
+
+List all countries that have capability rows, each with nested `country` + `capability`.
 
 - Auth: admin JWT
 - **Body:** none
@@ -353,11 +384,11 @@ One capability row per country. **`{id}` in the URL is the `country_id`** (FK to
 
 ### GET `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
 
-Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+Example: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
 
 - Auth: admin JWT
 - **Body:** none
-- `{id}` = `country_id`
+- `{id}` = country `id`
 
 **Response 200**
 
@@ -395,32 +426,32 @@ Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac
 
 ### POST `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
 
-Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+Example: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
 
 - Auth: admin JWT
 - **Body:** boolean flags above
-- `{id}` = `country_id` (must exist in `core.countries`)
+- `{id}` = country `id` (must exist in `core.countries`)
 
-**Response 201** — created capability object.
+**Response 201** — `capability` object (flags + `rule_version`, not nested with country).
 
 ### PUT `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
 
-Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+Example: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
 
 - Auth: admin JWT
 - **Body:** boolean flags above
-- `{id}` = `country_id`
+- `{id}` = country `id`
 - `rule_version` increments automatically on each update
 
-**Response 200** — updated capability object.
+**Response 200** — updated `capability` object.
 
 ### DELETE `http://localhost:8081/api/v1/admin/countries/{id}/capabilities`
 
-Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
+Example: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7afcace17129/capabilities`
 
 - Auth: admin JWT
 - **Body:** none
-- `{id}` = `country_id`
+- `{id}` = country `id`
 
 **Response 200**
 
@@ -430,13 +461,15 @@ Example URL: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac
 
 **Postman quick copy**
 
-| Method | URL | Body |
-|---|---|---|
-| GET | `http://localhost:8081/api/v1/admin/country-capabilities` | none |
-| GET | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none |
-| POST | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags above |
-| PUT | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags above |
-| DELETE | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none |
+| Method | URL | Body | Response |
+|---|---|---|---|
+| GET | `http://localhost:8081/api/v1/admin/country-capabilities` | none | `CountryCapabilityDetails[]` |
+| GET | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none | `CountryCapabilityDetails` |
+| POST | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags above | `CountryCapability` |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags above | `CountryCapability` |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none | `{ "message": "country capability deleted" }` |
+
+**Registration gates:** `customer_registration_enabled` and `seller_registration_enabled` are checked on `POST /customers/register` and `POST /sellers/register` (403 when `false`).
 
 ---
 
@@ -1484,6 +1517,254 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 
 ---
 
+## 10. Seller order items
+
+Auth: seller JWT. Lists `marketplace.order_items` for the logged-in seller, joined with order, product, and recipient shipping address.
+
+Typical flow: customer places order → seller **lists** items → **accepts** item → calls Shippo **rates** / **labels** (section 11).
+
+### GET `http://localhost:8081/api/v1/sellers/me/order-items`
+
+- Auth: seller JWT
+- **GET body:** none
+
+**Response 200** — `SellerOrderItemSummary[]`
+
+```json
+[
+  {
+    "id": "order-item-uuid",
+    "order_id": "order-uuid",
+    "seller_id": "seller-uuid",
+    "shop_id": "shop-uuid",
+    "product_id": "product-uuid",
+    "quantity": 1,
+    "unit_amount": 2500,
+    "total_amount": 2500,
+    "fulfilment_status": "pending",
+    "created_at": "...",
+    "updated_at": "...",
+    "order_number": "SAG-20260902-A1B2C3D4",
+    "order_status": "pending_payment",
+    "delivery_date": "2026-09-15T00:00:00Z",
+    "product_name": "Test Gift Box",
+    "product_slug": "test-gift-box",
+    "product_image_url": "https://res.cloudinary.com/demo/image/upload/v1/product.jpg",
+    "recipient_name": "Jane Receiver"
+  }
+]
+```
+
+### GET `http://localhost:8081/api/v1/sellers/me/order-items/{id}`
+
+Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid`
+
+- Auth: seller JWT
+- **GET body:** none
+
+**Response 200** — `SellerOrderItemDetails` (line item + `order` + `product` + `recipient` + `shipping_address`)
+
+### PATCH `http://localhost:8081/api/v1/sellers/me/order-items/{id}/accept`
+
+Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid/accept`
+
+- Auth: seller JWT
+- **PATCH body:** none
+- Sets `fulfilment_status` from `pending` → `accepted`
+- Required before Shippo rates/labels
+
+**Response 200** — updated `OrderItem`
+
+**Response 409**
+
+```json
+{ "error": "order item cannot be accepted in its current status" }
+```
+
+---
+
+## 11. Shippo shipping (seller)
+
+> **Full Postman walkthrough:** [SHIPPO_POSTMAN_TEST.md](./SHIPPO_POSTMAN_TEST.md) — copy-paste bodies for order → accept → rates → label.
+
+Seller JWT required. Uses [Shippo test mode](https://docs.goshippo.com/docs/guides_general/testing/) when `SHIPPO_API_KEY` starts with `shippo_test_` (free, watermarked labels).
+
+### Prerequisites
+
+1. `.env` has `SHIPPO_API_KEY`, `S3_BUCKET`, and `SHIPPO_LABEL_BUCKET` (same bucket name as `S3_BUCKET`).
+2. Restart API: `go run ./cmd/api`
+3. Data from earlier sections:
+   - Admin: country (for Shippo test, create **US** — see below)
+   - Seller: register → login → **ship-from address** → shop linked to that address → published product
+   - Customer: register → login → recipient with **shipping address** → place order
+4. Copy `order-item-uuid` from the customer order response, or from `GET /sellers/me/order-items`.
+5. Accept the item: `PATCH /sellers/me/order-items/{id}/accept` (section 10).
+
+### Recommended test addresses (Shippo test mode)
+
+Shippo test rates work best with **real US addresses** ([testing guide](https://docs.goshippo.com/docs/guides_general/testing/)). Create a US country (admin), then use ISO country `US` on seller and recipient addresses.
+
+**Seller ship-from** (`POST /sellers/me/addresses`):
+
+```json
+{
+  "country_id": "<us-country-uuid>",
+  "label": "Warehouse",
+  "address_type": "return",
+  "line1": "215 Clayton St",
+  "city": "San Francisco",
+  "region": "CA",
+  "postal_code": "94117",
+  "latitude": 37.769,
+  "longitude": -122.429,
+  "is_default": true
+}
+```
+
+**Recipient shipping** (inside `POST /customers/me/recipients` `addresses[]`):
+
+```json
+{
+  "country_id": "<us-country-uuid>",
+  "label": "Home",
+  "address_type": "shipping",
+  "line1": "965 Mission St",
+  "city": "San Francisco",
+  "region": "CA",
+  "postal_code": "94103",
+  "latitude": 37.782,
+  "longitude": -122.408,
+  "is_default": true
+}
+```
+
+Link the seller address to the shop via `address_id` when creating the shop (section 8).
+
+### Step 1 — Get shipping rates
+
+### POST `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates`
+
+Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid/shipping/rates`
+
+- Auth: seller JWT
+- **POST body:** none (empty body is fine)
+
+**Response 200**
+
+```json
+{
+  "shipment_object_id": "shippo-shipment-object-id",
+  "rates": [
+    {
+      "object_id": "rate-object-id-to-use-next",
+      "provider": "USPS",
+      "amount": "5.50",
+      "currency": "USD",
+      "estimated_days": 2,
+      "duration_terms": "Delivery in 1 to 3 business days.",
+      "service_name": "Priority Mail"
+    }
+  ]
+}
+```
+
+Copy one `rates[].object_id` for the next step.
+
+**Common errors**
+
+| Status | Meaning |
+|---|---|
+| 503 | `SHIPPO_API_KEY` missing — check `.env` and restart |
+| 409 | Order item not `accepted` — run `PATCH .../accept` (section 10) |
+| 400 | Missing seller shop address or recipient shipping address |
+| 500 | Shippo rejected addresses — use valid US test addresses |
+
+### Step 2 — Buy label
+
+### POST `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/labels`
+
+Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid/shipping/labels`
+
+- Auth: seller JWT
+- **POST body:**
+
+```json
+{
+  "rate_object_id": "rate-object-id-from-step-1",
+  "provider": "USPS",
+  "idempotency_key": "label-test-001"
+}
+```
+
+`idempotency_key` — any unique string per label purchase. Repeating the same key returns the cached shipment instead of buying twice.
+
+**Response 201**
+
+```json
+{
+  "id": "shipment-uuid",
+  "order_id": "order-uuid",
+  "seller_id": "seller-uuid",
+  "courier_provider": "USPS",
+  "tracking_number": "9205590164917312751089",
+  "label_media_id": "media-asset-uuid",
+  "delivery_mode": "courier",
+  "status": "label_created",
+  "provider_shipment_id": "shippo-transaction-id",
+  "provider_tracking_url": "https://tools.usps.com/go/TrackConfirmAction_input?...",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+The API downloads the PDF from Shippo, uploads it to S3, and stores a `media.media_assets` row (`asset_type: label`). Order item `fulfilment_status` becomes `dispatched`.
+
+Test labels are watermarked **SAMPLE — DO NOT MAIL**.
+
+### Step 3 — Webhook (optional, local)
+
+Shippo test mode does **not** send real tracking updates. You can still test your handler manually.
+
+### POST `http://localhost:8081/api/v1/webhooks/shippo/tracking`
+
+- Auth: none
+- **POST body:**
+
+```json
+{
+  "event": "track_updated",
+  "test": true,
+  "data": {
+    "tracking_number": "9205590164917312751089",
+    "tracking_status": {
+      "status": "DELIVERED",
+      "status_date": "2026-09-02T10:00:00Z"
+    }
+  }
+}
+```
+
+Use the `tracking_number` from step 2.
+
+**Response 200**
+
+```json
+{ "status": "ok" }
+```
+
+This updates `marketplace.shipments.status` to `delivered` and sets the order to `delivered`.
+
+### Shippo portal setup (production / ngrok)
+
+For live webhooks from Shippo (not manual Postman), register in the [Shippo API portal](https://docs.goshippo.com/docs/tracking/webhooks/):
+
+- URL: `https://<your-public-host>/api/v1/webhooks/shippo/tracking`
+- Event: `track_updated`
+
+For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
+
+---
+
 ## URL + body cheat sheet
 
 | Method | Full URL | Body | Response (GET) |
@@ -1501,10 +1782,10 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 | PUT | `http://localhost:8081/api/v1/admin/countries/{id}` | same as POST | `Country` |
 | DELETE | `http://localhost:8081/api/v1/admin/countries/{id}` | none (id in URL) | `{ "message": "country deleted" }` |
 | GET | `http://localhost:8081/api/v1/admin/country-capabilities` | none | `CountryCapabilityDetails[]` |
-| GET | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none | `CountryCapabilityDetails` |
-| POST | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
-| PUT | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
-| DELETE | `http://localhost:8081/api/v1/admin/countries/{country_id}/capabilities` | none | `{ "message": "country capability deleted" }` |
+| GET | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none | `CountryCapabilityDetails` |
+| POST | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
+| PUT | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
+| DELETE | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none | `{ "message": "country capability deleted" }` |
 | GET | `http://localhost:8081/api/v1/shops` | none | `Shop[]` |
 | GET | `http://localhost:8081/api/v1/shops/{shopId}/products` | none (use `?customer_type=personal|corporate`) | `Product[]` |
 | POST | `http://localhost:8081/api/v1/customers/register` | see customer register body | — |
@@ -1544,5 +1825,11 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 | DELETE | `http://localhost:8081/api/v1/sellers/me/products/{id}` | none (id in URL) | — |
 | GET | `http://localhost:8081/api/v1/sellers/me/products/{id}/inventory` | none (id in URL) | `Inventory` |
 | PUT | `http://localhost:8081/api/v1/sellers/me/products/{id}/inventory` | `{ available_qty, reserved_qty, low_stock_threshold, unavailable_dates }` | — |
+| GET | `http://localhost:8081/api/v1/sellers/me/order-items` | none | `SellerOrderItemSummary[]` |
+| GET | `http://localhost:8081/api/v1/sellers/me/order-items/{id}` | none | `SellerOrderItemDetails` |
+| PATCH | `http://localhost:8081/api/v1/sellers/me/order-items/{id}/accept` | none | `OrderItem` |
+| POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates` | none | `{ shipment_object_id, rates[] }` |
+| POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/labels` | `{ rate_object_id, provider, idempotency_key }` | `Shipment` |
+| POST | `http://localhost:8081/api/v1/webhooks/shippo/tracking` | Shippo `track_updated` payload | `{ "status": "ok" }` |
 
 GET and DELETE never take a JSON body. IDs always go in the URL. See each section above for full JSON examples.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,10 +13,12 @@ import (
 )
 
 var (
-	ErrOrderNotFound      = errors.New("order not found")
-	ErrOrderDuplicate     = errors.New("order number already exists")
-	ErrOrderProductNotFound = errors.New("product not found")
-	ErrOrderNotCancellable  = errors.New("order cannot be cancelled")
+	ErrOrderNotFound          = errors.New("order not found")
+	ErrOrderItemNotFound      = errors.New("order item not found")
+	ErrOrderItemNotAcceptable = errors.New("order item cannot be accepted")
+	ErrOrderDuplicate         = errors.New("order number already exists")
+	ErrOrderProductNotFound   = errors.New("product not found")
+	ErrOrderNotCancellable    = errors.New("order cannot be cancelled")
 )
 
 type OrderRepository struct {
@@ -219,6 +222,128 @@ func (r *OrderRepository) CancelForCustomer(ctx context.Context, customerID, ord
 	}
 
 	return tx.Commit(ctx)
+}
+
+const sellerOrderItemFrom = `
+	from marketplace.order_items oi
+	inner join marketplace.orders o on o.id = oi.order_id
+	inner join seller.products p on p.id = oi.product_id
+	left join customer.recipients r on r.id = o.recipient_id
+	left join customer.recipient_addresses ra on ra.id = coalesce(
+		r.default_address_id,
+		(select id from customer.recipient_addresses where recipient_id = r.id order by is_default desc, created_at asc limit 1)
+	)
+`
+
+func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string) ([]models.SellerOrderItemSummary, error) {
+	rows, err := r.db.Query(ctx, `
+		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
+		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+		       o.order_number, o.status, o.delivery_date,
+		       p.name, p.slug, p.image_url,
+		       r.name
+		`+sellerOrderItemFrom+`
+		where oi.seller_id = $1
+		order by oi.created_at desc`, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []models.SellerOrderItemSummary{}
+	for rows.Next() {
+		var it models.SellerOrderItemSummary
+		if err := rows.Scan(
+			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
+			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
+			&it.OrderNumber, &it.OrderStatus, &it.DeliveryDate,
+			&it.ProductName, &it.ProductSlug, &it.ProductImageURL,
+			&it.RecipientName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
+func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID string) (*models.SellerOrderItemDetails, error) {
+	d := &models.SellerOrderItemDetails{}
+	var recipient models.Recipient
+	var addr models.RecipientAddress
+
+	err := r.db.QueryRow(ctx, `
+		select
+			oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
+			oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+			o.id, o.order_number, o.customer_id, o.recipient_id, o.country_id, o.customer_type,
+			o.delivery_date, o.status, o.subtotal_amount, o.delivery_amount, o.total_amount,
+			o.currency, o.gift_message, o.media_greeting_id, o.created_at, o.updated_at,
+			p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
+			p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
+			p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
+			r.id, r.customer_id, r.name, r.relationship, r.email, r.phone, r.image_url,
+			r.default_address_id, r.preferences, r.created_at, r.updated_at,
+			ra.id, ra.recipient_id, ra.country_id, ra.label, ra.address_type, ra.line1, ra.line2,
+			ra.city, ra.region, ra.postal_code, ra.latitude, ra.longitude, ra.is_default,
+			ra.created_at, ra.updated_at
+		`+sellerOrderItemFrom+`
+		where oi.id = $1 and oi.seller_id = $2`, itemID, sellerID,
+	).Scan(
+		&d.ID, &d.OrderID, &d.SellerID, &d.ShopID, &d.ProductID, &d.Quantity,
+		&d.UnitAmount, &d.TotalAmount, &d.FulfilmentStatus, &d.CreatedAt, &d.UpdatedAt,
+		&d.Order.ID, &d.Order.OrderNumber, &d.Order.CustomerID, &d.Order.RecipientID, &d.Order.CountryID, &d.Order.CustomerType,
+		&d.Order.DeliveryDate, &d.Order.Status, &d.Order.SubtotalAmount, &d.Order.DeliveryAmount, &d.Order.TotalAmount,
+		&d.Order.Currency, &d.Order.GiftMessage, &d.Order.MediaGreetingID, &d.Order.CreatedAt, &d.Order.UpdatedAt,
+		&d.Product.ID, &d.Product.ShopID, &d.Product.Name, &d.Product.Slug, &d.Product.Description, &d.Product.ProductType, &d.Product.PriceAmount,
+		&d.Product.Currency, &d.Product.Status, &d.Product.OccasionTags, &d.Product.CustomerTypeVisibility,
+		&d.Product.PointsDisplayEnabled, &d.Product.PrepMinutes, &d.Product.CreatedAt, &d.Product.UpdatedAt, &d.Product.ImageURL,
+		&recipient.ID, &recipient.CustomerID, &recipient.Name, &recipient.Relationship, &recipient.Email, &recipient.Phone, &recipient.ImageURL,
+		&recipient.DefaultAddressID, &recipient.Preferences, &recipient.CreatedAt, &recipient.UpdatedAt,
+		&addr.ID, &addr.RecipientID, &addr.CountryID, &addr.Label, &addr.AddressType, &addr.Line1, &addr.Line2,
+		&addr.City, &addr.Region, &addr.PostalCode, &addr.Latitude, &addr.Longitude, &addr.IsDefault,
+		&addr.CreatedAt, &addr.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrOrderItemNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if recipient.ID != uuid.Nil {
+		d.Recipient = &recipient
+	}
+	if addr.ID != uuid.Nil {
+		d.ShippingAddress = &addr
+	}
+	return d, nil
+}
+
+func (r *OrderRepository) AcceptItemForSeller(ctx context.Context, sellerID, itemID string) (*models.OrderItem, error) {
+	item := &models.OrderItem{}
+	err := r.db.QueryRow(ctx, `
+		update marketplace.order_items
+		set fulfilment_status = 'accepted', updated_at = now()
+		where id = $1 and seller_id = $2 and fulfilment_status = 'pending'
+		returning id, order_id, seller_id, shop_id, product_id, quantity,
+		          unit_amount, total_amount, fulfilment_status, created_at, updated_at`,
+		itemID, sellerID,
+	).Scan(
+		&item.ID, &item.OrderID, &item.SellerID, &item.ShopID, &item.ProductID, &item.Quantity,
+		&item.UnitAmount, &item.TotalAmount, &item.FulfilmentStatus, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		_ = r.db.QueryRow(ctx, `
+			select exists(select 1 from marketplace.order_items where id = $1 and seller_id = $2)`,
+			itemID, sellerID,
+		).Scan(&exists)
+		if !exists {
+			return nil, ErrOrderItemNotFound
+		}
+		return nil, ErrOrderItemNotAcceptable
+	}
+	return item, err
 }
 
 func mapOrderWriteError(err error) error {

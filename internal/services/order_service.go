@@ -22,6 +22,8 @@ var (
 	ErrOrderCurrencyMix    = errors.New("items must share the same currency")
 	ErrOrderProductVisibility = errors.New("product not visible for this customer type")
 	ErrOrderNotCancellable    = errors.New("order cannot be cancelled")
+	ErrOrderItemNotFound      = errors.New("order item not found")
+	ErrOrderItemNotAcceptable = errors.New("order item cannot be accepted")
 )
 
 type OrderService struct {
@@ -237,6 +239,36 @@ func (s *OrderService) Cancel(ctx context.Context, customerID, orderID string) (
 		return nil, err
 	}
 	return s.Get(ctx, customerID, orderID)
+}
+
+func (s *OrderService) ListItemsForSeller(ctx context.Context, sellerID string) ([]models.SellerOrderItemSummary, error) {
+	return s.orders.ListItemsBySeller(ctx, sellerID)
+}
+
+func (s *OrderService) GetItemForSeller(ctx context.Context, sellerID, itemID string) (*models.SellerOrderItemDetails, error) {
+	item, err := s.orders.GetItemBySeller(ctx, sellerID, itemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderItemNotFound) {
+			return nil, ErrOrderItemNotFound
+		}
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *OrderService) AcceptItemForSeller(ctx context.Context, sellerID, itemID string) (*models.OrderItem, error) {
+	item, err := s.orders.AcceptItemForSeller(ctx, sellerID, itemID)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrOrderItemNotFound):
+			return nil, ErrOrderItemNotFound
+		case errors.Is(err, repository.ErrOrderItemNotAcceptable):
+			return nil, ErrOrderItemNotAcceptable
+		default:
+			return nil, err
+		}
+	}
+	return item, nil
 }
 
 func newOrderNumber() string {

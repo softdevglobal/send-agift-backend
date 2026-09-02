@@ -45,6 +45,9 @@ func main() {
 	sellers := repository.NewSellerRepository(pool) // create a new seller repository
 	products := repository.NewProductRepository(pool)
 	orders := repository.NewOrderRepository(pool)
+	shipments := repository.NewShipmentRepository(pool)
+	idempotency := repository.NewIdempotencyRepository(pool)
+	mediaAssets := repository.NewMediaRepository(pool)
 
 	// s3Service issues presigned URLs so clients upload straight to the bucket
 	s3Service, err := services.NewS3Service(cfg)
@@ -60,6 +63,8 @@ func main() {
 	orderService := services.NewOrderService(orders, customers, countries)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers)
+	shippoClient := services.NewShippoClient(cfg.ShippoAPIKey)
+	shippingService := services.NewShippingService(shippoClient, shipments, idempotency, mediaAssets, s3Service, cfg.ShippoLabelBucket)
 
 	authHandler := handlers.NewAuthHandler(authService) // create a new auth handler
 	adminHandler := handlers.NewAdminHandler(adminService) // create a new admin handler
@@ -70,14 +75,16 @@ func main() {
 	marketplaceService := services.NewMarketplaceService(sellers, products)
 	shopsHandler := handlers.NewShopsHandler(marketplaceService)
 	sellerHandler := handlers.NewSellerHandler(sellerService) // create a new seller handler
+	sellerOrderHandler := handlers.NewSellerOrderHandler(orderService)
 	productHandler := handlers.NewProductHandler(productService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
 	// placesService proxies Google Places so the API key stays on the server
 	placesService := services.NewPlacesService(cfg)
 	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
+	shippingHandler := handlers.NewShippingHandler(shippingService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, productHandler, mediaHandler, placesHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, mediaHandler, placesHandler, shippingHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name
