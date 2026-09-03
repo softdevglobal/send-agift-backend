@@ -26,6 +26,21 @@ func NewProductRepository(db *pgxpool.Pool) *ProductRepository {
 	return &ProductRepository{db: db}
 }
 
+const productSelectCols = `
+	p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
+	p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
+	p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url`
+
+func scanProduct(scanner interface {
+	Scan(dest ...any) error
+}, p *models.Product) error {
+	return scanner.Scan(
+		&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
+		&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
+		&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
+	)
+}
+
 func (r *ProductRepository) Create(ctx context.Context, p *models.Product) error {
 	if p.OccasionTags == nil {
 		p.OccasionTags = []string{}
@@ -94,32 +109,26 @@ func (r *ProductRepository) ExistsByID(ctx context.Context, productID string) (b
 
 func (r *ProductRepository) GetByIDForSeller(ctx context.Context, sellerID, productID string) (*models.Product, error) {
 	p := &models.Product{}
-	err := r.db.QueryRow(ctx, `
-		select p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
-		       p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
+	err := scanProduct(r.db.QueryRow(ctx, `
+		select `+productSelectCols+`
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
-		where p.id = $1 and s.seller_id = $2`, productID, sellerID,
-	).Scan(
-		&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
-		&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-		&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
-	)
+		where p.id = $1 and s.seller_id = $2`, productID, sellerID), p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrProductNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 	if p.OccasionTags == nil {
 		p.OccasionTags = []string{}
 	}
-	return p, err
+	return p, nil
 }
 
 func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, shopID string) ([]models.Product, error) {
 	rows, err := r.db.Query(ctx, `
-		select p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
-		       p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
+		select `+productSelectCols+`
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.shop_id = $1 and s.seller_id = $2
@@ -132,11 +141,7 @@ func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, s
 	items := []models.Product{}
 	for rows.Next() {
 		var p models.Product
-		if err := rows.Scan(
-			&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
-			&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
-		); err != nil {
+		if err := scanProduct(rows, &p); err != nil {
 			return nil, err
 		}
 		if p.OccasionTags == nil {
@@ -156,9 +161,7 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 	customerType string,
 ) ([]models.Product, error) {
 	rows, err := r.db.Query(ctx, `
-		select p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
-		       p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-		       p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
+		select `+productSelectCols+`
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.shop_id = $1
@@ -174,11 +177,7 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 	items := []models.Product{}
 	for rows.Next() {
 		var p models.Product
-		if err := rows.Scan(
-			&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
-			&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
-		); err != nil {
+		if err := scanProduct(rows, &p); err != nil {
 			return nil, err
 		}
 		if p.OccasionTags == nil {

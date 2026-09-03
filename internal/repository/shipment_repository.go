@@ -15,6 +15,7 @@ import (
 
 var ErrShipmentNotFound = errors.New("shipment not found")
 
+// ShipmentRepository persists shipping quotes/labels on marketplace.shipments.
 type ShipmentRepository struct {
 	db *pgxpool.Pool
 }
@@ -23,32 +24,38 @@ func NewShipmentRepository(db *pgxpool.Pool) *ShipmentRepository {
 	return &ShipmentRepository{db: db}
 }
 
-// ShippingContext holds addresses and order metadata needed for Shippo calls.
+// ShippingContext holds everything needed to call Shippo for one order item:
+// fulfilment status, seller ship-from, recipient ship-to, and any pending
+// parcel/customs already stored on marketplace.shipments.
 type ShippingContext struct {
-	OrderID           uuid.UUID
-	OrderItemID       uuid.UUID
-	SellerID          uuid.UUID
-	FulfilmentStatus  string
-	FromName          string
-	FromEmail         string
-	FromPhone         string
-	FromStreet1       string
-	FromStreet2       string
-	FromCity          string
-	FromRegion        string
-	FromPostalCode    string
-	FromCountryISO    string
-	ToName            string
-	ToEmail           string
-	ToPhone           string
-	ToStreet1         string
-	ToStreet2         string
-	ToCity            string
-	ToRegion          string
-	ToPostalCode      string
-	ToCountryISO      string
+	OrderID          uuid.UUID
+	OrderItemID      uuid.UUID
+	SellerID         uuid.UUID
+	FulfilmentStatus string
+	FromName         string
+	FromEmail        string
+	FromPhone        string
+	FromStreet1      string
+	FromStreet2      string
+	FromCity         string
+	FromRegion       string
+	FromPostalCode   string
+	FromCountryISO   string
+	ToName           string
+	ToEmail          string
+	ToPhone          string
+	ToStreet1        string
+	ToStreet2        string
+	ToCity           string
+	ToRegion         string
+	ToPostalCode     string
+	ToCountryISO     string
+	StoredParcel     json.RawMessage // marketplace.shipments.parcel_details (pending)
+	StoredCustoms    json.RawMessage // marketplace.shipments.customs_declaration (pending)
 }
 
+// GetShippingContext loads ship-from (shop address), ship-to (recipient address),
+// and any pending shipment parcel/customs for the seller's order item.
 func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, orderItemID string) (*ShippingContext, error) {
 	sc := &ShippingContext{}
 	err := r.db.QueryRow(ctx, `
@@ -59,11 +66,13 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 			coalesce(fc.iso_code, ''),
 			r.name, coalesce(r.email::text, ''), coalesce(r.phone, ''),
 			ra.line1, coalesce(ra.line2, ''), ra.city, coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
-			coalesce(tc.iso_code, '')
+			coalesce(tc.iso_code, ''),
+			sh.parcel_details, sh.customs_declaration
 		from marketplace.order_items oi
 		inner join marketplace.orders o on o.id = oi.order_id
 		inner join seller.sellers se on se.id = oi.seller_id
 		inner join seller.shops s on s.id = oi.shop_id
+		left join marketplace.shipments sh on sh.order_item_id = oi.id and sh.status = 'pending'
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
 		left join customer.recipients r on r.id = o.recipient_id
 		left join customer.recipient_addresses ra on ra.id = coalesce(
@@ -80,11 +89,76 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		&sc.FromStreet1, &sc.FromStreet2, &sc.FromCity, &sc.FromRegion, &sc.FromPostalCode, &sc.FromCountryISO,
 		&sc.ToName, &sc.ToEmail, &sc.ToPhone,
 		&sc.ToStreet1, &sc.ToStreet2, &sc.ToCity, &sc.ToRegion, &sc.ToPostalCode, &sc.ToCountryISO,
+		&sc.StoredParcel, &sc.StoredCustoms,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound
 	}
 	return sc, err
+}
+
+// UpsertQuote inserts or updates the pending shipment row created at /shipping/rates.
+// One pending shipment per order_item_id (unique partial index).
+func (r *ShipmentRepository) UpsertQuote(ctx context.Context, s *models.Shipment) error {
+	meta := s.ProviderMetadata
+	if len(meta) == 0 {
+		meta = json.RawMessage(`{}`)
+	}
+	parcel := s.ParcelDetails
+	if len(parcel) == 0 {
+		parcel = json.RawMessage(`null`)
+	}
+	customs := s.CustomsDeclaration
+	if len(customs) == 0 {
+		customs = json.RawMessage(`null`)
+	}
+	return r.db.QueryRow(ctx, `
+		insert into marketplace.shipments (
+			order_id, order_item_id, seller_id, delivery_mode, status, is_international,
+			parcel_details, customs_declaration, provider_shipment_id, provider_customs_declaration_id,
+			provider_metadata
+		) values ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10)
+		on conflict (order_item_id) where status = 'pending' do update set
+			is_international = excluded.is_international,
+			parcel_details = excluded.parcel_details,
+			customs_declaration = excluded.customs_declaration,
+			provider_shipment_id = excluded.provider_shipment_id,
+			provider_customs_declaration_id = excluded.provider_customs_declaration_id,
+			provider_metadata = excluded.provider_metadata,
+			updated_at = now()
+		returning id, created_at, updated_at`,
+		s.OrderID, s.OrderItemID, s.SellerID, s.DeliveryMode, s.IsInternational,
+		parcel, customs, s.ProviderShipmentID, s.ProviderCustomsID, meta,
+	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
+}
+
+// CompleteLabel updates the pending shipment after a label is purchased
+// (tracking, label media, status → label_created).
+func (r *ShipmentRepository) CompleteLabel(ctx context.Context, orderItemID uuid.UUID, s *models.Shipment) error {
+	meta := s.ProviderMetadata
+	if len(meta) == 0 {
+		meta = json.RawMessage(`{}`)
+	}
+	err := r.db.QueryRow(ctx, `
+		update marketplace.shipments
+		set courier_provider = $2,
+		    tracking_number = $3,
+		    label_media_id = $4,
+		    status = $5,
+		    provider_shipment_id = coalesce($6, provider_shipment_id),
+		    provider_tracking_url = $7,
+		    provider_metadata = $8,
+		    updated_at = now()
+		where order_item_id = $1 and status = 'pending'
+		returning id, order_id, seller_id, is_international, parcel_details, customs_declaration,
+		          delivery_mode, created_at, updated_at`,
+		orderItemID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID, s.Status,
+		s.ProviderShipmentID, s.ProviderTrackingURL, meta,
+	).Scan(
+		&s.ID, &s.OrderID, &s.SellerID, &s.IsInternational, &s.ParcelDetails, &s.CustomsDeclaration,
+		&s.DeliveryMode, &s.CreatedAt, &s.UpdatedAt,
+	)
+	return err
 }
 
 func (r *ShipmentRepository) Create(ctx context.Context, s *models.Shipment) error {
@@ -124,6 +198,7 @@ func (r *ShipmentRepository) GetByTrackingNumber(ctx context.Context, trackingNu
 	return s, err
 }
 
+// UpdateTrackingStatus applies a Shippo webhook tracking update by tracking_number.
 func (r *ShipmentRepository) UpdateTrackingStatus(ctx context.Context, trackingNumber, status string, deliveredAt *time.Time) error {
 	tag, err := r.db.Exec(ctx, `
 		update marketplace.shipments
@@ -140,6 +215,7 @@ func (r *ShipmentRepository) UpdateTrackingStatus(ctx context.Context, trackingN
 	return nil
 }
 
+// MarkOrderDelivered sets marketplace.orders.status = delivered.
 func (r *ShipmentRepository) MarkOrderDelivered(ctx context.Context, orderID uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `
 		update marketplace.orders
@@ -148,6 +224,7 @@ func (r *ShipmentRepository) MarkOrderDelivered(ctx context.Context, orderID uui
 	return err
 }
 
+// MarkOrderItemDispatched sets order_items.fulfilment_status = dispatched after label buy.
 func (r *ShipmentRepository) MarkOrderItemDispatched(ctx context.Context, orderItemID uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `
 		update marketplace.order_items
