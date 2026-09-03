@@ -46,3 +46,24 @@ type OrderDetails struct {
 	Order
 	Items []OrderItem `json:"items"`
 }
+
+// SellerOrderItemSummary is a seller-scoped order line for list views.
+type SellerOrderItemSummary struct {
+	OrderItem
+	OrderNumber     string    `json:"order_number"`
+	OrderStatus     string    `json:"order_status"`
+	DeliveryDate    time.Time `json:"delivery_date"`
+	ProductName     string    `json:"product_name"`
+	ProductSlug     string    `json:"product_slug"`
+	ProductImageURL *string   `json:"product_image_url,omitempty"`
+	RecipientName   *string   `json:"recipient_name,omitempty"`
+}
+
+// SellerOrderItemDetails is a seller-scoped order line with order, product, and ship-to context.
+type SellerOrderItemDetails struct {
+	OrderItem
+	Order           Order             `json:"order"`
+	Product         Product           `json:"product"`
+	Recipient       *Recipient        `json:"recipient,omitempty"`
+	ShippingAddress *RecipientAddress `json:"shipping_address,omitempty"`
+}

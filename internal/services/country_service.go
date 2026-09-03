@@ -122,7 +122,7 @@ func normalizeCountryInput(in CountryInput) CountryInput { // normalizeCountryIn
 	in.DefaultTimezone = strings.TrimSpace(in.DefaultTimezone)
 	in.Status = strings.ToLower(strings.TrimSpace(in.Status))
 	if in.Status == "" {
-		in.Status = "active"
+		in.Status = "full"
 	}
 	return in // return the normalized country input
 }
