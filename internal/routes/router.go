@@ -49,7 +49,7 @@ func New(
 	// Create a new Chi router instance
 	// This router will handle all HTTP requests
 	r := chi.NewRouter()
-	
+
 	// Register middleware that runs on EVERY request
 	// These are applied to all routes in order
 
@@ -63,19 +63,19 @@ func New(
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
-	
+
 	// Middleware 1: RequestID - adds a unique ID to each request
 	// Useful for tracking requests through logs
 	r.Use(chimw.RequestID)
-	
+
 	// Middleware 2: RealIP - extracts the real client IP address
 	// Useful when behind a proxy or load balancer
 	r.Use(chimw.RealIP)
-	
+
 	// Middleware 3: Logger - logs information about each request
 	// Logs HTTP method, path, status code, response time, etc.
 	r.Use(chimw.Logger)
-	
+
 	// Middleware 4: Recoverer - catches panics and prevents server crash
 	// Returns a 500 error instead of crashing the entire application
 	r.Use(chimw.Recoverer)
@@ -102,18 +102,18 @@ func New(
 		// Register admin routes (without authentication required)
 		// Example: POST /api/v1/admin/register (create first admin)
 		RegisterAdminRoutes(r, auth)
-		
+
 		// Register authentication routes (login, register, refresh token, etc)
 		// Example: POST /api/v1/login, POST /api/v1/register
 		RegisterAuthRoutes(r, auth)
-		
+
 		// Register admin-only routes (requires valid JWT token)
 		// Example: GET /api/v1/admin/dashboard, DELETE /api/v1/admin/users/:id
 		RegisterAdminProtectedRoutes(r, admin, jwtSecret)
-		
+
 		// Countries (public read) + admin country/capability CRUD
 		RegisterCountryRoutes(r, countries, countryCapabilities, jwtSecret)
-		
+
 		// Register customer-related routes (requires valid JWT token)
 		// Example: GET /api/v1/customers, POST /api/v1/customers
 		RegisterCustomerRoutes(r, customers, orders, jwtSecret)

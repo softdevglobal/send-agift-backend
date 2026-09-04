@@ -645,7 +645,43 @@ Only works when `fulfilment_status` is `pending`. After accept, you can call Shi
 
 Headers: `Authorization: Bearer {{seller_token}}`
 
-Body: **none** (leave empty or no body)
+**Domestic (US → US)** — body optional (empty `{}` is fine).
+
+**International (US → AU, etc.)** — `parcel` and `customs_declaration` are **required**:
+
+```json
+{
+  "parcel": {
+    "length": "20",
+    "width": "15",
+    "height": "10",
+    "distance_unit": "cm",
+    "weight": "1.200",
+    "mass_unit": "kg"
+  },
+  "customs_declaration": {
+    "contents_type": "MERCHANDISE",
+    "non_delivery_option": "RETURN",
+    "certify_signer": "Bay Area Gifts",
+    "eel_pfc": "NOEEI_30_37_a",
+    "incoterm": "DDU",
+    "items": [
+      {
+        "description": "Gift Box USA",
+        "quantity": 1,
+        "net_weight": "1.200",
+        "mass_unit": "kg",
+        "value_amount": "25.00",
+        "value_currency": "USD",
+        "origin_country": "US",
+        "tariff_number": "950300"
+      }
+    ]
+  }
+}
+```
+
+Posted `parcel` and `customs_declaration` are stored on `marketplace.shipments` (`parcel_details`, `customs_declaration`) when rates are fetched.
 
 **Response 200** (example):
 
@@ -675,6 +711,7 @@ Save one `rates[].object_id` → `rate_object_id`
 | 503 | Set `SHIPPO_API_KEY` in `.env`, restart API |
 | 409 | Run B6 accept (`PATCH .../accept`) |
 | 400 | Check seller shop address + recipient shipping address exist |
+| 400 | International: include `parcel` + `customs_declaration` in rates body |
 | 500 | Use valid US addresses (steps A6 + B3) |
 
 ---
@@ -776,7 +813,7 @@ Body (use `tracking_number` from C2):
 | B5 | GET | `/api/v1/sellers/me/order-items` | seller | none |
 | B5b | GET | `/api/v1/sellers/me/order-items/{order_item_id}` | seller | none |
 | B6 | PATCH | `/api/v1/sellers/me/order-items/{order_item_id}/accept` | seller | none |
-| C1 | POST | `/api/v1/sellers/me/order-items/{order_item_id}/shipping/rates` | seller | none |
+| C1 | POST | `/api/v1/sellers/me/order-items/{order_item_id}/shipping/rates` | seller | optional `{ parcel, customs_declaration }` (required intl) |
 | C2 | POST | `/api/v1/sellers/me/order-items/{order_item_id}/shipping/labels` | seller | rate + idempotency_key |
 | C3 | POST | `/api/v1/webhooks/shippo/tracking` | none | track_updated JSON |
 

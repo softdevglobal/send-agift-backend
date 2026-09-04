@@ -20,13 +20,15 @@ var (
 	ErrShippingProvider      = errors.New("shipping provider error")
 )
 
+// ShippingService orchestrates rates, label purchase, and tracking webhooks.
+// Flow: accept order item → GetRates (stores pending shipment) → BuyLabel (updates same row).
 type ShippingService struct {
 	shippo      *ShippoClient
 	shipments   *repository.ShipmentRepository
 	idempotency *repository.IdempotencyRepository
 	media       *repository.MediaRepository
 	s3          *S3Service
-	labelBucket string
+	labelBucket string // S3 bucket name stored on media.media_assets for label PDFs
 }
 
 func NewShippingService(
@@ -50,21 +52,29 @@ func NewShippingService(
 	}
 }
 
+// ShippingRatesResult is returned by GetRates for the seller to pick a carrier rate.
 type ShippingRatesResult struct {
-	ShipmentObjectID string       `json:"shipment_object_id"`
-	Rates            []ShippoRate `json:"rates"`
+	ShipmentObjectID     string       `json:"shipment_object_id"`                // Shippo shipment id
+	CustomsDeclarationID string       `json:"customs_declaration_id,omitempty"` // set for international
+	International        bool         `json:"international"`
+	Rates                []ShippoRate `json:"rates"`
 }
 
+// BuyLabelInput is the body for purchasing a label from a previously quoted rate.
 type BuyLabelInput struct {
 	RateObjectID   string `json:"rate_object_id"`
 	Provider       string `json:"provider"`
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID string) (*ShippingRatesResult, error) {
+// GetRates creates a Shippo shipment (with customs if international), returns carrier rates,
+// and upserts a pending row on marketplace.shipments with parcel_details / customs_declaration.
+func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID string, posted ShippingShipmentInput) (*ShippingRatesResult, error) {
 	if !s.shippo.Enabled() {
 		return nil, ErrShippingNotConfigured
 	}
+
+	// Load order item + seller ship-from + recipient ship-to from DB.
 	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
 	if err != nil {
 		if errors.Is(err, repository.ErrOrderNotFound) {
@@ -75,24 +85,91 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	if sc.FulfilmentStatus != "accepted" && sc.FulfilmentStatus != "preparing" && sc.FulfilmentStatus != "ready" {
 		return nil, ErrShippingNotReady
 	}
+
 	from, to, err := s.toShippoAddresses(sc)
 	if err != nil {
 		return nil, fmt.Errorf("%w: seller ship-from and recipient ship-to addresses must include name, street, city, and country (ISO2)", ErrShippingAddress)
 	}
-	parcel := defaultParcel()
-	shipment, err := s.shippo.CreateShipment(ctx, from, to, parcel)
+	international := isInternationalShipment(from.Country, to.Country)
+
+	// Prefer posted body; reuse parcel/customs already stored on a pending shipment if omitted.
+	shippingIn, err := mergeShippingInput(posted, sc.StoredParcel, sc.StoredCustoms)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+
+	parcel := defaultDomesticParcel()
+	if shippingIn.Parcel != nil {
+		parcel = *shippingIn.Parcel
+	}
+	if err := validateParcelInput(&parcel, international); err != nil {
+		if international {
+			return nil, fmt.Errorf("%w: parcel is required for international shipments", ErrInvalidInput)
+		}
+	}
+
+	var customsDeclarationID string
+	var parcelJSON, customsJSON json.RawMessage
+	if parcelBytes, err := json.Marshal(parcel); err == nil {
+		parcelJSON = parcelBytes
+	}
+
+	// International: create Shippo customs declaration first, then attach its id to the shipment.
+	if international {
+		if err := validateCustomsInput(shippingIn.CustomsDeclaration, from.Country, to.Country, sc.FromName); err != nil {
+			return nil, err
+		}
+		decl, err := s.shippo.CreateCustomsDeclaration(ctx, customsToShippo(*shippingIn.CustomsDeclaration))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrShippingProvider, err)
+		}
+		customsDeclarationID = decl.ObjectID
+		if customsBytes, err := json.Marshal(shippingIn.CustomsDeclaration); err == nil {
+			customsJSON = customsBytes
+		}
+	}
+
+	shippoShipment, err := s.shippo.CreateShipment(ctx, from, to, parcelToShippo(parcel), customsDeclarationID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrShippingProvider, err)
 	}
-	if len(shipment.Rates) == 0 {
+	if len(shippoShipment.Rates) == 0 {
 		return nil, fmt.Errorf("%w: no rates returned — use valid US addresses in test mode and ensure the seller shop has an address linked", ErrShippingProvider)
 	}
+
+	// Persist quote so BuyLabel can update this same pending row.
+	ratesMeta, _ := json.Marshal(map[string]any{"rates": shippoShipment.Rates})
+	providerShipmentID := shippoShipment.ObjectID
+	quote := &models.Shipment{
+		OrderID:            sc.OrderID,
+		OrderItemID:        &sc.OrderItemID,
+		SellerID:           sc.SellerID,
+		DeliveryMode:       "courier",
+		Status:             "pending",
+		IsInternational:    international,
+		ParcelDetails:      parcelJSON,
+		CustomsDeclaration: customsJSON,
+		ProviderShipmentID: &providerShipmentID,
+		ProviderMetadata:   ratesMeta,
+	}
+	if customsDeclarationID != "" {
+		quote.ProviderCustomsID = &customsDeclarationID
+	}
+	if err := s.shipments.UpsertQuote(ctx, quote); err != nil {
+		return nil, err
+	}
+
 	return &ShippingRatesResult{
-		ShipmentObjectID: shipment.ObjectID,
-		Rates:            mapShippoRates(shipment.Rates),
+		ShipmentObjectID:     shippoShipment.ObjectID,
+		CustomsDeclarationID: customsDeclarationID,
+		International:        international,
+		Rates:                mapShippoRates(shippoShipment.Rates),
 	}, nil
 }
 
+// BuyLabel purchases a Shippo label for rate_object_id, uploads the PDF to S3,
+// and updates the pending shipment to status=label_created.
+// IdempotencyKey prevents buying twice if the seller retries the same request.
 func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID string, in BuyLabelInput) (*models.Shipment, error) {
 	if !s.shippo.Enabled() {
 		return nil, ErrShippingNotConfigured
@@ -101,6 +178,7 @@ func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID st
 		return nil, ErrInvalidInput
 	}
 
+	// Return cached shipment if this idempotency_key was already completed.
 	scope := repository.ShipmentLabelScope()
 	if cached, skip, err := s.idempotency.Acquire(ctx, scope, in.IdempotencyKey); err != nil {
 		return nil, err
@@ -117,6 +195,7 @@ func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID st
 		return nil, err
 	}
 
+	// Buy label from Shippo using the rate chosen by the seller.
 	txn, err := s.shippo.CreateTransaction(ctx, in.RateObjectID)
 	if err != nil {
 		return nil, err
@@ -148,18 +227,18 @@ func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID st
 	providerID := txn.ObjectID
 	trackingURL := txn.TrackingURLProvider
 	shipment := &models.Shipment{
-		OrderID:             sc.OrderID,
-		SellerID:            sc.SellerID,
 		CourierProvider:     &provider,
 		TrackingNumber:      &tracking,
 		LabelMediaID:        &asset.ID,
-		DeliveryMode:        "courier",
 		Status:              "label_created",
 		ProviderShipmentID:  &providerID,
 		ProviderTrackingURL: &trackingURL,
 		ProviderMetadata:    txn.Raw,
 	}
-	if err := s.shipments.Create(ctx, shipment); err != nil {
+	if err := s.shipments.CompleteLabel(ctx, sc.OrderItemID, shipment); err != nil {
+		if errors.Is(err, repository.ErrShipmentNotFound) {
+			return nil, fmt.Errorf("%w: call /shipping/rates first to create a shipment quote", ErrShippingNotReady)
+		}
 		return nil, err
 	}
 	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
@@ -171,24 +250,26 @@ func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID st
 	return shipment, nil
 }
 
+// shippoWebhookPayload is the subset of Shippo track_updated we care about.
 type shippoWebhookPayload struct {
 	Event string `json:"event"`
 	Data  struct {
 		TrackingNumber string `json:"tracking_number"`
 		TrackingStatus struct {
-			Status      string `json:"status"`
-			StatusDate  string `json:"status_date"`
+			Status     string `json:"status"`
+			StatusDate string `json:"status_date"`
 		} `json:"tracking_status"`
 	} `json:"data"`
 }
 
+// HandleTrackingWebhook processes Shippo track_updated events and syncs shipment/order status.
 func (s *ShippingService) HandleTrackingWebhook(ctx context.Context, body []byte) error {
 	var payload shippoWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return ErrInvalidInput
 	}
 	if payload.Event != "track_updated" {
-		return nil
+		return nil // ignore other event types
 	}
 	trackingNumber := strings.TrimSpace(payload.Data.TrackingNumber)
 	if trackingNumber == "" {
@@ -214,6 +295,7 @@ func (s *ShippingService) HandleTrackingWebhook(ctx context.Context, body []byte
 	return nil
 }
 
+// toShippoAddresses builds Shippo address payloads from DB ship-from / ship-to context.
 func (s *ShippingService) toShippoAddresses(sc *repository.ShippingContext) (ShippoAddressInput, ShippoAddressInput, error) {
 	if sc.FromStreet1 == "" || sc.FromCity == "" || sc.FromCountryISO == "" ||
 		sc.ToStreet1 == "" || sc.ToCity == "" || sc.ToCountryISO == "" || sc.ToName == "" {
@@ -226,7 +308,7 @@ func (s *ShippingService) toShippoAddresses(sc *repository.ShippingContext) (Shi
 		City:    sc.FromCity,
 		State:   sc.FromRegion,
 		Zip:     sc.FromPostalCode,
-		Country: sc.FromCountryISO,
+		Country: normalizeCountryISO(sc.FromCountryISO),
 		Phone:   sc.FromPhone,
 		Email:   sc.FromEmail,
 	}
@@ -237,7 +319,7 @@ func (s *ShippingService) toShippoAddresses(sc *repository.ShippingContext) (Shi
 		City:          sc.ToCity,
 		State:         sc.ToRegion,
 		Zip:           sc.ToPostalCode,
-		Country:       sc.ToCountryISO,
+		Country:       normalizeCountryISO(sc.ToCountryISO),
 		Phone:         sc.ToPhone,
 		Email:         sc.ToEmail,
 		IsResidential: true,
@@ -245,14 +327,31 @@ func (s *ShippingService) toShippoAddresses(sc *repository.ShippingContext) (Shi
 	return from, to, nil
 }
 
-func defaultParcel() shippoParcelInput {
-	return shippoParcelInput{
-		Length: "20", Width: "15", Height: "10",
-		DistanceUnit: "cm",
-		Weight: "1.2", MassUnit: "kg",
+// isInternationalShipment is true when normalized ISO2 ship-from != ship-to.
+func isInternationalShipment(fromISO, toISO string) bool {
+	from := normalizeCountryISO(fromISO)
+	to := normalizeCountryISO(toISO)
+	return from != "" && to != "" && from != to
+}
+
+// normalizeCountryISO maps common 3-letter codes to ISO2 for Shippo.
+func normalizeCountryISO(iso string) string {
+	iso = strings.ToUpper(strings.TrimSpace(iso))
+	switch iso {
+	case "USA":
+		return "US"
+	case "AUS":
+		return "AU"
+	case "GBR":
+		return "GB"
+	case "LKA":
+		return "LK"
+	default:
+		return iso
 	}
 }
 
+// mapShippoTrackingStatus converts Shippo tracking statuses to our shipment.status values.
 func mapShippoTrackingStatus(raw string) string {
 	switch strings.ToUpper(strings.TrimSpace(raw)) {
 	case "PRE_TRANSIT":
@@ -270,6 +369,7 @@ func mapShippoTrackingStatus(raw string) string {
 	}
 }
 
+// downloadAndStoreLabel fetches the label PDF from Shippo and uploads it to S3.
 func (s *ShippingService) downloadAndStoreLabel(ctx context.Context, labelURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, labelURL, nil)
 	if err != nil {

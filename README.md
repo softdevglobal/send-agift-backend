@@ -1600,6 +1600,45 @@ Seller JWT required. Uses [Shippo test mode](https://docs.goshippo.com/docs/guid
 4. Copy `order-item-uuid` from the customer order response, or from `GET /sellers/me/order-items`.
 5. Accept the item: `PATCH /sellers/me/order-items/{id}/accept` (section 10).
 
+Typical flow: customer places order → seller **lists** items → **accepts** item → **POST rates** (with parcel + customs for international) → **POST label**.
+
+### Where parcel and customs are stored
+
+Seller-posted `parcel` and `customs_declaration` are **not** stored on products or order items. They are saved on **`marketplace.shipments`** when you call **POST `/shipping/rates`**:
+
+| DB column | What you POST |
+|---|---|
+| `parcel_details` | Full `parcel` JSON object |
+| `customs_declaration` | Full `customs_declaration` JSON object (international only) |
+| `is_international` | `true` when ship-from country ≠ ship-to country |
+| `order_item_id` | Links shipment to the order line |
+| `status` | `pending` after rates → `label_created` after label |
+| `provider_shipment_id` | Shippo `shipment_object_id` |
+| `provider_customs_declaration_id` | Shippo customs object id (international) |
+
+Calling **rates** again for the same order item **updates** the existing `pending` shipment row. **Labels** updates that same row with tracking and label PDF.
+
+Verify in SQL:
+
+```sql
+SELECT id, order_item_id, status, is_international,
+       parcel_details, customs_declaration,
+       provider_shipment_id, provider_customs_declaration_id
+FROM marketplace.shipments
+WHERE order_item_id = '<order-item-uuid>'
+ORDER BY created_at DESC;
+```
+
+### International vs domestic
+
+| | Domestic (e.g. US → US) | International (e.g. US → AU) |
+|---|---|---|
+| `parcel` in POST body | Optional (defaults used) | **Required** |
+| `customs_declaration` | Not needed | **Required** |
+| Stored on shipment | `parcel_details` only | `parcel_details` + `customs_declaration` |
+
+Addresses (ship-from / ship-to) always come from **seller shop address** and **recipient shipping address** in the database — not from the rates body.
+
 ### Recommended test addresses (Shippo test mode)
 
 Shippo test rates work best with **real US addresses** ([testing guide](https://docs.goshippo.com/docs/guides_general/testing/)). Create a US country (admin), then use ISO country `US` on seller and recipient addresses.
@@ -1647,7 +1686,49 @@ Link the seller address to the shop via `address_id` when creating the shop (sec
 Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid/shipping/rates`
 
 - Auth: seller JWT
-- **POST body:** none (empty body is fine)
+- **POST body:** optional for domestic; **required** for international (parcel + customs)
+
+**Domestic** — empty body is fine (default parcel is used):
+
+```json
+{}
+```
+
+**International** — parcel and customs are required:
+
+```json
+{
+  "parcel": {
+    "length": "20",
+    "width": "15",
+    "height": "10",
+    "distance_unit": "cm",
+    "weight": "1.200",
+    "mass_unit": "kg"
+  },
+  "customs_declaration": {
+    "contents_type": "MERCHANDISE",
+    "non_delivery_option": "RETURN",
+    "certify_signer": "Bay Area Gifts",
+    "eel_pfc": "NOEEI_30_37_a",
+    "incoterm": "DDU",
+    "items": [
+      {
+        "description": "Gift Box USA",
+        "quantity": 1,
+        "net_weight": "1.200",
+        "mass_unit": "kg",
+        "value_amount": "25.00",
+        "value_currency": "USD",
+        "origin_country": "US",
+        "tariff_number": "950300"
+      }
+    ]
+  }
+}
+```
+
+Customs fields: `contents_type`, `non_delivery_option`, `certify_signer`, and at least one `items[]` entry are required. `eel_pfc` and `incoterm` default to `NOEEI_30_37_a` and `DDU` when omitted (US → Canada uses `NOEEI_30_36`).
 
 **Response 200**
 
@@ -1677,6 +1758,7 @@ Copy one `rates[].object_id` for the next step.
 | 503 | `SHIPPO_API_KEY` missing — check `.env` and restart |
 | 409 | Order item not `accepted` — run `PATCH .../accept` (section 10) |
 | 400 | Missing seller shop address or recipient shipping address |
+| 400 | International shipment missing `parcel` or `customs_declaration` |
 | 500 | Shippo rejected addresses — use valid US test addresses |
 
 ### Step 2 — Buy label
@@ -1828,7 +1910,7 @@ For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
 | GET | `http://localhost:8081/api/v1/sellers/me/order-items` | none | `SellerOrderItemSummary[]` |
 | GET | `http://localhost:8081/api/v1/sellers/me/order-items/{id}` | none | `SellerOrderItemDetails` |
 | PATCH | `http://localhost:8081/api/v1/sellers/me/order-items/{id}/accept` | none | `OrderItem` |
-| POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates` | none | `{ shipment_object_id, rates[] }` |
+| POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates` | optional `{ parcel, customs_declaration }` (required international) | `{ shipment_object_id, rates[] }` |
 | POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/labels` | `{ rate_object_id, provider, idempotency_key }` | `Shipment` |
 | POST | `http://localhost:8081/api/v1/webhooks/shippo/tracking` | Shippo `track_updated` payload | `{ "status": "ok" }` |
 
