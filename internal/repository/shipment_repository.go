@@ -180,14 +180,14 @@ func (r *ShipmentRepository) Create(ctx context.Context, s *models.Shipment) err
 func (r *ShipmentRepository) GetByTrackingNumber(ctx context.Context, trackingNumber string) (*models.Shipment, error) {
 	s := &models.Shipment{}
 	err := r.db.QueryRow(ctx, `
-		select id, order_id, seller_id, courier_provider, tracking_number, label_media_id,
+		select id, order_id, order_item_id, seller_id, courier_provider, tracking_number, label_media_id,
 		       delivery_mode, status, proof_of_delivery_media_id, delivered_at,
 		       provider_shipment_id, provider_tracking_url, provider_metadata,
 		       created_at, updated_at
 		from marketplace.shipments
 		where tracking_number = $1`, trackingNumber,
 	).Scan(
-		&s.ID, &s.OrderID, &s.SellerID, &s.CourierProvider, &s.TrackingNumber, &s.LabelMediaID,
+		&s.ID, &s.OrderID, &s.OrderItemID, &s.SellerID, &s.CourierProvider, &s.TrackingNumber, &s.LabelMediaID,
 		&s.DeliveryMode, &s.Status, &s.ProofOfDeliveryMediaID, &s.DeliveredAt,
 		&s.ProviderShipmentID, &s.ProviderTrackingURL, &s.ProviderMetadata,
 		&s.CreatedAt, &s.UpdatedAt,
@@ -215,13 +215,41 @@ func (r *ShipmentRepository) UpdateTrackingStatus(ctx context.Context, trackingN
 	return nil
 }
 
-// MarkOrderDelivered sets marketplace.orders.status = delivered.
-func (r *ShipmentRepository) MarkOrderDelivered(ctx context.Context, orderID uuid.UUID) error {
+// MarkOrderItemDelivered sets one order_items.fulfilment_status = delivered.
+// One seller's line completing does not complete the whole order — see
+// MarkOrderDeliveredIfComplete.
+func (r *ShipmentRepository) MarkOrderItemDelivered(ctx context.Context, orderItemID uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `
-		update marketplace.orders
-		set status = 'delivered', updated_at = now()
-		where id = $1`, orderID)
+		update marketplace.order_items
+		set fulfilment_status = 'delivered', updated_at = now()
+		where id = $1 and fulfilment_status <> 'cancelled'`, orderItemID)
 	return err
+}
+
+// MarkOrderDeliveredIfComplete sets marketplace.orders.status = delivered only when
+// every line on the order is delivered or cancelled, and at least one was delivered.
+// An order with several sellers stays open until the last parcel arrives.
+// Returns true when this call completed the order.
+func (r *ShipmentRepository) MarkOrderDeliveredIfComplete(ctx context.Context, orderID uuid.UUID) (bool, error) {
+	tag, err := r.db.Exec(ctx, `
+		update marketplace.orders o
+		set status = 'delivered', updated_at = now()
+		where o.id = $1
+		  and o.status <> 'delivered'
+		  and not exists (
+		        select 1 from marketplace.order_items oi
+		        where oi.order_id = o.id
+		          and oi.fulfilment_status not in ('delivered', 'cancelled')
+		      )
+		  and exists (
+		        select 1 from marketplace.order_items oi
+		        where oi.order_id = o.id
+		          and oi.fulfilment_status = 'delivered'
+		      )`, orderID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // MarkOrderItemDispatched sets order_items.fulfilment_status = dispatched after label buy.

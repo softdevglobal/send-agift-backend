@@ -217,6 +217,11 @@ func (s *SellerService) GetDetails(ctx context.Context, sellerID string) (*model
 	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil	// return the seller details
 }
 
+// ListShops returns every shop owned by the seller, in any status.
+func (s *SellerService) ListShops(ctx context.Context, sellerID string) ([]models.Shop, error) {
+	return s.sellers.ListShops(ctx, sellerID)
+}
+
 func (s *SellerService) Update(ctx context.Context, sellerID string, in SellerUpdateInput) (*models.Seller, error) { // Update is a function that updates a seller	
 	seller, err := s.sellers.GetByID(ctx, sellerID)
 	if err != nil {

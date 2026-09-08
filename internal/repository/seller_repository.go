@@ -334,6 +334,26 @@ func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, 
 	return items, rows.Err()
 }
 
+// GetActiveShopByID returns one shop with status='active', for public browsing.
+// Unlike GetShopByID it is not scoped to a seller, so it must never expose
+// draft or suspended shops.
+func (r *SellerRepository) GetActiveShopByID(ctx context.Context, shopID string) (*models.Shop, error) {
+	s := &models.Shop{}
+	err := r.db.QueryRow(ctx, `
+		select id, seller_id, name, slug, description,
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
+		from seller.shops
+		where id = $1 and status = 'active'`, shopID,
+	).Scan(
+		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrShopNotFound
+	}
+	return s, err
+}
+
 func (r *SellerRepository) GetShopByID(ctx context.Context, sellerID, shopID string) (*models.Shop, error) {
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `

@@ -4,6 +4,14 @@ Go REST API for admin, countries, customers, recipients, orders, sellers, shops,
 
 Base URL: `http://localhost:8081`
 
+This file is the endpoint-by-endpoint Postman guide. Two companion documents cover the
+design:
+
+| Document | Covers |
+|---|---|
+| [`API_REFERENCE.md`](API_REFERENCE.md) | how the layers connect, every route in one map, request/response structures and where they are defined, shared flows, the full error catalogue |
+| [`DATABASE_SCHEMA.md`](DATABASE_SCHEMA.md) | every table and column, primary/foreign keys, ER diagram per section and for the whole database, cascade behaviour, indexes, migration history |
+
 ## Run
 
 ```powershell
@@ -1249,6 +1257,31 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/addresses/address-uuid`
 { "message": "address deleted" }
 ```
 
+### GET `http://localhost:8081/api/v1/sellers/me/shops`
+
+- Auth: seller JWT
+- **GET body:** none
+
+Returns every shop you own, in **any** status (`draft`, `active`, `suspended`), unlike the public
+`GET /shops` which only lists `active` ones.
+
+**Response 200**
+
+```json
+[
+  {
+    "id": "shop-uuid",
+    "seller_id": "seller-uuid",
+    "name": "Nimal Gifts",
+    "slug": "nimal-gifts",
+    "status": "active",
+    "customer_visible_location": "Colombo",
+    "created_at": "...",
+    "updated_at": "..."
+  }
+]
+```
+
 ### POST `http://localhost:8081/api/v1/sellers/me/shops`
 
 - Auth: seller JWT
@@ -1583,6 +1616,252 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uui
 
 ---
 
+## 10b. Seller reels (product videos + photos)
+
+Short-form posts shown to customers in a TikTok-style feed. Sellers upload a video (or a photo carousel) and publish. Customers browse a public feed — no login required.
+
+### Shop reels vs product reels
+
+Every reel belongs to a **shop**. Tagging a **product** is optional, which gives you two kinds of reel:
+
+| Kind | How to create it | `product_id` |
+|---|---|---|
+| **Shop reel** — shop tour, behind the scenes, brand video | `POST /sellers/me/shops/{shopID}/reels` with no `product_id` | `null` |
+| **Product reel** — demo/unboxing of one product | `POST /sellers/me/products/{productID}/reels` | set from the URL |
+
+You can also post to the shop route **with** `product_id` in the body — same result as the product route. The product route is just shorter and validates ownership from the product itself.
+
+Filter either kind out of the feed with `?scope=`:
+
+| `scope` | Returns |
+|---|---|
+| `all` (default) | Both kinds |
+| `shop` | Only reels with **no** product tagged |
+| `product` | Only reels tagged to a product |
+
+### How the data is stored
+
+| Table | Holds |
+|---|---|
+| `media.media_assets` | The **files** (video/image), bucket, object path, CDN URL, mime, size |
+| `seller.reels` | The **post**: caption, hashtags, visibility, status, tagged product, view count |
+| `seller.reel_media` | Ordered link rows (`position` 0,1,2…) joining a reel to its files |
+
+The reel row never stores raw file data — it points at `media.media_assets`. Deleting a reel deletes its media rows and its S3 objects.
+
+### Upload first, then create the reel
+
+Reel files go up through the presigned-upload endpoint, so bytes never pass through this API.
+
+**Step 1 —** `POST http://localhost:8081/api/v1/media/presign-upload` (any JWT)
+
+```json
+{
+  "filename": "reel1.mp4",
+  "content_type": "video/mp4",
+  "folder": "reel-video"
+}
+```
+
+Valid reel folders:
+
+| `folder` | Storage prefix |
+|---|---|
+| `reel-video` | `public/reels/videos` |
+| `reel-photo` | `public/reels/photos` |
+| `reel-thumbnail` | `public/reels/thumbnails` |
+
+**Response 200** — `{ "upload_url": "...", "key": "public/reels/videos/uuid-reel1.mp4", "public_url": "..." }`
+
+**Step 2 —** `PUT` the raw file to `upload_url` (header `Content-Type` must match `content_type`).
+
+**Step 3 —** Create the reel, passing each `key` as `object_path`.
+
+### POST `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/reels`
+
+Also: **POST** `http://localhost:8081/api/v1/sellers/me/products/{productID}/reels` — same body, but omit `product_id` (it comes from the URL and the shop is derived from the product).
+
+- Auth: seller JWT (the shop / product must belong to you)
+- **POST body:**
+
+```json
+{
+  "product_id": "product-uuid-in-this-shop",
+  "caption": "Unboxing our chocolate gift box!",
+  "hashtags": ["#Gift", "chocolate"],
+  "visibility": "public",
+  "status": "published",
+  "duration_ms": 15000,
+  "thumbnail": {
+    "object_path": "public/reels/thumbnails/cover.jpg",
+    "mime_type": "image/jpeg",
+    "size_bytes": 20480
+  },
+  "media": [
+    {
+      "object_path": "public/reels/videos/reel1.mp4",
+      "mime_type": "video/mp4",
+      "size_bytes": 8241234,
+      "metadata": { "width": 1080, "height": 1920 }
+    },
+    {
+      "object_path": "public/reels/photos/shot1.jpg",
+      "mime_type": "image/jpeg",
+      "size_bytes": 320145
+    }
+  ]
+}
+```
+
+| Field | Rules |
+|---|---|
+| `media[]` | **Required**, 1–10 items. `mime_type` must be `image/*` or `video/*` |
+| `product_id` | Optional on the shop route (must belong to that shop, else 400). Ignored on the product route |
+| `caption` | Optional, trimmed |
+| `hashtags` | Optional. Lowercased, `#` stripped, de-duplicated |
+| `visibility` | `public` (default) or `private` |
+| `status` | `draft` (default), `published`, `archived` |
+| `thumbnail` | Optional cover image; must be `image/*` |
+
+Derived automatically: `reel_type` is `video` when any file is a video (else `photo`), and `published_at` is stamped the first time `status` becomes `published`.
+
+**Response 201** — the reel with `media[]`, `thumbnail`, `shop`, and `product` attached.
+
+### Other seller endpoints
+
+| Method | URL | Notes |
+|---|---|---|
+| GET | `/sellers/me/reels` | All your reels, any status |
+| GET | `/sellers/me/shops/{shopID}/reels` | Reels for one of your shops |
+| GET | `/sellers/me/products/{productID}/reels` | Reels tagged to one of your products |
+| GET | `/sellers/me/reels/{id}` | One reel, any status |
+| PUT | `/sellers/me/reels/{id}` | Update. Omit `media` to keep files; send `media` to **replace** them |
+| DELETE | `/sellers/me/reels/{id}` | Deletes reel, media rows, and S3 objects |
+
+### Public customer feed (no JWT)
+
+### GET `http://localhost:8081/api/v1/reels`
+
+Newest published reels first. Only reels that are `status: published`, `visibility: public`, and whose **shop is active** appear.
+
+Query params: `limit` (default 20, max 50), `cursor`, `shop_id`, `product_id`, `scope` (`all` | `shop` | `product`)
+
+**Response 200**
+
+```json
+{
+  "items": [
+    {
+      "id": "reel-uuid",
+      "reel_type": "video",
+      "caption": "Unboxing our chocolate gift box!",
+      "hashtags": ["gift", "chocolate"],
+      "view_count": 12,
+      "media": [
+        {
+          "media_asset_id": "asset-uuid",
+          "position": 0,
+          "asset_type": "video",
+          "cdn_url": "https://bucket.s3.region.amazonaws.com/public/reels/videos/reel1.mp4",
+          "mime_type": "video/mp4"
+        }
+      ],
+      "shop": { "id": "shop-uuid", "name": "Reel Gift Shop", "slug": "reel-gift-shop" },
+      "product": { "id": "product-uuid", "name": "Chocolate Reel Box", "price_amount": 2500, "currency": "USD" }
+    }
+  ],
+  "next_cursor": "MjAyNi0wOS0wN1QwOTo0ODo0Ni42NDJa..."
+}
+```
+
+Pass `next_cursor` back as `?cursor=` for the next page. When `next_cursor` is absent you have reached the end.
+
+| Method | URL | Notes |
+|---|---|---|
+| GET | `/reels/{id}` | One published reel; **increments `view_count`** |
+| GET | `/shops/{shopId}/reels` | Public reels for one shop (add `?scope=shop` for shop-only videos) |
+| GET | `/products/{productId}/reels` | Public reels for one product |
+
+Drafts, private, and archived reels return **404** on public routes.
+
+---
+
+## 10c. Public storefront browsing (no JWT)
+
+The read-only endpoints a customer-facing website needs. No token, no role — but they only ever expose **active shops** and **published products**. Anything else returns 404, so a draft product can't be discovered by guessing its id.
+
+| Method | URL | Purpose |
+|---|---|---|
+| GET | `/shops` | Shop directory — every `active` shop |
+| GET | `/shops/{shopId}` | Shop page header |
+| GET | `/shops/{shopId}/products` | Products in that shop |
+| GET | `/products/{productId}` | Product page |
+
+Both product endpoints take `?customer_type=personal|corporate` (defaults to `personal`) and honour each product's `customer_type_visibility`, so a `corporate`-only product is invisible to a personal shopper. An unknown or invalid value returns 400.
+
+### GET `http://localhost:8081/api/v1/shops/{shopId}`
+
+Example URL: `http://localhost:8081/api/v1/shops/shop-uuid`
+
+**Response 200** — a `Shop` object (same shape as the seller-side shop).
+
+```json
+{
+  "id": "shop-uuid",
+  "seller_id": "seller-uuid",
+  "name": "John Gift Shop",
+  "slug": "john-gift-shop-10",
+  "description": "Handmade gifts",
+  "customer_visible_location": "Colombo",
+  "status": "active",
+  "created_at": "...",
+  "updated_at": "...",
+  "image_url": "https://.../shop.jpg"
+}
+```
+
+Inactive or unknown shop → **404** `{ "error": "shop not found" }`.
+
+### GET `http://localhost:8081/api/v1/products/{productId}`
+
+Example URL: `http://localhost:8081/api/v1/products/product-uuid?customer_type=personal`
+
+Returns the product **plus a `shop` block**, so the product page can render "sold by" without a second request.
+
+```json
+{
+  "id": "product-uuid",
+  "shop_id": "shop-uuid",
+  "name": "Fresh Flower Basket",
+  "slug": "fresh-flower-basket",
+  "description": "Seasonal blooms",
+  "product_type": "physical",
+  "price_amount": 550000,
+  "currency": "LKR",
+  "status": "published",
+  "occasion_tags": ["birthday"],
+  "customer_type_visibility": "both",
+  "points_display_enabled": false,
+  "prep_minutes": 60,
+  "image_url": "https://.../product.jpg",
+  "created_at": "...",
+  "updated_at": "...",
+  "shop": {
+    "id": "shop-uuid",
+    "name": "John Gift Shop",
+    "slug": "john-gift-shop-10",
+    "image_url": "https://.../shop.jpg",
+    "customer_visible_location": "Colombo"
+  }
+}
+```
+
+Not published, shop not active, hidden from this `customer_type`, or unknown id → **404** `{ "error": "product not found" }`.
+
+Pair these with the reel feeds from section 10b: `/shops/{shopId}/reels` for a shop page and `/products/{productId}/reels` for a product page.
+
+---
+
 ## 11. Shippo shipping (seller)
 
 > **Full Postman walkthrough:** [SHIPPO_POSTMAN_TEST.md](./SHIPPO_POSTMAN_TEST.md) — copy-paste bodies for order → accept → rates → label.
@@ -1834,7 +2113,30 @@ Use the `tracking_number` from step 2.
 { "status": "ok" }
 ```
 
-This updates `marketplace.shipments.status` to `delivered` and sets the order to `delivered`.
+A `DELIVERED` event updates three things, in this order:
+
+1. `marketplace.shipments.status` → `delivered` (plus `delivered_at`)
+2. that shipment's `marketplace.order_items.fulfilment_status` → `delivered`
+3. `marketplace.orders.status` → `delivered`, **but only if every line on the order is
+   now `delivered` or `cancelled`** and at least one was delivered
+
+Step 3 is what makes multi-seller orders correct. One order can hold items from several
+sellers, each with its own shipment and tracking number. When seller A's parcel arrives,
+only A's item is completed — the order header stays as it was until seller B's parcel is
+also delivered. An order whose items were all cancelled never becomes `delivered`.
+
+To check completion yourself:
+
+```sql
+SELECT o.id, o.status,
+       count(*) AS total_items,
+       count(*) FILTER (WHERE oi.fulfilment_status = 'delivered') AS delivered_items,
+       count(*) FILTER (WHERE oi.fulfilment_status = 'cancelled') AS cancelled_items
+FROM marketplace.orders o
+JOIN marketplace.order_items oi ON oi.order_id = o.id
+WHERE o.id = '<order-uuid>'
+GROUP BY o.id, o.status;
+```
 
 ### Shippo portal setup (production / ngrok)
 
@@ -1869,7 +2171,9 @@ For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
 | PUT | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | boolean flags (see section 5) | `CountryCapability` |
 | DELETE | `http://localhost:8081/api/v1/admin/countries/{id}/capabilities` | none | `{ "message": "country capability deleted" }` |
 | GET | `http://localhost:8081/api/v1/shops` | none | `Shop[]` |
+| GET | `http://localhost:8081/api/v1/shops/{shopId}` | none (id in URL) | `Shop` |
 | GET | `http://localhost:8081/api/v1/shops/{shopId}/products` | none (use `?customer_type=personal|corporate`) | `Product[]` |
+| GET | `http://localhost:8081/api/v1/products/{productId}` | none (use `?customer_type=personal|corporate`) | `Product` + `shop` |
 | POST | `http://localhost:8081/api/v1/customers/register` | see customer register body | — |
 | GET | `http://localhost:8081/api/v1/customers/me` | none | `CustomerDetails` (profile + `addresses[]`) |
 | PUT | `http://localhost:8081/api/v1/customers/me` | `{ country_id, phone, display_name, customer_type, date_of_birth, status, image_url }` | — |
@@ -1897,6 +2201,7 @@ For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
 | DELETE | `http://localhost:8081/api/v1/sellers/me` | none | — |
 | POST | `http://localhost:8081/api/v1/sellers/me/addresses` | address body | — |
 | DELETE | `http://localhost:8081/api/v1/sellers/me/addresses/{id}` | none (id in URL) | — |
+| GET | `http://localhost:8081/api/v1/sellers/me/shops` | none | `Shop[]` (your shops, any status) |
 | POST | `http://localhost:8081/api/v1/sellers/me/shops` | shop body | — |
 | PUT | `http://localhost:8081/api/v1/sellers/me/shops/{id}` | shop body | — |
 | DELETE | `http://localhost:8081/api/v1/sellers/me/shops/{id}` | none (id in URL) | — |
@@ -1910,6 +2215,20 @@ For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
 | GET | `http://localhost:8081/api/v1/sellers/me/order-items` | none | `SellerOrderItemSummary[]` |
 | GET | `http://localhost:8081/api/v1/sellers/me/order-items/{id}` | none | `SellerOrderItemDetails` |
 | PATCH | `http://localhost:8081/api/v1/sellers/me/order-items/{id}/accept` | none | `OrderItem` |
+| POST | `http://localhost:8081/api/v1/media/presign-upload` | `{ filename, content_type, folder }` | `{ upload_url, key, public_url }` |
+| GET | `http://localhost:8081/api/v1/media/url?key=...` | none | `{ url }` (15 min signed) |
+| GET | `http://localhost:8081/api/v1/reels` | none (`?limit=&cursor=&shop_id=&product_id=&scope=`) | `{ items[], next_cursor }` |
+| GET | `http://localhost:8081/api/v1/reels/{id}` | none (id in URL) | `ReelDetails` (counts a view) |
+| GET | `http://localhost:8081/api/v1/shops/{shopId}/reels` | none (`?scope=shop` for shop-only) | `{ items[], next_cursor }` |
+| GET | `http://localhost:8081/api/v1/products/{productId}/reels` | none | `{ items[], next_cursor }` |
+| POST | `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/reels` | `{ media[], product_id?, caption?, hashtags?, visibility?, status?, thumbnail? }` | `ReelDetails` |
+| GET | `http://localhost:8081/api/v1/sellers/me/shops/{shopID}/reels` | none | `ReelDetails[]` |
+| POST | `http://localhost:8081/api/v1/sellers/me/products/{productID}/reels` | same as shop reel (no `product_id`) | `ReelDetails` |
+| GET | `http://localhost:8081/api/v1/sellers/me/products/{productID}/reels` | none | `ReelDetails[]` |
+| GET | `http://localhost:8081/api/v1/sellers/me/reels` | none | `ReelDetails[]` |
+| GET | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | none (id in URL) | `ReelDetails` |
+| PUT | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | same as create (`media` optional) | `ReelDetails` |
+| DELETE | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | none (id in URL) | `{ "message": "reel deleted" }` |
 | POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates` | optional `{ parcel, customs_declaration }` (required international) | `{ shipment_object_id, rates[] }` |
 | POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/labels` | `{ rate_object_id, provider, idempotency_key }` | `Shipment` |
 | POST | `http://localhost:8081/api/v1/webhooks/shippo/tracking` | Shippo `track_updated` payload | `{ "status": "ok" }` |
