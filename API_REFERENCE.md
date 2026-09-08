@@ -1,34 +1,48 @@
 # SendAGift API Reference
 
-How every route works, how the layers connect, and what each request and response body
-looks like. This is the "how it fits together" document — `README.md` stays the
-step-by-step Postman walkthrough, and `DATABASE_SCHEMA.md` covers tables and keys.
+How every route works, how the layers connect, **which file calls which** (diagrams for
+login, admin register, orders, shipping, reels, …), why every internal and external API
+exists, and request/response bodies. `README.md` is the Postman walkthrough;
+`DATABASE_SCHEMA.md` covers tables and keys.
 
 - [1. Stack and entry point](#1-stack-and-entry-point)
-- [2. How a request flows](#2-how-a-request-flows)
-- [3. Conventions that apply to every endpoint](#3-conventions-that-apply-to-every-endpoint)
-- [4. Complete route map](#4-complete-route-map)
-- [5. Endpoints in detail](#5-endpoints-in-detail)
-  - [5.1 Health](#51-health)
-  - [5.2 Auth and bootstrap](#52-auth-and-bootstrap)
-  - [5.3 Admin profile](#53-admin-profile)
-  - [5.4 Countries and country capabilities](#54-countries-and-country-capabilities)
-  - [5.5 Customers](#55-customers)
-  - [5.6 Recipients](#56-recipients)
-  - [5.7 Saved gifts](#57-saved-gifts)
-  - [5.8 Customer orders](#58-customer-orders)
-  - [5.9 Sellers, addresses, shops](#59-sellers-addresses-shops)
-  - [5.10 Products and inventory](#510-products-and-inventory)
-  - [5.11 Seller order items](#511-seller-order-items)
-  - [5.12 Shipping (Shippo)](#512-shipping-shippo)
-  - [5.13 Media (S3 presign)](#513-media-s3-presign)
-  - [5.14 Reels](#514-reels)
-  - [5.15 Public storefront browsing](#515-public-storefront-browsing)
-  - [5.16 Places (Google proxy)](#516-places-google-proxy)
-- [6. Where each request/response struct lives](#6-where-each-requestresponse-struct-lives)
-- [7. Cross-cutting flows](#7-cross-cutting-flows)
-- [8. Error catalogue](#8-error-catalogue)
-- [9. Known gaps and sharp edges](#9-known-gaps-and-sharp-edges)
+- [2. Folder structure](#2-folder-structure)
+- [3. Files used and why](#3-files-used-and-why)
+  - [3.1 Entry points and infrastructure](#31-entry-points-and-infrastructure)
+  - [3.2 Routes → handlers → services → repositories](#32-routes--handlers--services--repositories)
+  - [3.3 Feature → file map](#33-feature--file-map)
+  - [3.4 Shared utilities and stubs](#34-shared-utilities-and-stubs)
+  - [3.5 Per-API call chains (which file does what)](#35-per-api-call-chains-which-file-does-what)
+  - [3.6 Every endpoint → file call chain (all ~82)](#36-every-endpoint--file-call-chain-all-82)
+- [4. All APIs used and why](#4-all-apis-used-and-why)
+  - [4.1 Internal APIs (our `/api/v1` routes)](#41-internal-apis-our-apiv1-routes)
+  - [4.2 External HTTP / cloud APIs](#42-external-http--cloud-apis)
+  - [4.3 Go module dependencies](#43-go-module-dependencies)
+  - [4.4 Env vars that unlock each API](#44-env-vars-that-unlock-each-api)
+- [5. How a request flows](#5-how-a-request-flows)
+- [6. Conventions that apply to every endpoint](#6-conventions-that-apply-to-every-endpoint)
+- [7. Complete route map](#7-complete-route-map)
+- [8. Endpoints in detail](#8-endpoints-in-detail)
+  - [8.1 Health](#81-health)
+  - [8.2 Auth and bootstrap](#82-auth-and-bootstrap)
+  - [8.3 Admin profile](#83-admin-profile)
+  - [8.4 Countries and country capabilities](#84-countries-and-country-capabilities)
+  - [8.5 Customers](#85-customers)
+  - [8.6 Recipients](#86-recipients)
+  - [8.7 Saved gifts](#87-saved-gifts)
+  - [8.8 Customer orders](#88-customer-orders)
+  - [8.9 Sellers, addresses, shops](#89-sellers-addresses-shops)
+  - [8.10 Products and inventory](#810-products-and-inventory)
+  - [8.11 Seller order items](#811-seller-order-items)
+  - [8.12 Shipping (Shippo)](#812-shipping-shippo)
+  - [8.13 Media (S3 presign)](#813-media-s3-presign)
+  - [8.14 Reels](#814-reels)
+  - [8.15 Public storefront browsing](#815-public-storefront-browsing)
+  - [8.16 Places (Google proxy)](#816-places-google-proxy)
+- [9. Where each request/response struct lives](#9-where-each-requestresponse-struct-lives)
+- [10. Cross-cutting flows](#10-cross-cutting-flows)
+- [11. Error catalogue](#11-error-catalogue)
+- [12. Known gaps and sharp edges](#12-known-gaps-and-sharp-edges)
 
 ---
 
@@ -59,7 +73,920 @@ Base URL for everything except `/health` is `http://localhost:$APP_PORT/api/v1`.
 
 ---
 
-## 2. How a request flows
+## 2. Folder structure
+
+```
+SendAGift_GO/
+├── cmd/                          # process entry points (thin main packages)
+│   ├── api/main.go               # HTTP API server (primary entry)
+│   └── migrate/main.go           # optional standalone migrator
+├── internal/                     # private app code (cannot be imported by other modules)
+│   ├── config/                   # .env → typed Config
+│   ├── database/                 # pool + embedded migrations
+│   │   └── migrations/           # numbered *.up.sql / *.down.sql
+│   ├── routes/                   # chi route registration (URL → handler)
+│   ├── middleware/               # JWT, role, IP rate limit
+│   ├── handlers/                 # HTTP decode / status mapping only
+│   ├── services/                 # business rules + external API clients
+│   ├── repository/               # SQL / pgx only
+│   ├── models/                   # DB row + response DTOs (JSON tags)
+│   └── utils/                    # JWT, bcrypt, JSON helpers
+├── pkg/validator/                # reserved shared package (stub today)
+├── .env.example                  # required env template
+├── go.mod / go.sum               # module deps
+├── README.md                     # Postman-style endpoint walkthrough
+├── API_REFERENCE.md              # this file
+├── DATABASE_SCHEMA.md            # tables, FKs, ER diagrams
+└── SHIPPO_POSTMAN_TEST.md        # shipping-focused Postman script
+```
+
+Why this layout:
+
+| Folder | Why it exists |
+| --- | --- |
+| `cmd/` | Keep `main` packages tiny — wire deps and listen; all logic lives under `internal/` |
+| `internal/` | Go convention: code here is private to this module, so handlers/services cannot be accidentally imported elsewhere |
+| `routes/` separate from `handlers/` | URLs and middleware groups stay in one place; handlers stay free of path registration |
+| `services/` vs `repository/` | Validation, ownership, status machines, and Shippo/S3/Google live in services; repositories only run SQL |
+| `models/` | One place for JSON shapes shared by handlers and repos |
+| `database/migrations/` | Schema versioned with the code; API startup applies pending migrations |
+| docs at repo root | Frontend / QA can read contracts without opening Go files |
+
+Temporary / debug folders under `cmd/` (`checkdb`, `debugship`, `tmpcleanup`, `tmpverify`) are local utilities — they are not part of the production API surface.
+
+---
+
+## 3. Files used and why
+
+### 3.1 Entry points and infrastructure
+
+| File | Why it is used |
+| --- | --- |
+| `cmd/api/main.go` | Boots config → DB → migrate → repos → services → handlers → `routes.New` → `ListenAndServe` |
+| `cmd/migrate/main.go` | Run migrations without starting the HTTP server |
+| `internal/config/config.go` | Loads `.env`; fails fast if JWT/DB/S3/Google keys are missing |
+| `internal/database/db.go` | Creates the `pgxpool` from `Config.DSN()` |
+| `internal/database/migrate.go` | Embeds `migrations/*.sql`, applies pending `*.up.sql` into `schema_migrations` |
+| `internal/database/migrations/*.sql` | Creates/alters every schema table the API depends on |
+| `internal/routes/router.go` | Global middleware (CORS, RequestID, RealIP, Logger, Recoverer), `/health`, mounts all `/api/v1` groups |
+
+### 3.2 Routes → handlers → services → repositories
+
+Each feature is a vertical slice. The route file only mounts URLs; the handler only parses HTTP; the service owns rules; the repository owns SQL.
+
+| Concern | Routes file | Handler | Service | Repository | Models |
+| --- | --- | --- | --- | --- | --- |
+| Auth / bootstrap | `auth_routes.go`, `admin_register_routes.go` | `auth_handler.go` | `auth_service.go` | `admin_repository.go`, `customer_repository.go`, `seller_repository.go` | `admin.go`, `customer.go`, `seller.go` |
+| Admin profile | `admin_routes.go` | `admin_handler.go` | `admin_service.go` | `admin_repository.go` | `admin.go` |
+| Countries | `country_routes.go` | `country_handler.go` | `country_service.go` | `country_repository.go` | `country.go` |
+| Country capabilities | `country_routes.go` | `country_capability_handler.go` | `country_capability_service.go` | `country_capability_repository.go` | `country_capability.go` |
+| Customers / addresses / recipients / wishlist | `customer_routes.go` | `customer_handler.go` | `customer_service.go` | `customer_repository.go` (+ `product_repository.go` for wishlist product check) | `customer.go`, `recipient.go`, `product.go` |
+| Customer orders | `customer_routes.go` | `order_handler.go` | `order_service.go` | `order_repository.go`, `customer_repository.go`, `country_repository.go` | `order.go` |
+| Sellers / shops / addresses | `seller_routes.go` | `seller_handler.go` | `seller_service.go` | `seller_repository.go` | `seller.go` |
+| Products / inventory | `seller_routes.go` | `product_handler.go` | `product_service.go` | `product_repository.go`, `seller_repository.go` | `product.go` |
+| Seller order items | `seller_routes.go` | `seller_order_handler.go` | `order_service.go` | `order_repository.go` | `order.go` |
+| Public shops / products | `marketplace_routes.go` | `shops_handler.go` | `shop_marketplace_service.go` | `seller_repository.go`, `product_repository.go` | `seller.go`, `product.go` |
+| Reels (public + seller) | `reel_routes.go` | `reel_handler.go` | `reel_service.go` | `reel_repository.go`, `seller_repository.go` | `reel.go`, `media_asset.go` |
+| Media presign | `media_routes.go` | `media_handler.go` | `s3_service.go` | — (S3 only; DB rows created later by reels/shipping) | — |
+| Shipping + Shippo webhook | `shipping_routes.go` | `shipping_handler.go` | `shipping_service.go`, `shippo_client.go`, `shipping_inputs.go` | `shipment_repository.go`, `idempotency_repository.go`, `media_repository.go` | `shipment.go`, `media_asset.go` |
+| Google Places proxy | `places_routes.go` | `places_handler.go` | `places_service.go` | — | — |
+
+Middleware used on those groups:
+
+| File | Why |
+| --- | --- |
+| `middleware/auth_middleware.go` | Parse `Authorization: Bearer`, put `user_id` / `admin_id` / `role` on context |
+| `middleware/role_middleware.go` | Enforce `customer` / `seller` / `admin` (treats `superadmin` as admin) |
+| `middleware/rate_limit_middleware.go` | Cap Places calls at 120/min per IP so an open endpoint cannot burn the Google bill |
+| `middleware/logger_middleware.go` | Package stub — logging is done by chi's built-in `Logger` in `router.go` |
+
+### 3.3 Feature → file map
+
+| Feature / API area | Files involved | Why those files |
+| --- | --- | --- |
+| Login + JWT | `auth_handler.go`, `auth_service.go`, `utils/jwt.go`, `utils/hash.go`, admin/customer/seller repos | One login path checks all three account tables; bcrypt verify; issue HS256 token |
+| Bootstrap first admin | `admin_register_routes.go`, `auth_handler.go`, `auth_service.go`, `admin_repository.go` | One-time create gated by `X-Bootstrap-Secret` |
+| Country feature flags | `country_*` handler/service/repo pairs | Registration refuses when capability flags are off |
+| Wishlist | `customer_handler.go` + `customer_service.go` + `saved_gifts` SQL in `customer_repository.go` | Join table only; product existence checked via `product_repository.go` |
+| Checkout pricing | `order_service.go` + `order_repository.GetCheckoutProduct` | Server snapshots price/seller/shop; client never sends amounts |
+| Multi-seller fulfilment | `seller_order_handler.go`, `order_service.go`, `shipping_service.go`, `shipment_repository.go` | Sellers act on `order_items.id`; webhook completes one line then maybe the order |
+| Reels + S3 files | `media_handler.go` → client PUT to S3 → `reel_service.go` → `reel_repository.go` + `media.media_assets` | Presign keeps the API off the upload bandwidth path; DB stores keys + `cdn_url` |
+| Label PDF storage | `shipping_service.go` + `s3_service.Upload` + `media_repository.go` | Download Shippo PDF, store in S3, save `media_assets` row, link `shipments.label_media_id` |
+| Address autocomplete | `places_*` | API key stays on server; frontend only sees place_id / address fields |
+
+### 3.4 Shared utilities and stubs
+
+| File | Status | Why |
+| --- | --- | --- |
+| `internal/utils/response.go` | used | Every success/error JSON response |
+| `internal/utils/jwt.go` | used | Sign / parse bearer tokens |
+| `internal/utils/hash.go` | used | bcrypt for passwords |
+| `internal/utils/token_generator.go` | present | helper for random tokens if needed |
+| `internal/handlers/verification_handler.go` | stub | package only — no KYC routes yet |
+| `internal/services/verification_service.go` | stub | same |
+| `internal/services/email_service.go` | stub | no outbound email yet |
+| `internal/repository/user_repository.go` | stub | no unified `users` table |
+| `internal/models/user.go` | stub | same |
+| `pkg/validator/validator.go` | stub | reserved for shared validation helpers |
+
+### 3.5 Per-API call chains (which file does what)
+
+Every request walks the same layers. Example for login:
+
+```text
+Route → Handler → Service → Repository → DB
+                      ↘ utils (hash / jwt / response)
+```
+
+Paths below are under `internal/` unless noted. Arrows mean “calls”.
+
+§3.5 = **diagrams for shared stacks** (one per feature family).  
+§3.6 = **all 82 endpoints** listed one-by-one with the same call chain.
+
+---
+
+#### A. Login — `POST /auth/login` (also `/customers/login`, `/sellers/login`)
+
+```mermaid
+flowchart LR
+  R["routes/auth_routes.go<br/>registers POST"] --> H["handlers/auth_handler.go<br/>decode body, map errors"]
+  H --> S["services/auth_service.go<br/>try admin → customer → seller"]
+  S --> HA["utils/hash.go<br/>CheckPassword"]
+  S --> JA["utils/jwt.go<br/>GenerateJWT"]
+  S --> RA["repository/admin_repository.go<br/>GetByEmail"]
+  S --> RC["repository/customer_repository.go<br/>GetByEmail"]
+  S --> RS["repository/seller_repository.go<br/>GetByEmail"]
+  H --> U["utils/response.go<br/>JSON / Error"]
+  RA --> DB[(PostgreSQL)]
+  RC --> DB
+  RS --> DB
+```
+
+| File | Job on this API |
+| --- | --- |
+| `routes/auth_routes.go` | Mounts the three login URLs onto `AuthHandler.Login` |
+| `handlers/auth_handler.go` | Decode `{email,password}`; call service; write `{token,role}` or `401` |
+| `services/auth_service.go` | Look up email in admin, then customer, then seller; verify password; build JWT |
+| `repository/admin_repository.go` | `SELECT` from `admin.admin_users` by email |
+| `repository/customer_repository.go` | `SELECT` from `customer.customers` by email |
+| `repository/seller_repository.go` | `SELECT` from `seller.sellers` by email |
+| `utils/hash.go` | `bcrypt.CompareHashAndPassword` |
+| `utils/jwt.go` | Sign HS256 token (`sub` = account id, `role`, `email`, `exp`) |
+| `utils/response.go` | Write JSON response |
+| `models/admin.go` / `customer.go` / `seller.go` | Row shapes scanned from DB |
+
+Protected APIs after login always add:
+
+```mermaid
+flowchart LR
+  REQ[Request with Bearer token] --> MW1["middleware/auth_middleware.go<br/>ParseJWT → context user_id + role"]
+  MW1 --> MW2["middleware/role_middleware.go<br/>require customer/seller/admin"]
+  MW2 --> H[Handler]
+```
+
+| File | Job |
+| --- | --- |
+| `middleware/auth_middleware.go` | Read `Authorization: Bearer`; `utils.ParseJWT`; put id + role on context |
+| `middleware/role_middleware.go` | Reject wrong role with `403` |
+| `utils/jwt.go` | `ParseJWT` validation |
+
+---
+
+#### B. Admin register — `POST /admin/register`
+
+```mermaid
+flowchart LR
+  R["routes/admin_register_routes.go"] --> H["handlers/auth_handler.go<br/>Bootstrap"]
+  H --> S["services/auth_service.go<br/>Bootstrap"]
+  S --> HA["utils/hash.go<br/>HashPassword"]
+  S --> RA["repository/admin_repository.go<br/>CountAdmins + CreateAdmin"]
+  H --> U["utils/response.go"]
+  RA --> DB[(admin.admin_users)]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/admin_register_routes.go` | Mounts `POST /admin/register` |
+| `handlers/auth_handler.go` | Read body + `X-Bootstrap-Secret` header |
+| `services/auth_service.go` | Allow only when no admin exists (or secret matches); hash password; create `superadmin` |
+| `repository/admin_repository.go` | Count + insert |
+| `utils/hash.go` | bcrypt hash |
+| `models/admin.go` | Admin row |
+
+---
+
+#### C. Admin profile — `GET/PUT /admin/me`
+
+```mermaid
+flowchart LR
+  R["routes/admin_routes.go"] --> MW["auth_middleware"]
+  MW --> H["handlers/admin_handler.go"]
+  H --> S["services/admin_service.go"]
+  S --> RA["repository/admin_repository.go<br/>GetByID / Update"]
+  H --> U["utils/response.go"]
+  RA --> DB[(admin.admin_users)]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/admin_routes.go` | JWT group; `GET/PUT /admin/me` |
+| `handlers/admin_handler.go` | Read `admin_id` from context; decode update body |
+| `services/admin_service.go` | Load/update display_name, image_url |
+| `repository/admin_repository.go` | SQL for admin row |
+| `models/admin.go` | Response shape |
+
+---
+
+#### D. Countries — public read + admin write
+
+```mermaid
+flowchart LR
+  R["routes/country_routes.go"] --> H["handlers/country_handler.go"]
+  H --> S["services/country_service.go<br/>validate ISO / currency"]
+  S --> RP["repository/country_repository.go"]
+  RP --> DB[(core.countries)]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/country_routes.go` | Public `GET`; admin group for `POST/PUT/DELETE` |
+| `handlers/country_handler.go` | Decode country JSON; map not-found / conflict |
+| `services/country_service.go` | Require fields; validate ISO2 + currency code |
+| `repository/country_repository.go` | CRUD SQL |
+| `models/country.go` | Country DTO |
+
+Capabilities (same route file, separate stack):
+
+```mermaid
+flowchart LR
+  R["routes/country_routes.go"] --> H["handlers/country_capability_handler.go"]
+  H --> S["services/country_capability_service.go"]
+  S --> RC["repository/country_capability_repository.go"]
+  S --> RP["repository/country_repository.go<br/>country must exist"]
+  RC --> DB[(core.country_capabilities)]
+```
+
+| File | Job |
+| --- | --- |
+| `handlers/country_capability_handler.go` | Decode flag booleans |
+| `services/country_capability_service.go` | Create/update/delete 1:1 flags per country |
+| `repository/country_capability_repository.go` | SQL on `country_capabilities` |
+| `models/country_capability.go` | Capability + `CountryCapabilityDetails` |
+
+---
+
+#### E. Customer register — `POST /customers/register`
+
+```mermaid
+flowchart LR
+  R["routes/customer_routes.go"] --> H["handlers/customer_handler.go<br/>Register"]
+  H --> S["services/customer_service.go<br/>Register"]
+  S --> HA["utils/hash.go"]
+  S --> RP["repository/country_repository.go"]
+  S --> CAP["services/country_capability_service.go<br/>registration enabled?"]
+  S --> RC["repository/customer_repository.go<br/>create customer + addresses"]
+  H --> U["utils/response.go"]
+  RC --> DB[(customer.*)]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/customer_routes.go` | Public register; JWT+role group for `/me/*` |
+| `handlers/customer_handler.go` | Decode register/update/address/recipient bodies |
+| `services/customer_service.go` | Validate; hash password; check country + capability; create rows |
+| `repository/customer_repository.go` | Inserts into `customers` / `customer_addresses` |
+| `repository/country_repository.go` | Prove `country_id` exists |
+| `services/country_capability_service.go` | Gate `customer_registration_enabled` |
+| `utils/hash.go` | Hash password |
+| `models/customer.go` | `Customer` / `CustomerDetails` |
+
+Same vertical slice (handler → `customer_service` → `customer_repository`) for:
+
+- profile `GET/PUT/DELETE /customers/me`
+- addresses
+- recipients + recipient addresses
+- saved gifts (also uses `product_repository.ExistsByID`)
+
+---
+
+#### F. Create order — `POST /customers/me/orders`
+
+```mermaid
+flowchart LR
+  R["routes/customer_routes.go"] --> MW["auth + role=customer"]
+  MW --> H["handlers/order_handler.go"]
+  H --> S["services/order_service.go<br/>snapshot prices, build items"]
+  S --> RC["repository/customer_repository.go<br/>customer + recipient"]
+  S --> RP["repository/country_repository.go"]
+  S --> RO["repository/order_repository.go<br/>GetCheckoutProduct + Create"]
+  H --> U["utils/response.go"]
+  RO --> DB[(marketplace.orders + order_items)]
+```
+
+| File | Job |
+| --- | --- |
+| `handlers/order_handler.go` | Decode `OrderCreateInput`; list/get/cancel |
+| `services/order_service.go` | Validate date/type; load products; snapshot amounts; generate `order_number` |
+| `repository/order_repository.go` | Checkout product join; insert order + items; cancel |
+| `repository/customer_repository.go` | Customer + recipient ownership |
+| `repository/country_repository.go` | Valid `country_id` |
+| `models/order.go` | `Order`, `OrderItem`, `OrderDetails` |
+
+---
+
+#### G. Seller register / shops / products
+
+**Register `POST /sellers/register`**
+
+```mermaid
+flowchart LR
+  R["routes/seller_routes.go"] --> H["handlers/seller_handler.go"]
+  H --> S["services/seller_service.go"]
+  S --> HA["utils/hash.go"]
+  S --> CAP["country_capability_service"]
+  S --> RS["repository/seller_repository.go<br/>seller + addresses + shop"]
+  RS --> DB[(seller.*)]
+```
+
+**Create product `POST /sellers/me/shops/{shopID}/products`**
+
+```mermaid
+flowchart LR
+  R["routes/seller_routes.go"] --> MW["auth + role=seller"]
+  MW --> H["handlers/product_handler.go"]
+  H --> S["services/product_service.go"]
+  S --> RS["repository/seller_repository.go<br/>shop owned by seller?"]
+  S --> RP["repository/product_repository.go<br/>product + inventory"]
+  RP --> DB[(seller.products + inventory)]
+```
+
+| File | Job |
+| --- | --- |
+| `handlers/seller_handler.go` | Register, me, addresses, shops |
+| `services/seller_service.go` | Seller/shop/address rules + slug uniqueness |
+| `repository/seller_repository.go` | SQL for sellers, addresses, shops |
+| `handlers/product_handler.go` | Product + inventory HTTP |
+| `services/product_service.go` | Product/inventory validation |
+| `repository/product_repository.go` | SQL for products + inventory |
+| `models/seller.go` / `product.go` | Response DTOs |
+
+---
+
+#### H. Seller accept + shipping rates + label
+
+```mermaid
+flowchart TB
+  subgraph accept [Accept line]
+    A1["seller_routes.go"] --> A2["seller_order_handler.go"]
+    A2 --> A3["order_service.go AcceptItemForSeller"]
+    A3 --> A4["order_repository.go"]
+  end
+  subgraph rates [Get rates]
+    B1["shipping_routes.go"] --> B2["shipping_handler.go GetRates"]
+    B2 --> B3["shipping_service.go"]
+    B3 --> B4["shipment_repository.go GetShippingContext + UpsertQuote"]
+    B3 --> B5["shippo_client.go<br/>customs + shipments"]
+    B5 --> SHIPPO[Shippo API]
+  end
+  subgraph label [Buy label]
+    C1["shipping_handler.go BuyLabel"] --> C2["shipping_service.go"]
+    C2 --> C3["idempotency_repository.go"]
+    C2 --> C4["shippo_client.go transactions"]
+    C2 --> C5["s3_service.go Upload PDF"]
+    C2 --> C6["media_repository.go Create label asset"]
+    C2 --> C7["shipment_repository.go CompleteLabel"]
+  end
+  subgraph hook [Webhook]
+    D1["shipping_routes.go"] --> D2["shipping_handler.go ShippoWebhook"]
+    D2 --> D3["shipping_service.go HandleTrackingWebhook"]
+    D3 --> D4["shipment_repository.go<br/>UpdateTracking + MarkOrderItemDelivered + MarkOrderDeliveredIfComplete"]
+  end
+```
+
+| File | Job |
+| --- | --- |
+| `handlers/seller_order_handler.go` | List/get/accept order items for this seller |
+| `services/order_service.go` | Accept only when status allows |
+| `repository/order_repository.go` | Seller-scoped item queries + accept update |
+| `handlers/shipping_handler.go` | Decode rates/label/webhook bodies |
+| `services/shipping_inputs.go` | Parcel + customs request structs / validation helpers |
+| `services/shipping_service.go` | Orchestrate Shippo + DB shipment row + multi-seller delivery |
+| `services/shippo_client.go` | HTTP to `api.goshippo.com` |
+| `repository/shipment_repository.go` | Ship-from/to context, quote, label, tracking, order complete |
+| `repository/idempotency_repository.go` | Prevent double label purchase |
+| `repository/media_repository.go` | Insert label `media_assets` row |
+| `services/s3_service.go` | Upload label PDF |
+| `models/shipment.go` / `order.go` / `media_asset.go` | Shapes |
+
+---
+
+#### I. Media presign — `POST /media/presign-upload`
+
+```mermaid
+flowchart LR
+  R["routes/media_routes.go"] --> MW["auth_middleware"]
+  MW --> H["handlers/media_handler.go"]
+  H --> S["services/s3_service.go<br/>PresignPutURL + PublicURL"]
+  S --> S3[(AWS S3)]
+  H --> U["utils/response.go"]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/media_routes.go` | JWT-required media routes |
+| `handlers/media_handler.go` | Validate folder whitelist; build object key `prefix/uuid-filename` |
+| `services/s3_service.go` | AWS SDK presign PUT/GET; public URL; Upload/Delete |
+| No repository | DB row is created later (reel create or label buy) |
+
+---
+
+#### J. Create reel — `POST /sellers/me/shops/{shopID}/reels`
+
+```mermaid
+flowchart LR
+  R["routes/reel_routes.go"] --> MW["auth + role=seller"]
+  MW --> H["handlers/reel_handler.go"]
+  H --> S["services/reel_service.go<br/>build media_assets + publish rules"]
+  S --> RS["repository/seller_repository.go<br/>shop ownership"]
+  S --> RR["repository/reel_repository.go<br/>insert assets + reel + reel_media"]
+  S --> S3S["s3_service.go PublicURL"]
+  RR --> DB[(seller.reels + reel_media + media.media_assets)]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/reel_routes.go` | Public feed routes + seller CRUD |
+| `handlers/reel_handler.go` | Decode `ReelInput`; feed query params; map errors |
+| `services/reel_service.go` | Validate media MIME; derive `reel_type`; set ready/approved; cursor encode |
+| `repository/reel_repository.go` | Transaction: media_assets → reels → reel_media; feed queries; view_count++ |
+| `repository/seller_repository.go` | Shop belongs to seller |
+| `services/s3_service.go` | Fill `cdn_url` for `public/` keys; delete objects on reel delete |
+| `models/reel.go` / `media_asset.go` | `ReelDetails`, feed page |
+
+Public feed `GET /reels` skips auth middleware and uses the same handler → `reel_service.Feed` → `reel_repository.ListPublicFeed`.
+
+---
+
+#### K. Public storefront — `GET /shops`, `/products/{id}`
+
+```mermaid
+flowchart LR
+  R["routes/marketplace_routes.go"] --> H["handlers/shops_handler.go"]
+  H --> S["services/shop_marketplace_service.go"]
+  S --> RS["repository/seller_repository.go<br/>active shops"]
+  S --> RP["repository/product_repository.go<br/>published products"]
+  RS --> DB[(seller.shops)]
+  RP --> DB
+```
+
+| File | Job |
+| --- | --- |
+| `routes/marketplace_routes.go` | Public browse URLs (no JWT) |
+| `handlers/shops_handler.go` | Path/query (`customer_type`); 404 for inactive/unpublished |
+| `services/shop_marketplace_service.go` | Normalize customer_type; call repos |
+| `repository/seller_repository.go` | `ListActiveShops`, `GetActiveShopByID` |
+| `repository/product_repository.go` | Published-by-shop / published-by-id |
+| `models/seller.go` / `product.go` | `Shop`, `Product`, `PublicProduct` |
+
+---
+
+#### L. Places — `GET /places/autocomplete`, `/places/details`
+
+```mermaid
+flowchart LR
+  R["routes/places_routes.go"] --> RL["middleware/rate_limit_middleware.go<br/>120/min/IP"]
+  RL --> H["handlers/places_handler.go"]
+  H --> S["services/places_service.go"]
+  S --> G[Google Places API]
+  H --> U["utils/response.go"]
+```
+
+| File | Job |
+| --- | --- |
+| `routes/places_routes.go` | Public group + rate limit |
+| `middleware/rate_limit_middleware.go` | Per-IP counter so open endpoints cannot burn Google quota |
+| `handlers/places_handler.go` | Read query params; return suggestions / details |
+| `services/places_service.go` | HTTP to Places API (New); map to address fields |
+| No repository | Nothing stored |
+
+---
+
+#### M. Boot wiring — who creates whom (`cmd/api/main.go`)
+
+```mermaid
+flowchart TB
+  MAIN["cmd/api/main.go"] --> CFG["config/config.go"]
+  MAIN --> DB["database/db.go + migrate.go"]
+  MAIN --> REPOS["All *Repository constructors"]
+  MAIN --> SVCS["All *Service constructors"]
+  MAIN --> HDRS["All *Handler constructors"]
+  MAIN --> RT["routes/router.go New(...)"]
+  RT --> HTTP[net/http ListenAndServe]
+```
+
+`main.go` is the only place that wires `AuthService(admins, customers, sellers, jwt…)`, `ReelService(reels, sellers, s3…)`, `ShippingService(shippo, shipments, idempotency, media, s3…)`, etc. Handlers never construct repositories themselves.
+
+---
+
+#### Quick legend (every API)
+
+| Layer | Folder | Always does | Never does |
+| --- | --- | --- | --- |
+| Route | `routes/*.go` | URL + middleware attach | Business rules |
+| Middleware | `middleware/*.go` | Auth / role / rate limit | SQL |
+| Handler | `handlers/*.go` | Decode JSON, path params, HTTP status | SQL, Shippo/S3 calls (except via service) |
+| Service | `services/*.go` | Validation, ownership, orchestration | `http.ResponseWriter` |
+| Repository | `repository/*.go` | SQL / transactions | HTTP |
+| Utils | `utils/*.go` | JWT, bcrypt, JSON helpers | Feature logic |
+| Models | `models/*.go` | Structs + `json` tags | Logic |
+
+### 3.6 Every endpoint → file call chain (all ~82)
+
+**Honest answer:** §3.5 has diagrams for **feature families** (login, orders, shipping, …), not 82 separate mermaid charts — many endpoints share the exact same stack (e.g. all recipient routes use the same handler/service/repo).
+
+This section lists **every registered route** with its full call chain. Paths are under `internal/` unless noted. Middleware abbreviations:
+
+- `Auth` = `middleware/auth_middleware.go` → `utils/jwt.go` (`ParseJWT`)
+- `Role(X)` = `middleware/role_middleware.go` (require role `X`)
+- `RL` = `middleware/rate_limit_middleware.go`
+- `Resp` = `utils/response.go` (always at the end of the handler)
+
+Shared utils used when noted: `Hash` = `utils/hash.go`, `JWT` = `utils/jwt.go`.
+
+| # | Method | Path | Middleware | Route file | Handler method | Service method / package | Repository / external | Model |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | GET | `/health` | — | `routes/router.go` (inline) | — | — | — | — |
+| 2 | POST | `/admin/register` | Bootstrap secret header | `admin_register_routes.go` | `auth_handler.Bootstrap` | `auth_service.Bootstrap` | `admin_repository` + `Hash` | `models.Admin` |
+| 3 | POST | `/auth/login` | — | `auth_routes.go` | `auth_handler.Login` | `auth_service.Login` | `admin` → `customer` → `seller` repos + `Hash` + `JWT` | `LoginResult` |
+| 4 | POST | `/customers/login` | — | `auth_routes.go` | same as #3 | same | same | same |
+| 5 | POST | `/sellers/login` | — | `auth_routes.go` | same as #3 | same | same | same |
+| 6 | GET | `/admin/me` | Auth | `admin_routes.go` | `admin_handler.Me` | `admin_service.GetByID` | `admin_repository` | `Admin` |
+| 7 | PUT | `/admin/me` | Auth | `admin_routes.go` | `admin_handler.UpdateMe` | `admin_service.Update` | `admin_repository` | `Admin` |
+| 8 | GET | `/countries` | — | `country_routes.go` | `country_handler.List` | `country_service.List` | `country_repository` | `[]Country` |
+| 9 | GET | `/countries/{id}` | — | `country_routes.go` | `country_handler.GetByID` | `country_service.GetByID` | `country_repository` | `Country` |
+| 10 | POST | `/admin/countries` | Auth + Role(admin) | `country_routes.go` | `country_handler.Create` | `country_service.Create` | `country_repository` | `Country` |
+| 11 | PUT | `/admin/countries/{id}` | Auth + Role(admin) | `country_routes.go` | `country_handler.Update` | `country_service.Update` | `country_repository` | `Country` |
+| 12 | DELETE | `/admin/countries/{id}` | Auth + Role(admin) | `country_routes.go` | `country_handler.Delete` | `country_service.Delete` | `country_repository` | message |
+| 13 | GET | `/admin/country-capabilities` | Auth + Role(admin) | `country_routes.go` | `country_capability_handler.List` | `country_capability_service.List` | `country_capability_repository` | `[]CountryCapabilityDetails` |
+| 14 | GET | `/admin/countries/{id}/capabilities` | Auth + Role(admin) | `country_routes.go` | `…GetByCountryID` | `…GetByCountryID` | capability + country repos | `CountryCapabilityDetails` |
+| 15 | POST | `/admin/countries/{id}/capabilities` | Auth + Role(admin) | `country_routes.go` | `…Create` | `…Create` | capability + country repos | `CountryCapabilityDetails` |
+| 16 | PUT | `/admin/countries/{id}/capabilities` | Auth + Role(admin) | `country_routes.go` | `…Update` | `…Update` | capability + country repos | `CountryCapabilityDetails` |
+| 17 | DELETE | `/admin/countries/{id}/capabilities` | Auth + Role(admin) | `country_routes.go` | `…Delete` | `…Delete` | capability + country repos | message |
+| 18 | POST | `/customers/register` | — | `customer_routes.go` | `customer_handler.Register` | `customer_service.Register` | `customer` + `country` repos + capability service + `Hash` | `CustomerDetails` |
+| 19 | GET | `/customers/me` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.Me` | `customer_service.GetDetails` | `customer_repository` | `CustomerDetails` |
+| 20 | PUT | `/customers/me` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.UpdateMe` | `customer_service.Update` | `customer_repository` | `Customer` |
+| 21 | DELETE | `/customers/me` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.DeleteMe` | `customer_service.Delete` | `customer_repository` (soft) | message |
+| 22 | POST | `/customers/me/addresses` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.AddAddress` | `customer_service.AddAddress` | `customer_repository` | `CustomerAddress` |
+| 23 | DELETE | `/customers/me/addresses/{id}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.DeleteAddress` | `customer_service.DeleteAddress` | `customer_repository` | message |
+| 24 | GET | `/customers/me/saved-gifts` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.ListSavedGifts` | `customer_service.ListSavedGifts` | `customer_repository` | `[]SavedGiftDetails` |
+| 25 | POST | `/customers/me/saved-gifts` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.AddSavedGift` | `customer_service.AddSavedGift` | `customer` + `product` repos | `SavedGift` |
+| 26 | DELETE | `/customers/me/saved-gifts/{id}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.DeleteSavedGift` | `customer_service.DeleteSavedGift` | `customer_repository` | message |
+| 27 | POST | `/customers/me/recipients` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.CreateRecipient` | `customer_service.CreateRecipient` | `customer_repository` | `RecipientDetails` |
+| 28 | GET | `/customers/me/recipients` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.ListRecipients` | `customer_service.ListRecipients` | `customer_repository` | `[]Recipient` |
+| 29 | GET | `/customers/me/recipients/{id}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.GetRecipient` | `customer_service.GetRecipient` | `customer_repository` | `RecipientDetails` |
+| 30 | PUT | `/customers/me/recipients/{id}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.UpdateRecipient` | `customer_service.UpdateRecipient` | `customer_repository` | `RecipientDetails` |
+| 31 | DELETE | `/customers/me/recipients/{id}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.DeleteRecipient` | `customer_service.DeleteRecipient` | `customer_repository` | message |
+| 32 | POST | `/customers/me/recipients/{id}/addresses` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.AddRecipientAddress` | `customer_service.AddRecipientAddress` | `customer_repository` | `RecipientAddress` |
+| 33 | PUT | `/customers/me/recipients/{id}/addresses/{addressId}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.UpdateRecipientAddress` | `customer_service.UpdateRecipientAddress` | `customer_repository` | `RecipientAddress` |
+| 34 | DELETE | `/customers/me/recipients/{id}/addresses/{addressId}` | Auth + Role(customer) | `customer_routes.go` | `customer_handler.DeleteRecipientAddress` | `customer_service.DeleteRecipientAddress` | `customer_repository` | message |
+| 35 | POST | `/customers/me/orders` | Auth + Role(customer) | `customer_routes.go` | `order_handler.Create` | `order_service.Create` | `order` + `customer` + `country` repos | `OrderDetails` |
+| 36 | GET | `/customers/me/orders` | Auth + Role(customer) | `customer_routes.go` | `order_handler.List` | `order_service.List` | `order` + `customer` repos | `[]Order` |
+| 37 | GET | `/customers/me/orders/{id}` | Auth + Role(customer) | `customer_routes.go` | `order_handler.Get` | `order_service.Get` | `order_repository` | `OrderDetails` |
+| 38 | POST | `/customers/me/orders/{id}/cancel` | Auth + Role(customer) | `customer_routes.go` | `order_handler.Cancel` | `order_service.Cancel` | `order_repository` | `OrderDetails` |
+| 39 | POST | `/sellers/register` | — | `seller_routes.go` | `seller_handler.Register` | `seller_service.Register` | `seller` + `country` repos + capability + `Hash` | `SellerDetails` |
+| 40 | GET | `/sellers/me` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.Me` | `seller_service.GetDetails` | `seller_repository` | `SellerDetails` |
+| 41 | PUT | `/sellers/me` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.UpdateMe` | `seller_service.Update` | `seller_repository` | `Seller` |
+| 42 | DELETE | `/sellers/me` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.DeleteMe` | `seller_service.Delete` | `seller_repository` (soft) | message |
+| 43 | POST | `/sellers/me/addresses` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.AddAddress` | `seller_service.AddAddress` | `seller_repository` | `SellerAddress` |
+| 44 | PUT | `/sellers/me/addresses/{id}` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.UpdateAddress` | `seller_service.UpdateAddress` | `seller_repository` | `SellerAddress` |
+| 45 | DELETE | `/sellers/me/addresses/{id}` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.DeleteAddress` | `seller_service.DeleteAddress` | `seller_repository` | message |
+| 46 | GET | `/sellers/me/shops` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.ListShops` | `seller_service.ListShops` | `seller_repository` | `[]Shop` |
+| 47 | POST | `/sellers/me/shops` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.CreateShop` | `seller_service.CreateShop` | `seller_repository` | `Shop` |
+| 48 | PUT | `/sellers/me/shops/{id}` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.UpdateShop` | `seller_service.UpdateShop` | `seller_repository` | `Shop` |
+| 49 | DELETE | `/sellers/me/shops/{id}` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.DeleteShop` | `seller_service.DeleteShop` | `seller_repository` | message |
+| 50 | GET | `/sellers/me/shops/{shopID}/products` | Auth + Role(seller) | `seller_routes.go` | `product_handler.ListByShop` | `product_service.ListByShop` | `product` + `seller` repos | `[]Product` |
+| 51 | POST | `/sellers/me/shops/{shopID}/products` | Auth + Role(seller) | `seller_routes.go` | `product_handler.Create` | `product_service.Create` | `product` + `seller` repos | `ProductDetails` |
+| 52 | GET | `/sellers/me/products/{id}` | Auth + Role(seller) | `seller_routes.go` | `product_handler.Get` | `product_service.Get` | `product_repository` | `ProductDetails` |
+| 53 | PUT | `/sellers/me/products/{id}` | Auth + Role(seller) | `seller_routes.go` | `product_handler.Update` | `product_service.Update` | `product_repository` | `Product` |
+| 54 | DELETE | `/sellers/me/products/{id}` | Auth + Role(seller) | `seller_routes.go` | `product_handler.Delete` | `product_service.Delete` | `product_repository` | message |
+| 55 | GET | `/sellers/me/products/{id}/inventory` | Auth + Role(seller) | `seller_routes.go` | `product_handler.GetInventory` | `product_service.GetInventory` | `product_repository` | `Inventory` |
+| 56 | PUT | `/sellers/me/products/{id}/inventory` | Auth + Role(seller) | `seller_routes.go` | `product_handler.UpdateInventory` | `product_service.UpdateInventory` | `product_repository` | `Inventory` |
+| 57 | GET | `/sellers/me/order-items` | Auth + Role(seller) | `seller_routes.go` | `seller_order_handler.ListItems` | `order_service.ListItemsForSeller` | `order_repository` | `[]SellerOrderItemSummary` |
+| 58 | GET | `/sellers/me/order-items/{id}` | Auth + Role(seller) | `seller_routes.go` | `seller_order_handler.GetItem` | `order_service.GetItemForSeller` | `order_repository` | `SellerOrderItemDetails` |
+| 59 | PATCH | `/sellers/me/order-items/{id}/accept` | Auth + Role(seller) | `seller_routes.go` | `seller_order_handler.AcceptItem` | `order_service.AcceptItemForSeller` | `order_repository` | `OrderItem` |
+| 60 | POST | `/sellers/me/order-items/{orderItemID}/shipping/rates` | Auth + Role(seller) | `shipping_routes.go` | `shipping_handler.GetRates` | `shipping_service.GetRates` | `shipment_repository` + `shippo_client` → Shippo | `ShippingRatesResult` |
+| 61 | POST | `/sellers/me/order-items/{orderItemID}/shipping/labels` | Auth + Role(seller) | `shipping_routes.go` | `shipping_handler.BuyLabel` | `shipping_service.BuyLabel` | `shipment` + `idempotency` + `media` repos + `s3_service` + Shippo | `Shipment` |
+| 62 | POST | `/webhooks/shippo/tracking` | — | `shipping_routes.go` | `shipping_handler.ShippoWebhook` | `shipping_service.HandleTrackingWebhook` | `shipment_repository` | `{status:ok}` |
+| 63 | POST | `/media/presign-upload` | Auth | `media_routes.go` | `media_handler.PresignUpload` | `s3_service.PresignPutURL` | AWS S3 (no DB) | `{upload_url,key,public_url}` |
+| 64 | GET | `/media/url` | Auth | `media_routes.go` | `media_handler.GetURL` | `s3_service.PresignGetURL` | AWS S3 (no DB) | `{url}` |
+| 65 | POST | `/sellers/me/shops/{shopID}/reels` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.Create` | `reel_service.Create` | `reel` + `seller` repos + `s3_service` | `ReelDetails` |
+| 66 | GET | `/sellers/me/shops/{shopID}/reels` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.ListByShop` | `reel_service.ListByShop` | `reel` + `seller` repos | `[]ReelDetails` |
+| 67 | POST | `/sellers/me/products/{productID}/reels` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.CreateForProduct` | `reel_service.CreateForProduct` | `reel_repository` + `s3_service` | `ReelDetails` |
+| 68 | GET | `/sellers/me/products/{productID}/reels` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.ListByProduct` | `reel_service.ListByProduct` | `reel_repository` | `[]ReelDetails` |
+| 69 | GET | `/sellers/me/reels` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.ListMine` | `reel_service.ListBySeller` | `reel_repository` | `[]ReelDetails` |
+| 70 | GET | `/sellers/me/reels/{id}` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.Get` | `reel_service.Get` | `reel_repository` | `ReelDetails` |
+| 71 | PUT | `/sellers/me/reels/{id}` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.Update` | `reel_service.Update` | `reel_repository` + `s3_service` | `ReelDetails` |
+| 72 | DELETE | `/sellers/me/reels/{id}` | Auth + Role(seller) | `reel_routes.go` | `reel_handler.Delete` | `reel_service.Delete` | `reel_repository` + `s3_service.Delete` | message |
+| 73 | GET | `/reels` | — | `reel_routes.go` | `reel_handler.Feed` | `reel_service.Feed` | `reel_repository` | `ReelFeed` |
+| 74 | GET | `/reels/{id}` | — | `reel_routes.go` | `reel_handler.GetPublic` | `reel_service.GetPublic` | `reel_repository` (+ view_count) | `ReelDetails` |
+| 75 | GET | `/shops/{shopId}/reels` | — | `reel_routes.go` | `reel_handler.FeedByShop` | `reel_service.Feed` | `reel_repository` | `ReelFeed` |
+| 76 | GET | `/products/{productId}/reels` | — | `reel_routes.go` | `reel_handler.FeedByProduct` | `reel_service.Feed` | `reel_repository` | `ReelFeed` |
+| 77 | GET | `/shops` | — | `marketplace_routes.go` | `shops_handler.ListActiveShops` | `shop_marketplace_service.ListActiveShops` | `seller_repository` | `[]Shop` |
+| 78 | GET | `/shops/{shopId}` | — | `marketplace_routes.go` | `shops_handler.GetShop` | `shop_marketplace_service.GetActiveShop` | `seller_repository` | `Shop` |
+| 79 | GET | `/shops/{shopId}/products` | — | `marketplace_routes.go` | `shops_handler.ListShopProducts` | `shop_marketplace_service.ListPublishedProductsByShop` | `product_repository` | `[]Product` |
+| 80 | GET | `/products/{productId}` | — | `marketplace_routes.go` | `shops_handler.GetProduct` | `shop_marketplace_service.GetPublishedProduct` | `product_repository` | `PublicProduct` |
+| 81 | GET | `/places/autocomplete` | RL | `places_routes.go` | `places_handler.Autocomplete` | `places_service.Autocomplete` | Google Places API | `{suggestions}` |
+| 82 | GET | `/places/details` | RL | `places_routes.go` | `places_handler.Details` | `places_service.Details` | Google Places API | `PlaceDetails` |
+
+**Count = 82** (matches every `r.Get/Post/Put/Patch/Delete` registered in `internal/routes` plus `/health`).
+
+How to read one row (example #3 login):
+
+```text
+auth_routes.go
+  → auth_handler.Login
+    → auth_service.Login
+      → admin_repository / customer_repository / seller_repository
+      → utils/hash.go + utils/jwt.go
+    → utils/response.go
+```
+
+That is the same stack as the mermaid diagram in §3.5 A. Rows that say “same as #N” share that diagram.
+
+---
+
+## 4. All APIs used and why
+
+Two layers of “API”:
+
+1. **Internal** — every HTTP route this Go app exposes under `/api/v1` (and `/health`).
+   Clients (Postman, web, mobile) call these.
+2. **External** — AWS S3, Shippo, Google Places that *our* services call on the server.
+
+Below: every internal endpoint from admin register onward with **why it exists**, then the
+external calls and Go libraries.
+
+Base path unless noted: `http://localhost:$APP_PORT/api/v1`.
+
+### 4.1 Internal APIs (our `/api/v1` routes)
+
+Typical setup order: **admin register → login → countries/capabilities → customer/seller
+register → catalogue → orders → shipping / reels / public browse**.
+
+#### Health
+
+| Method | Path | Auth | Why included |
+| --- | --- | --- | --- |
+| GET | `/health` | — | Load balancer / ops liveness check (outside `/api/v1`) |
+
+#### Admin bootstrap + auth (start here)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/admin/register` | `X-Bootstrap-Secret` | `admin_register_routes.go`, `auth_handler.go`, `auth_service.go`, `admin_repository.go` | Create the **first** superadmin once; platform cannot be administered without it |
+| POST | `/auth/login` | — | `auth_routes.go`, `auth_handler.go`, `auth_service.go` | Shared login; returns JWT + `role` for admin/customer/seller |
+| POST | `/customers/login` | — | same as above | Same handler; convenient URL for the customer app |
+| POST | `/sellers/login` | — | same as above | Same handler; convenient URL for the seller app |
+| GET | `/admin/me` | JWT | `admin_routes.go`, `admin_handler.go`, `admin_service.go`, `admin_repository.go` | Load logged-in admin profile |
+| PUT | `/admin/me` | JWT | same | Update admin `display_name` / `image_url` |
+
+#### Countries + capabilities (admin configures markets)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| GET | `/countries` | — | `country_routes.go`, `country_handler.go`, `country_service.go`, `country_repository.go` | Apps need country ids for register/checkout |
+| GET | `/countries/{id}` | — | same | One country detail |
+| POST | `/admin/countries` | admin JWT | same | Add a market (ISO, currency, timezone, status) |
+| PUT | `/admin/countries/{id}` | admin JWT | same | Edit a market |
+| DELETE | `/admin/countries/{id}` | admin JWT | same | Remove a market (fails if still referenced) |
+| GET | `/admin/country-capabilities` | admin JWT | `country_capability_handler.go`, `country_capability_service.go`, `country_capability_repository.go` | List feature flags for every country |
+| GET | `/admin/countries/{id}/capabilities` | admin JWT | same | Flags for one country |
+| POST | `/admin/countries/{id}/capabilities` | admin JWT | same | Create the 1:1 capability row |
+| PUT | `/admin/countries/{id}/capabilities` | admin JWT | same | Turn registration/delivery/etc. on or off |
+| DELETE | `/admin/countries/{id}/capabilities` | admin JWT | same | Remove capability row |
+
+**Why capabilities exist:** `POST /customers/register` and `POST /sellers/register` refuse
+with `403` when that country’s registration flag is off.
+
+#### Customer register + profile + addresses
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/customers/register` | — | `customer_routes.go`, `customer_handler.go`, `customer_service.go`, `customer_repository.go` | Create buyer account (+ optional addresses) |
+| GET | `/customers/me` | customer JWT | same | Profile + addresses |
+| PUT | `/customers/me` | customer JWT | same | Update profile fields |
+| DELETE | `/customers/me` | customer JWT | same | Soft-delete account |
+| POST | `/customers/me/addresses` | customer JWT | same | Add shipping address |
+| DELETE | `/customers/me/addresses/{id}` | customer JWT | same | Remove one address |
+
+#### Recipients (who receives the gift)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/customers/me/recipients` | customer JWT | `customer_*` | Create gift recipient (+ optional addresses) |
+| GET | `/customers/me/recipients` | customer JWT | same | List recipients (no nested addresses) |
+| GET | `/customers/me/recipients/{id}` | customer JWT | same | One recipient + addresses |
+| PUT | `/customers/me/recipients/{id}` | customer JWT | same | Replace recipient fields |
+| DELETE | `/customers/me/recipients/{id}` | customer JWT | same | Delete recipient (cascades addresses) |
+| POST | `/customers/me/recipients/{id}/addresses` | customer JWT | same | Add ship-to address for that person |
+| PUT | `/customers/me/recipients/{id}/addresses/{addressId}` | customer JWT | same | Update ship-to |
+| DELETE | `/customers/me/recipients/{id}/addresses/{addressId}` | customer JWT | same | Delete ship-to |
+
+**Why recipients exist:** Orders point at `recipient_id`; shipping uses recipient address as
+ship-to, separate from the buyer’s own address book.
+
+#### Saved gifts (wishlist)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| GET | `/customers/me/saved-gifts` | customer JWT | `customer_*` + `product_repository.go` | Wishlist with product embedded |
+| POST | `/customers/me/saved-gifts` | customer JWT | same | Save a product id |
+| DELETE | `/customers/me/saved-gifts/{id}` | customer JWT | same | Remove wishlist row (`{id}` = saved-gift id) |
+
+#### Customer orders
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/customers/me/orders` | customer JWT | `order_handler.go`, `order_service.go`, `order_repository.go` | Place gift order; server prices from published products |
+| GET | `/customers/me/orders` | customer JWT | same | Order history (headers only) |
+| GET | `/customers/me/orders/{id}` | customer JWT | same | Order + line items |
+| POST | `/customers/me/orders/{id}/cancel` | customer JWT | same | Cancel while still allowed |
+
+#### Seller register + profile + addresses + shops
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/sellers/register` | — | `seller_routes.go`, `seller_handler.go`, `seller_service.go`, `seller_repository.go` | Create merchant (+ optional first shop/addresses) |
+| GET | `/sellers/me` | seller JWT | same | Profile + addresses + shops |
+| PUT | `/sellers/me` | seller JWT | same | Update seller profile |
+| DELETE | `/sellers/me` | seller JWT | same | Soft-delete seller |
+| POST | `/sellers/me/addresses` | seller JWT | same | Warehouse / pickup / return address |
+| PUT | `/sellers/me/addresses/{id}` | seller JWT | same | Edit address |
+| DELETE | `/sellers/me/addresses/{id}` | seller JWT | same | Delete address (clears shop links first) |
+| GET | `/sellers/me/shops` | seller JWT | same | All own shops (any status, including draft) |
+| POST | `/sellers/me/shops` | seller JWT | same | Open another storefront |
+| PUT | `/sellers/me/shops/{id}` | seller JWT | same | Edit shop (name, slug, status, address ids) |
+| DELETE | `/sellers/me/shops/{id}` | seller JWT | same | Hard-delete shop (cascades products/reels) |
+
+#### Products + inventory
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| GET | `/sellers/me/shops/{shopID}/products` | seller JWT | `product_handler.go`, `product_service.go`, `product_repository.go` | Catalogue for one owned shop |
+| POST | `/sellers/me/shops/{shopID}/products` | seller JWT | same | Create product (+ optional inventory) |
+| GET | `/sellers/me/products/{id}` | seller JWT | same | Product + inventory |
+| PUT | `/sellers/me/products/{id}` | seller JWT | same | Update product |
+| DELETE | `/sellers/me/products/{id}` | seller JWT | same | Delete product (fails if on an order) |
+| GET | `/sellers/me/products/{id}/inventory` | seller JWT | same | Stock row |
+| PUT | `/sellers/me/products/{id}/inventory` | seller JWT | same | Set qty / blackout dates |
+
+#### Seller order items + shipping
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| GET | `/sellers/me/order-items` | seller JWT | `seller_order_handler.go`, `order_service.go`, `order_repository.go` | Only this seller’s lines across orders |
+| GET | `/sellers/me/order-items/{id}` | seller JWT | same | Line + order + product + recipient + ship-to |
+| PATCH | `/sellers/me/order-items/{id}/accept` | seller JWT | same | `pending` → `accepted` (required before rates) |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/rates` | seller JWT | `shipping_handler.go`, `shipping_service.go`, `shippo_client.go`, `shipment_repository.go` | Quote carriers; store pending shipment + parcel/customs |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/labels` | seller JWT | same + `idempotency_repository.go`, `media_repository.go`, `s3_service.go` | Buy label, store PDF, mark item `dispatched` |
+| POST | `/webhooks/shippo/tracking` | — (Shippo calls us) | `shipping_handler.go`, `shipping_service.go`, `shipment_repository.go` | Tracking updates; mark item/order delivered when complete |
+
+**Why order-item (not order) routes for sellers:** one customer order can include products
+from many sellers; each seller only fulfils their own line.
+
+#### Media (S3 presign — used by sellers/admins with any JWT)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/media/presign-upload` | JWT | `media_routes.go`, `media_handler.go`, `s3_service.go` | Get short-lived PUT URL + object `key` for uploads |
+| GET | `/media/url?key=` | JWT | same | Temporary signed GET for private objects (labels) |
+
+#### Reels (seller write + public read)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| POST | `/sellers/me/shops/{shopID}/reels` | seller JWT | `reel_routes.go`, `reel_handler.go`, `reel_service.go`, `reel_repository.go` | Shop promo reel (`product_id` optional) |
+| GET | `/sellers/me/shops/{shopID}/reels` | seller JWT | same | Seller’s reels for that shop |
+| POST | `/sellers/me/products/{productID}/reels` | seller JWT | same | Product-tagged reel |
+| GET | `/sellers/me/products/{productID}/reels` | seller JWT | same | Seller’s reels for that product |
+| GET | `/sellers/me/reels` | seller JWT | same | All own reels |
+| GET | `/sellers/me/reels/{id}` | seller JWT | same | One own reel (any status) |
+| PUT | `/sellers/me/reels/{id}` | seller JWT | same | Update caption/status/media |
+| DELETE | `/sellers/me/reels/{id}` | seller JWT | same | Delete reel + media + S3 objects |
+| GET | `/reels` | — | same | Public TikTok-style feed (cursor) |
+| GET | `/reels/{id}` | — | same | One public reel; increments `view_count` |
+| GET | `/shops/{shopId}/reels` | — | same | Public reels for a shop (`?scope=shop` for shop-only) |
+| GET | `/products/{productId}/reels` | — | same | Public reels for a product |
+
+#### Public storefront (no JWT)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| GET | `/shops` | — | `marketplace_routes.go`, `shops_handler.go`, `shop_marketplace_service.go` | Browse active shops |
+| GET | `/shops/{shopId}` | — | same | Shop page header |
+| GET | `/shops/{shopId}/products` | — | same + `product_repository.go` | Published products for that shop |
+| GET | `/products/{productId}` | — | same | Product page + shop summary |
+
+#### Places (Google proxy — public, rate-limited)
+
+| Method | Path | Auth | Files | Why included |
+| --- | --- | --- | --- | --- |
+| GET | `/places/autocomplete` | — (120/min/IP) | `places_routes.go`, `places_handler.go`, `places_service.go` | Address typeahead before login |
+| GET | `/places/details` | — (120/min/IP) | same | Turn `place_id` into address fields for forms |
+
+#### Internal API dependency chain (why order matters)
+
+```text
+POST /admin/register
+  → POST /auth/login  (admin JWT)
+  → POST /admin/countries
+  → POST /admin/countries/{id}/capabilities
+  → POST /customers/register  +  POST /sellers/register
+  → POST /sellers/login
+  → POST /sellers/me/shops  →  POST .../products
+  → POST /media/presign-upload  →  PUT S3  →  POST .../reels
+  → POST /customers/login
+  → POST /customers/me/recipients
+  → POST /customers/me/orders
+  → PATCH /sellers/me/order-items/{id}/accept
+  → POST .../shipping/rates  →  POST .../shipping/labels
+  → (Shippo) POST /webhooks/shippo/tracking
+```
+
+Public browse (`/shops`, `/products`, `/reels`) can be used anytime active/published data
+exists — no admin token required for reads.
+
+### 4.2 External HTTP / cloud APIs
+
+These are **not** called by the frontend for business logic. Our handlers/services call them.
+
+| External API | Called from | Our internal endpoints that trigger it | Why included |
+| --- | --- | --- | --- |
+| **AWS S3** | `services/s3_service.go` | `POST /media/presign-upload`, `GET /media/url`, reel create/delete, shipping label buy | Store media + label PDFs; browser uploads via presigned URL |
+| **Shippo** (`https://api.goshippo.com`) | `shippo_client.go` via `shipping_service.go` | `POST .../shipping/rates`, `POST .../shipping/labels`; inbound `POST /webhooks/shippo/tracking` | Rates, labels, tracking without per-carrier SDKs |
+| **Google Places (New)** (`https://places.googleapis.com`) | `places_service.go` | `GET /places/autocomplete`, `GET /places/details` | Address UX; API key stays on server |
+
+Shippo upstream calls:
+
+| Method | Path | Why |
+| --- | --- | --- |
+| POST | `/customs/declarations/` | International customs before rates |
+| POST | `/shipments/` | Create shipment + return rates |
+| GET | `/shipments/{id}/` | Fetch shipment if needed |
+| POST | `/transactions/` | Buy label for `rate_object_id` |
+
+Google Places upstream calls:
+
+| Method | Path | Why |
+| --- | --- | --- |
+| POST | `/v1/places:autocomplete` | Typeahead |
+| GET | `/v1/places/{placeId}` | Resolve to address fields |
+
+S3 operations:
+
+| Operation | Why |
+| --- | --- |
+| Presign PutObject | Client upload |
+| Presign GetObject | Private download (labels) |
+| PutObject (`Upload`) | Server stores Shippo PDF |
+| DeleteObject | Reel delete cleanup |
+| Public URL builder | `cdn_url` for `public/` keys |
+
+PostgreSQL (via `pgx`) is the only database — every repository uses it.
+
+### 4.3 Go module dependencies
+
+| Module | Why included |
+| --- | --- |
+| `github.com/go-chi/chi/v5` | Router, path params, groups, middleware |
+| `github.com/go-chi/cors` | Browser frontends on another origin |
+| `github.com/jackc/pgx/v5` | PostgreSQL pool |
+| `github.com/golang-jwt/jwt/v5` | HS256 access tokens |
+| `github.com/google/uuid` | Media keys + parse path UUIDs |
+| `github.com/joho/godotenv` | Load `.env` |
+| `golang.org/x/crypto` | bcrypt passwords |
+| `github.com/aws/aws-sdk-go-v2` (+ config, credentials, s3) | S3 client + presigner |
+
+Shippo and Google Places use stdlib `net/http` — no extra SDKs.
+
+### 4.4 Env vars that unlock each API
+
+| Env var | Unlocks |
+| --- | --- |
+| `DB_*` | All internal APIs that touch Postgres |
+| `JWT_SECRET`, `JWT_EXPIRY_MINUTES` | Login + every protected route |
+| `BOOTSTRAP_SECRET` | `POST /admin/register` |
+| `AWS_*`, `S3_BUCKET` | Media + label storage |
+| `SHIPPO_API_KEY`, `SHIPPO_LABEL_BUCKET` | Shipping rates/labels |
+| `GOOGLE_MAPS_API_KEY` | Places proxy |
+
+Required at boot: `JWT_SECRET`, `DB_USER`, `DB_NAME`, S3 credentials + bucket,
+`GOOGLE_MAPS_API_KEY`.  
+`SHIPPO_API_KEY` optional at boot — shipping returns `503` when unset.
+
+---
+
+## 5. How a request flows
 
 ```mermaid
 flowchart LR
@@ -110,7 +1037,7 @@ customers → sellers → reels → media → places → shipping.
 
 ---
 
-## 3. Conventions that apply to every endpoint
+## 6. Conventions that apply to every endpoint
 
 **Content type.** Requests and responses are `application/json`. Every response is
 written by `utils.JSON`, which sets the header and status then encodes the body.
@@ -173,7 +1100,7 @@ dates in request bodies are `YYYY-MM-DD` (`delivery_date`, `date_of_birth`,
 **PUT is a full replace.** `PUT /sellers/me/products/{id}`, `PUT /customers/me/recipients/{id}`
 and friends overwrite with what you send; omitted fields become empty or default. The one
 exception is a reel's `media[]`, which is left alone when the key is absent (see
-[5.14](#514-reels)).
+[8.14](#814-reels)).
 
 **Deletes are not all equal.**
 
@@ -191,7 +1118,7 @@ exception is a reel's `media[]`, which is left alone when the key is absent (see
 
 ---
 
-## 4. Complete route map
+## 7. Complete route map
 
 Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 
@@ -304,9 +1231,9 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 
 ---
 
-## 5. Endpoints in detail
+## 8. Endpoints in detail
 
-### 5.1 Health
+### 8.1 Health
 
 `GET /health` — outside `/api/v1`, no auth, no body.
 
@@ -314,7 +1241,7 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 { "status": "ok" }
 ```
 
-### 5.2 Auth and bootstrap
+### 8.2 Auth and bootstrap
 
 #### `POST /admin/register`
 
@@ -357,7 +1284,7 @@ response is what decides which routes the token opens.
 
 `401 invalid email or password` — same message for unknown email and wrong password.
 
-### 5.3 Admin profile
+### 8.3 Admin profile
 
 `GET /admin/me` returns the admin row for the token subject; `PUT /admin/me` updates the
 two editable fields.
@@ -386,7 +1313,7 @@ These two routes are gated by `RequireAuth` only, with no role check — a custo
 seller token reaches the handler, but the subject is not an admin id, so the lookup fails
 and the response is `401 unauthorized`.
 
-### 5.4 Countries and country capabilities
+### 8.4 Countries and country capabilities
 
 Countries are the platform's root reference data: currency, timezone, and a `status` that
 says how much of the product is switched on there. Capabilities are a 1:1 feature-flag row
@@ -480,7 +1407,7 @@ key you omit is stored as `false`:
 turns `POST /customers/register` into `403 customer registration is disabled for this country`,
 and the same applies to sellers.
 
-### 5.5 Customers
+### 8.5 Customers
 
 #### `POST /customers/register` (public)
 
@@ -587,7 +1514,7 @@ Soft delete. The token issued before the call keeps working until it expires.
 `DELETE /customers/me/addresses/{id}` returns `{"message":"address deleted"}`, or
 `404 address not found` if the row belongs to someone else.
 
-### 5.6 Recipients
+### 8.6 Recipients
 
 A recipient is the person receiving the gift — stored under the customer, with its own
 addresses, and referenced by `orders.recipient_id`.
@@ -651,7 +1578,7 @@ Deleting the address that was the default clears `recipients.default_address_id`
 (`ON DELETE SET NULL`). Setting `default_address_id` to an address that belongs to another
 recipient is `400 default_address_id must belong to this recipient`.
 
-### 5.7 Saved gifts
+### 8.7 Saved gifts
 
 A wishlist join row. There is no update — change means delete then create.
 
@@ -700,7 +1627,7 @@ DELETE /customers/me/saved-gifts/{id}                                   → 200
 Note the `{id}` in the DELETE is the **saved-gift id**, not the product id.
 `409 product already saved` on a duplicate (`UNIQUE (customer_id, product_id)`).
 
-### 5.8 Customer orders
+### 8.8 Customer orders
 
 #### `POST /customers/me/orders`
 
@@ -779,9 +1706,9 @@ Errors: `400 items required; delivery_date YYYY-MM-DD; customer_type personal or
 
 For a multi-seller order, `order.status` is the header and each `items[].fulfilment_status`
 is one seller's progress. Read the items to answer "is my gift done?" — see
-[7.4](#74-multi-seller-completion).
+[10.4](#104-multi-seller-completion).
 
-### 5.9 Sellers, addresses, shops
+### 8.9 Sellers, addresses, shops
 
 #### `POST /sellers/register` (public)
 
@@ -880,7 +1807,7 @@ address; `return_address_id` overrides it for returns, and shipping prefers
 `return_address_id` when both are set. Only `status: "active"` shops appear in the public
 `GET /shops`, and `DELETE` is a hard delete that cascades to products and reels.
 
-### 5.10 Products and inventory
+### 8.10 Products and inventory
 
 #### `POST /sellers/me/shops/{shopID}/products`
 
@@ -956,7 +1883,7 @@ must be a known ISO code. `201` returns `ProductDetails` (product + `inventory`)
 
 `unavailable_dates` go in as `"YYYY-MM-DD"` strings and come back as full timestamps.
 
-### 5.11 Seller order items
+### 8.11 Seller order items
 
 A seller works on **order items**, never whole orders, because one customer order can span
 several sellers. `{id}` here is always an `order_items.id`.
@@ -987,7 +1914,7 @@ for shipping — rates are refused unless the item is `accepted`, `preparing`, o
 }
 ```
 
-### 5.12 Shipping (Shippo)
+### 8.12 Shipping (Shippo)
 
 Two seller calls plus one provider callback. Both seller routes are keyed by
 `order_item_id`, and both write to the same `marketplace.shipments` row.
@@ -1118,7 +2045,7 @@ Any `event` other than `track_updated` is acknowledged and ignored. Statuses map
 This endpoint has no signature verification — anyone who knows a tracking number can post
 to it.
 
-### 5.13 Media (S3 presign)
+### 8.13 Media (S3 presign)
 
 The API never proxies file bytes. It hands out a short-lived URL and the client uploads
 straight to S3.
@@ -1164,7 +2091,7 @@ minutes; `public_url` is only present for `public/` prefixes.
 A 15-minute signed GET, for private objects such as label PDFs. The URL is signed for
 `GET` specifically — a `HEAD` against it returns `403`.
 
-### 5.14 Reels
+### 8.14 Reels
 
 A reel is a short video (or photo carousel) that a seller posts. It always belongs to a
 shop; tagging a product is optional:
@@ -1329,7 +2256,7 @@ keyset paging (`(published_at, id) < (cursor)` ordered descending) so new posts 
 shift a page. `GET /reels/{id}` returns one `ReelDetails` and increments `view_count` in
 `seller.reels`, returning the already-incremented number.
 
-### 5.15 Public storefront browsing
+### 8.15 Public storefront browsing
 
 No JWT. Inactive shops and unpublished products are `404`, never a hint that they exist.
 
@@ -1378,7 +2305,7 @@ A storefront page is these plus the matching reel feed: `/shops/{shopId}` +
 `/shops/{shopId}/products` + `/shops/{shopId}/reels`, and `/products/{productId}` +
 `/products/{productId}/reels`.
 
-### 5.16 Places (Google proxy)
+### 8.16 Places (Google proxy)
 
 Public because address pickers run on registration and checkout forms before any token
 exists, so both routes sit behind a 120-request-per-minute-per-IP limit.
@@ -1425,7 +2352,7 @@ bills them as a single session. The fields map straight onto `AddressInput`
 
 ---
 
-## 6. Where each request/response struct lives
+## 9. Where each request/response struct lives
 
 Request bodies are decoded either into a private struct in the handler (when the HTTP shape
 differs from the service input) or straight into the service input type. Responses are
@@ -1483,9 +2410,9 @@ DTOs for public or nested use.
 
 ---
 
-## 7. Cross-cutting flows
+## 10. Cross-cutting flows
 
-### 7.1 Upload anything
+### 10.1 Upload anything
 
 ```mermaid
 sequenceDiagram
@@ -1503,7 +2430,7 @@ Three destinations for a key: `image_url` on a seller/shop/product (public URL),
 `media[].object_path` (which creates the `media_assets` row), or a private object read back
 through `GET /media/url`.
 
-### 7.2 Publish a product reel
+### 10.2 Publish a product reel
 
 1. `POST /media/presign-upload` with `folder: "reel-video"` → PUT the file.
 2. Optional second presign with `folder: "reel-thumbnail"` → PUT the cover image.
@@ -1512,7 +2439,7 @@ through `GET /media/url`.
 4. It appears in `GET /reels`, `GET /shops/{shopId}/reels`, and
    `GET /products/{productId}/reels?scope=product`.
 
-### 7.3 Checkout to delivery
+### 10.3 Checkout to delivery
 
 ```mermaid
 sequenceDiagram
@@ -1533,7 +2460,7 @@ sequenceDiagram
     API-->>API: item delivered; order delivered only if all items resolved
 ```
 
-### 7.4 Multi-seller completion
+### 10.4 Multi-seller completion
 
 One order, two sellers, two independent lines:
 
@@ -1549,7 +2476,7 @@ The webhook marks the one item delivered, then only flips the order header when 
 is `delivered` or `cancelled`. So a customer UI should read `items[].fulfilment_status` for
 per-seller progress and treat `order.status = delivered` as "the whole gift landed".
 
-### 7.5 Idempotent label purchase
+### 10.5 Idempotent label purchase
 
 `idempotency_key` is claimed in `core.idempotency_keys` (scope + unique key) before Shippo
 is called and completed with the serialized shipment afterwards. A replay of the same key
@@ -1558,7 +2485,7 @@ another label. Keys are scoped to label purchase only — no other endpoint read
 
 ---
 
-## 8. Error catalogue
+## 11. Error catalogue
 
 Message strings are exactly what the API returns, so they can be matched in tests.
 
@@ -1612,7 +2539,7 @@ Message strings are exactly what the API returns, so they can be matched in test
 
 ---
 
-## 9. Known gaps and sharp edges
+## 12. Known gaps and sharp edges
 
 Documented so nobody rediscovers them the hard way:
 
