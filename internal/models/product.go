@@ -42,3 +42,18 @@ type ProductDetails struct {
 	Product
 	Inventory *Inventory `json:"inventory,omitempty"`
 }
+
+// ProductShopSummary is the "sold by" block on a public product page.
+type ProductShopSummary struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Slug     string    `json:"slug"`
+	ImageURL *string   `json:"image_url,omitempty"`
+	Location *string   `json:"customer_visible_location,omitempty"`
+}
+
+// PublicProduct is a published product plus its shop, for customer-facing product pages.
+type PublicProduct struct {
+	Product
+	Shop ProductShopSummary `json:"shop"`
+}

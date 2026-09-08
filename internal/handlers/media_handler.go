@@ -39,6 +39,9 @@ var allowedFolders = map[string]string{
 	"seller-profile": "public/sellers",
 	"shop-image":     "public/shops",
 	"product-image":  "public/products",
+	"reel-video":     "public/reels/videos",
+	"reel-photo":     "public/reels/photos",
+	"reel-thumbnail": "public/reels/thumbnails",
 }
 
 // PresignUpload issues a short-lived URL the client can PUT a file to directly.

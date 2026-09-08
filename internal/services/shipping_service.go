@@ -285,12 +285,24 @@ func (s *ShippingService) HandleTrackingWebhook(ctx context.Context, body []byte
 	if err := s.shipments.UpdateTrackingStatus(ctx, trackingNumber, status, deliveredAt); err != nil {
 		return err
 	}
-	if status == "delivered" {
-		shipment, err := s.shipments.GetByTrackingNumber(ctx, trackingNumber)
-		if err != nil {
+	if status != "delivered" {
+		return nil
+	}
+
+	// A delivered parcel completes one seller's line. The order header only flips
+	// to delivered once every line on it is delivered or cancelled, so a two-seller
+	// order is not reported complete when the first parcel arrives.
+	shipment, err := s.shipments.GetByTrackingNumber(ctx, trackingNumber)
+	if err != nil {
+		return err
+	}
+	if shipment.OrderItemID != nil {
+		if err := s.shipments.MarkOrderItemDelivered(ctx, *shipment.OrderItemID); err != nil {
 			return err
 		}
-		return s.shipments.MarkOrderDelivered(ctx, shipment.OrderID)
+	}
+	if _, err := s.shipments.MarkOrderDeliveredIfComplete(ctx, shipment.OrderID); err != nil {
+		return err
 	}
 	return nil
 }

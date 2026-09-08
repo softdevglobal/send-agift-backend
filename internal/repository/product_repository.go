@@ -188,6 +188,44 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 	return items, rows.Err()
 }
 
+// GetPublishedByIDForCustomerType returns one published product from an active shop,
+// for public product pages. Applies the same visibility rules as the shop listing,
+// and joins the shop so the page can render "sold by" without a second call.
+// customerType must be 'personal' or 'corporate'.
+func (r *ProductRepository) GetPublishedByIDForCustomerType(
+	ctx context.Context,
+	productID string,
+	customerType string,
+) (*models.PublicProduct, error) {
+	out := &models.PublicProduct{}
+	err := r.db.QueryRow(ctx, `
+		select `+productSelectCols+`,
+		       s.id, s.name, s.slug, s.image_url, s.customer_visible_location
+		from seller.products p
+		inner join seller.shops s on s.id = p.shop_id
+		where p.id = $1
+		  and s.status = 'active'
+		  and p.status = 'published'
+		  and (p.customer_type_visibility = 'both' or p.customer_type_visibility = $2)`,
+		productID, customerType,
+	).Scan(
+		&out.ID, &out.ShopID, &out.Name, &out.Slug, &out.Description, &out.ProductType, &out.PriceAmount,
+		&out.Currency, &out.Status, &out.OccasionTags, &out.CustomerTypeVisibility,
+		&out.PointsDisplayEnabled, &out.PrepMinutes, &out.CreatedAt, &out.UpdatedAt, &out.ImageURL,
+		&out.Shop.ID, &out.Shop.Name, &out.Shop.Slug, &out.Shop.ImageURL, &out.Shop.Location,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrProductNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if out.OccasionTags == nil {
+		out.OccasionTags = []string{}
+	}
+	return out, nil
+}
+
 func (r *ProductRepository) CreateInventory(ctx context.Context, inv *models.Inventory) error {
 	if inv.UnavailableDates == nil {
 		inv.UnavailableDates = []time.Time{}
