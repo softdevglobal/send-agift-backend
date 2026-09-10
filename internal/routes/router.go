@@ -39,6 +39,8 @@ func New(
 	products *handlers.ProductHandler,
 	// Handler instance that manages seller reels and the public reel feed
 	reels *handlers.ReelHandler,
+	// Handler instance that manages customer↔seller chat
+	messaging *handlers.MessagingHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
 	// Handler instance that proxies Google Places address lookups
@@ -127,6 +129,10 @@ func New(
 		// Public reel feed (no JWT) + seller reel CRUD (seller JWT)
 		// Example: GET /api/v1/reels, POST /api/v1/sellers/me/shops/{shopID}/reels
 		RegisterReelRoutes(r, reels, jwtSecret)
+
+		// Customer↔seller product inquiry and order chat
+		// Example: POST /api/v1/conversations, GET /api/v1/conversations/{id}/messages
+		RegisterMessagingRoutes(r, messaging, jwtSecret)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload

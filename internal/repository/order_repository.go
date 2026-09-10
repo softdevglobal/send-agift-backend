@@ -267,6 +267,25 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 	return items, rows.Err()
 }
 
+// GetItemForCustomer returns an order line belonging to the given customer.
+func (r *OrderRepository) GetItemForCustomer(ctx context.Context, customerID, itemID string) (*models.OrderItem, error) {
+	item := &models.OrderItem{}
+	err := r.db.QueryRow(ctx, `
+		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
+		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at
+		from marketplace.order_items oi
+		inner join marketplace.orders o on o.id = oi.order_id
+		where oi.id = $1 and o.customer_id = $2`, itemID, customerID,
+	).Scan(
+		&item.ID, &item.OrderID, &item.SellerID, &item.ShopID, &item.ProductID, &item.Quantity,
+		&item.UnitAmount, &item.TotalAmount, &item.FulfilmentStatus, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrOrderItemNotFound
+	}
+	return item, err
+}
+
 func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID string) (*models.SellerOrderItemDetails, error) {
 	d := &models.SellerOrderItemDetails{}
 	var recipient models.Recipient
