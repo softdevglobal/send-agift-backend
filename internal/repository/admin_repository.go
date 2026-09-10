@@ -78,6 +78,25 @@ func (r *AdminRepository) GetByID(ctx context.Context, id string) (*models.Admin
 	return a, err
 }
 
+// GetFirstActive returns one active admin (oldest first) for auto-assigning support tickets.
+func (r *AdminRepository) GetFirstActive(ctx context.Context) (*models.Admin, error) {
+	query := `
+		select id, email, password_hash, display_name, role, status, mfa_required, created_at, updated_at, image_url
+		from admin.admin_users
+		where status = 'active'
+		order by created_at asc
+		limit 1`
+	a := &models.Admin{}
+	err := r.db.QueryRow(ctx, query).Scan(
+		&a.ID, &a.Email, &a.PasswordHash, &a.DisplayName, &a.Role, &a.Status, &a.MFARequired, &a.CreatedAt, &a.UpdatedAt,
+		&a.ImageURL,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAdminNotFound
+	}
+	return a, err
+}
+
 // Update updates mutable admin profile fields.
 func (r *AdminRepository) Update(ctx context.Context, a *models.Admin) error {
 	err := r.db.QueryRow(ctx, `
