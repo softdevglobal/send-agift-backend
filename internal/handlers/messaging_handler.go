@@ -50,10 +50,10 @@ func (h *MessagingHandler) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 // List handles GET /conversations.
-// Returns the caller's inbox: every conversation they participate in, with unread counts.
+// Returns only conversations for this JWT user+role (a seller never sees another seller's inbox).
 func (h *MessagingHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, _ := h.actor(r) // role not needed — inbox is keyed only by user_id
-	items, err := h.msg.List(r.Context(), userID)
+	userID, role := h.actor(r)
+	items, err := h.msg.List(r.Context(), userID, role)
 	if err != nil {
 		h.writeError(w, err, "could not list conversations")
 		return
@@ -63,11 +63,11 @@ func (h *MessagingHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /conversations/{id}.
 // Returns one thread + participants (+ support_case when type=support).
-// Non-participants get 404 (same as "not found") so IDs can't be probed.
+// Non-participants (including other sellers) get 404 so IDs can't be probed.
 func (h *MessagingHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID, _ := h.actor(r)
+	userID, role := h.actor(r)
 	id := chi.URLParam(r, "id")
-	details, err := h.msg.Get(r.Context(), userID, id)
+	details, err := h.msg.Get(r.Context(), userID, role, id)
 	if err != nil {
 		h.writeError(w, err, "could not get conversation")
 		return
@@ -81,7 +81,7 @@ func (h *MessagingHandler) Get(w http.ResponseWriter, r *http.Request) {
 //   - before — RFC3339 timestamp; return messages strictly older than this (cursor pagination)
 // Side effect: marks the conversation read for the viewer.
 func (h *MessagingHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
-	userID, _ := h.actor(r)
+	userID, role := h.actor(r)
 	id := chi.URLParam(r, "id")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit")) // 0 / bad value → repo default
 
@@ -99,7 +99,7 @@ func (h *MessagingHandler) ListMessages(w http.ResponseWriter, r *http.Request) 
 		before = &t
 	}
 
-	msgs, err := h.msg.ListMessages(r.Context(), userID, id, limit, before)
+	msgs, err := h.msg.ListMessages(r.Context(), userID, role, id, limit, before)
 	if err != nil {
 		h.writeError(w, err, "could not list messages")
 		return
@@ -131,9 +131,9 @@ func (h *MessagingHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 // Updates conversation_participants.last_read_at without fetching messages
 // (useful when the client already has the messages locally).
 func (h *MessagingHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
-	userID, _ := h.actor(r)
+	userID, role := h.actor(r)
 	id := chi.URLParam(r, "id")
-	if err := h.msg.MarkRead(r.Context(), userID, id); err != nil {
+	if err := h.msg.MarkRead(r.Context(), userID, role, id); err != nil {
 		h.writeError(w, err, "could not mark conversation read")
 		return
 	}
@@ -144,9 +144,9 @@ func (h *MessagingHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 // Optional freeze — not automatic. Recommended: use for support when resolved;
 // product/order chats usually stay open (AliExpress-like) unless a party chooses to close.
 func (h *MessagingHandler) Close(w http.ResponseWriter, r *http.Request) {
-	userID, _ := h.actor(r)
+	userID, role := h.actor(r)
 	id := chi.URLParam(r, "id")
-	details, err := h.msg.Close(r.Context(), userID, id)
+	details, err := h.msg.Close(r.Context(), userID, role, id)
 	if err != nil {
 		h.writeError(w, err, "could not close conversation")
 		return
@@ -157,9 +157,9 @@ func (h *MessagingHandler) Close(w http.ResponseWriter, r *http.Request) {
 // Reopen handles POST /conversations/{id}/reopen.
 // Optional — opens a closed thread again so messaging can continue.
 func (h *MessagingHandler) Reopen(w http.ResponseWriter, r *http.Request) {
-	userID, _ := h.actor(r)
+	userID, role := h.actor(r)
 	id := chi.URLParam(r, "id")
-	details, err := h.msg.Reopen(r.Context(), userID, id)
+	details, err := h.msg.Reopen(r.Context(), userID, role, id)
 	if err != nil {
 		h.writeError(w, err, "could not reopen conversation")
 		return

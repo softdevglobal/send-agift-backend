@@ -44,13 +44,13 @@ func RegisterMessagingRoutes(r chi.Router, msg *handlers.MessagingHandler, jwtSe
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("customer", "seller", "admin"))
 
-		r.Post("/conversations", msg.Start)                       // create / reuse thread
-		r.Get("/conversations", msg.List)                         // caller's inbox
-		r.Get("/conversations/{id}", msg.Get)                     // one thread
-		r.Get("/conversations/{id}/messages", msg.ListMessages)   // bubbles (+ mark read)
-		r.Post("/conversations/{id}/messages", msg.SendMessage)   // send text bubble
-		r.Post("/conversations/{id}/read", msg.MarkRead)          // mark read only
-		r.Post("/conversations/{id}/close", msg.Close)            // optional close
-		r.Post("/conversations/{id}/reopen", msg.Reopen)          // optional reopen
+		r.Post("/conversations", msg.Start)                     // create / reuse thread
+		r.Get("/conversations", msg.List)                       // inbox: only JWT user's threads (customer/seller/admin scoped)
+		r.Get("/conversations/{id}", msg.Get)                   // one thread if participant; else 404
+		r.Get("/conversations/{id}/messages", msg.ListMessages) // messages if participant; else 404
+		r.Post("/conversations/{id}/messages", msg.SendMessage) // reply only if participant; else 404
+		r.Post("/conversations/{id}/read", msg.MarkRead)        // mark read only
+		r.Post("/conversations/{id}/close", msg.Close)          // optional close
+		r.Post("/conversations/{id}/reopen", msg.Reopen)        // optional reopen
 	})
 }
