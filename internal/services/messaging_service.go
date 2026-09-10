@@ -207,7 +207,7 @@ func (s *MessagingService) startProductInquiry(ctx context.Context, userID, role
 	}
 	// Re-fetch through Get() rather than returning `conv` directly, so the response includes
 	// participants and is built the same way a subsequent GET /conversations/{id} would return it
-	return s.Get(ctx, userID, conv.ID.String())
+	return s.Get(ctx, userID, role, conv.ID.String())
 }
 
 // startOrderChat creates (or reuses) a thread tied to a specific order line item, for either
@@ -226,7 +226,7 @@ func (s *MessagingService) startOrderChat(ctx context.Context, userID, role stri
 	// AliExpress-like: keep the same thread; if it was optionally closed, reopen so chat can continue.
 	existing, err := s.msg.FindByOrderItem(ctx, itemID)
 	if err == nil {
-		if _, perr := s.msg.GetForParticipant(ctx, existing.ID.String(), userID); perr != nil {
+		if _, perr := s.msg.GetForParticipant(ctx, existing.ID.String(), userID, role); perr != nil {
 			return nil, ErrConversationNotFound
 		}
 		senderID, perr := uuid.Parse(userID)
@@ -241,7 +241,7 @@ func (s *MessagingService) startOrderChat(ctx context.Context, userID, role stri
 		if err := s.maybeFirstMessage(ctx, existing.ID, senderID, role, in.Body, in.Attachments); err != nil {
 			return nil, err
 		}
-		return s.Get(ctx, userID, existing.ID.String())
+		return s.Get(ctx, userID, role, existing.ID.String())
 	}
 	if !errors.Is(err, repository.ErrConversationNotFound) {
 		return nil, err
@@ -304,7 +304,7 @@ func (s *MessagingService) startOrderChat(ctx context.Context, userID, role stri
 		// Same race-condition fallback as product inquiry: someone else may have created the
 		// same order-item thread concurrently — re-check, re-verify participancy, and return it
 		if existing, findErr := s.msg.FindByOrderItem(ctx, itemID); findErr == nil {
-			if _, perr := s.msg.GetForParticipant(ctx, existing.ID.String(), userID); perr != nil {
+			if _, perr := s.msg.GetForParticipant(ctx, existing.ID.String(), userID, role); perr != nil {
 				return nil, ErrConversationNotFound
 			}
 			return s.details(ctx, existing)
@@ -315,7 +315,7 @@ func (s *MessagingService) startOrderChat(ctx context.Context, userID, role stri
 	if err := s.maybeFirstMessage(ctx, conv.ID, creator, role, in.Body, in.Attachments); err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, userID, conv.ID.String())
+	return s.Get(ctx, userID, role, conv.ID.String())
 }
 
 // startSupportChat:
@@ -376,7 +376,7 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 		if err := s.maybeFirstMessage(ctx, existing.ID, adminUUID, "admin", in.Body, in.Attachments); err != nil {
 			return nil, err
 		}
-		return s.Get(ctx, adminID, existing.ID.String())
+		return s.Get(ctx, adminID, "admin", existing.ID.String())
 	}
 	if !errors.Is(err, repository.ErrConversationNotFound) {
 		return nil, err
@@ -441,7 +441,7 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 			// Best-effort join; errors from AddParticipant are deliberately ignored here (`_, _ =`)
 			// since the primary goal — returning *a* valid conversation — still succeeds either way
 			_, _ = s.msg.AddParticipant(ctx, existing.ID.String(), adminID, "admin")
-			return s.Get(ctx, adminID, existing.ID.String())
+			return s.Get(ctx, adminID, "admin", existing.ID.String())
 		}
 		return nil, err
 	}
@@ -449,7 +449,7 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 	if err := s.maybeFirstMessage(ctx, conv.ID, adminUUID, "admin", in.Body, in.Attachments); err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, adminID, conv.ID.String())
+	return s.Get(ctx, adminID, "admin", conv.ID.String())
 }
 
 // startUserSupport handles a customer or seller opening a help ticket with support staff
@@ -459,7 +459,7 @@ func (s *MessagingService) startUserSupport(ctx context.Context, userID, role st
 	// rather than opening a duplicate ticket
 	existing, _, err := s.msg.FindOpenSupportForCounterpart(ctx, role, userID)
 	if err == nil {
-		return s.Get(ctx, userID, existing.ID.String())
+		return s.Get(ctx, userID, role, existing.ID.String())
 	}
 	if !errors.Is(err, repository.ErrConversationNotFound) {
 		return nil, err
@@ -512,7 +512,7 @@ func (s *MessagingService) startUserSupport(ctx context.Context, userID, role st
 	}
 	if err := s.msg.CreateSupportConversation(ctx, conv, participants, sc); err != nil {
 		if existing, _, findErr := s.msg.FindOpenSupportForCounterpart(ctx, role, userID); findErr == nil {
-			return s.Get(ctx, userID, existing.ID.String())
+			return s.Get(ctx, userID, role, existing.ID.String())
 		}
 		return nil, err
 	}
@@ -520,7 +520,7 @@ func (s *MessagingService) startUserSupport(ctx context.Context, userID, role st
 	if err := s.maybeFirstMessage(ctx, conv.ID, userUUID, role, in.Body, in.Attachments); err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, userID, conv.ID.String())
+	return s.Get(ctx, userID, role, conv.ID.String())
 }
 
 // ensureCounterpartExists validates that the target customer/seller for an admin-initiated
@@ -651,17 +651,17 @@ func chatAssetTypeFromMime(mimeType string) (string, bool) {
 	}
 }
 
-// List returns the caller's inbox.
-func (s *MessagingService) List(ctx context.Context, userID string) ([]models.ConversationSummary, error) {
-	// Straight pass-through to the repository — no extra business logic needed here
-	return s.msg.ListForUser(ctx, userID)
+// List returns the caller's inbox — only conversations where they are a participant
+// with this role (e.g. seller JWT → only threads for that seller, not other sellers).
+func (s *MessagingService) List(ctx context.Context, userID, role string) ([]models.ConversationSummary, error) {
+	role = normalizeMessagingRole(role)
+	return s.msg.ListForUser(ctx, userID, role)
 }
 
-// Get returns one conversation the user belongs to.
-func (s *MessagingService) Get(ctx context.Context, userID, conversationID string) (*models.ConversationDetails, error) {
-	// GetForParticipant does double duty: fetches the conversation AND verifies the
-	// caller is actually a participant, in one repository call
-	conv, err := s.msg.GetForParticipant(ctx, conversationID, userID)
+// Get returns one conversation the user belongs to (same seller/customer isolation).
+func (s *MessagingService) Get(ctx context.Context, userID, role, conversationID string) (*models.ConversationDetails, error) {
+	role = normalizeMessagingRole(role)
+	conv, err := s.msg.GetForParticipant(ctx, conversationID, userID, role)
 	if err != nil {
 		if errors.Is(err, repository.ErrConversationNotFound) {
 			return nil, ErrConversationNotFound
@@ -696,9 +696,9 @@ func (s *MessagingService) details(ctx context.Context, conv *models.Conversatio
 }
 
 // ListMessages returns messages and marks the conversation read for the viewer.
-func (s *MessagingService) ListMessages(ctx context.Context, userID, conversationID string, limit int, before *time.Time) ([]models.Message, error) {
-	// Authorization check first: confirm the caller is a participant before returning any messages
-	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID); err != nil {
+func (s *MessagingService) ListMessages(ctx context.Context, userID, role, conversationID string, limit int, before *time.Time) ([]models.Message, error) {
+	role = normalizeMessagingRole(role)
+	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID, role); err != nil {
 		if errors.Is(err, repository.ErrConversationNotFound) {
 			return nil, ErrConversationNotFound
 		}
@@ -708,29 +708,24 @@ func (s *MessagingService) ListMessages(ctx context.Context, userID, conversatio
 	if err != nil {
 		return nil, err
 	}
-	// Mark read as a side effect of viewing messages. Error is deliberately swallowed (`_ =`) —
-	// a failure to update the read marker shouldn't cause the whole request (which already has
-	// valid messages to return) to fail
 	_ = s.msg.MarkRead(ctx, conversationID, userID)
 	return msgs, nil
 }
 
 // SendMessage posts a text and/or file message into a conversation the user belongs to.
 func (s *MessagingService) SendMessage(ctx context.Context, userID, role, conversationID string, in SendMessageInput) (*models.Message, error) {
+	role = normalizeMessagingRole(role)
 	body := strings.TrimSpace(in.Body)
 	if body == "" && len(in.Attachments) == 0 {
-		// Need either text or at least one file (e.g. damage photo with caption optional)
 		return nil, ErrInvalidConversation
 	}
-	// Confirm participancy before allowing a send
-	conv, err := s.msg.GetForParticipant(ctx, conversationID, userID)
+	conv, err := s.msg.GetForParticipant(ctx, conversationID, userID, role)
 	if err != nil {
 		if errors.Is(err, repository.ErrConversationNotFound) {
 			return nil, ErrConversationNotFound
 		}
 		return nil, err
 	}
-	// Closed conversations reject new messages — you can't post into an archived thread
 	if conv.Status != "open" {
 		return nil, ErrInvalidConversation
 	}
@@ -755,17 +750,15 @@ func (s *MessagingService) SendMessage(ctx context.Context, userID, role, conver
 }
 
 // MarkRead updates the caller's last_read_at.
-func (s *MessagingService) MarkRead(ctx context.Context, userID, conversationID string) error {
-	// Same participancy check pattern as the other methods
-	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID); err != nil {
+func (s *MessagingService) MarkRead(ctx context.Context, userID, role, conversationID string) error {
+	role = normalizeMessagingRole(role)
+	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID, role); err != nil {
 		if errors.Is(err, repository.ErrConversationNotFound) {
 			return ErrConversationNotFound
 		}
 		return err
 	}
 	if err := s.msg.MarkRead(ctx, conversationID, userID); err != nil {
-		// Unlike ListMessages (which swallows this error), here it's surfaced — MarkRead is
-		// the entire point of this endpoint, so a failure here should be visible to the caller
 		if errors.Is(err, repository.ErrNotParticipant) {
 			return ErrNotParticipant
 		}
@@ -775,13 +768,9 @@ func (s *MessagingService) MarkRead(ctx context.Context, userID, conversationID 
 }
 
 // Close marks a conversation closed for a participant (optional freeze — not auto).
-// Recommended use:
-//   - product_inquiry / order: leave open by default; close only if a party chooses
-//   - support: close when the ticket is resolved
-// After close, SendMessage rejects new posts until Reopen (or order Start reopens automatically).
-// Closing again is a no-op success. Support cases linked to the thread are closed as well.
-func (s *MessagingService) Close(ctx context.Context, userID, conversationID string) (*models.ConversationDetails, error) {
-	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID); err != nil {
+func (s *MessagingService) Close(ctx context.Context, userID, role, conversationID string) (*models.ConversationDetails, error) {
+	role = normalizeMessagingRole(role)
+	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID, role); err != nil {
 		if errors.Is(err, repository.ErrConversationNotFound) {
 			return nil, ErrConversationNotFound
 		}
@@ -793,13 +782,13 @@ func (s *MessagingService) Close(ctx context.Context, userID, conversationID str
 		}
 		return nil, err
 	}
-	return s.Get(ctx, userID, conversationID)
+	return s.Get(ctx, userID, role, conversationID)
 }
 
 // Reopen opens a previously closed conversation (optional; order Start also auto-reopens).
-// Support cases that were closed are set back to open.
-func (s *MessagingService) Reopen(ctx context.Context, userID, conversationID string) (*models.ConversationDetails, error) {
-	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID); err != nil {
+func (s *MessagingService) Reopen(ctx context.Context, userID, role, conversationID string) (*models.ConversationDetails, error) {
+	role = normalizeMessagingRole(role)
+	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID, role); err != nil {
 		if errors.Is(err, repository.ErrConversationNotFound) {
 			return nil, ErrConversationNotFound
 		}
@@ -811,5 +800,5 @@ func (s *MessagingService) Reopen(ctx context.Context, userID, conversationID st
 		}
 		return nil, err
 	}
-	return s.Get(ctx, userID, conversationID)
+	return s.Get(ctx, userID, role, conversationID)
 }

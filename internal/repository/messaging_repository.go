@@ -122,16 +122,16 @@ func (r *MessagingRepository) FindByOrderItem(ctx context.Context, orderItemID s
 	return c, err
 }
 
-// GetForParticipant returns a conversation only if userID is a participant.
-// This is the main authorization gate used by Get / Send / ListMessages / MarkRead.
-func (r *MessagingRepository) GetForParticipant(ctx context.Context, conversationID, userID string) (*models.Conversation, error) {
+// GetForParticipant returns a conversation only if userID is a participant with the given role.
+// role is normalized (superadmin → admin). This blocks cross-role / other-seller access.
+func (r *MessagingRepository) GetForParticipant(ctx context.Context, conversationID, userID, role string) (*models.Conversation, error) {
 	c := &models.Conversation{}
 	err := r.db.QueryRow(ctx, `
 		select `+conversationSelectCols+`
 		from messaging.conversations c
 		inner join messaging.conversation_participants p
-			on p.conversation_id = c.id and p.user_id = $2
-		where c.id = $1`, conversationID, userID,
+			on p.conversation_id = c.id and p.user_id = $2 and p.role = $3
+		where c.id = $1`, conversationID, userID, role,
 	).Scan(
 		&c.ID, &c.Type, &c.Status, &c.ProductID, &c.ShopID, &c.OrderID, &c.OrderItemID,
 		&c.CreatedByUserID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt,
@@ -144,9 +144,10 @@ func (r *MessagingRepository) GetForParticipant(ctx context.Context, conversatio
 }
 
 // ListForUser returns inbox rows for a participant, newest activity first.
-// Unread = messages from someone else after this user's last_read_at (or all of them if never read).
-// Also attaches participants + optional support_case for each row.
-func (r *MessagingRepository) ListForUser(ctx context.Context, userID string) ([]models.ConversationSummary, error) {
+// userID is the JWT subject; role must match conversation_participants.role so a
+// seller only sees threads where they sit as role=seller (not another account's chats).
+// Unread = messages from someone else after this user's last_read_at.
+func (r *MessagingRepository) ListForUser(ctx context.Context, userID, role string) ([]models.ConversationSummary, error) {
 	rows, err := r.db.Query(ctx, `
 		select `+conversationSelectCols+`,
 			(
@@ -159,8 +160,8 @@ func (r *MessagingRepository) ListForUser(ctx context.Context, userID string) ([
 			) as unread_count
 		from messaging.conversations c
 		inner join messaging.conversation_participants p
-			on p.conversation_id = c.id and p.user_id = $1
-		order by coalesce(c.last_message_at, c.created_at) desc`, userID)
+			on p.conversation_id = c.id and p.user_id = $1 and p.role = $2
+		order by coalesce(c.last_message_at, c.created_at) desc`, userID, role)
 	if err != nil {
 		return nil, err
 	}
