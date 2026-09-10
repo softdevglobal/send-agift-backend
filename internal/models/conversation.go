@@ -44,6 +44,12 @@ type ConversationParticipant struct {
 	Role           string     `json:"role"`                      // customer | seller | admin
 	LastReadAt     *time.Time `json:"last_read_at,omitempty"`    // null = never opened / never marked read
 	JoinedAt       time.Time  `json:"joined_at"`
+
+	// Read-only display fields, resolved from the table the role points at so a
+	// chat can show who is writing (e.g. a seller sees the customer's name).
+	// Email is deliberately not exposed.
+	DisplayName *string `json:"display_name,omitempty"` // customer display_name | seller trading/legal name | admin display_name
+	ImageURL    *string `json:"image_url,omitempty"`
 }
 
 // SupportCase maps to support.cases — admin help ticket metadata linked 1:1 to a conversation.
