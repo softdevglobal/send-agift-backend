@@ -27,12 +27,14 @@ func NewReelRepository(db *pgxpool.Pool) *ReelRepository {
 const reelSelectCols = `
 	r.id, r.seller_id, r.shop_id, r.product_id, r.thumbnail_media_id, r.reel_type,
 	r.caption, r.hashtags, r.visibility, r.status, r.duration_ms, r.view_count,
+	r.like_count, r.comment_count,
 	r.published_at, r.created_at, r.updated_at`
 
 func scanReel(scanner interface{ Scan(dest ...any) error }, r *models.Reel) error {
 	return scanner.Scan(
 		&r.ID, &r.SellerID, &r.ShopID, &r.ProductID, &r.ThumbnailMediaID, &r.ReelType,
 		&r.Caption, &r.Hashtags, &r.Visibility, &r.Status, &r.DurationMs, &r.ViewCount,
+		&r.LikeCount, &r.CommentCount,
 		&r.PublishedAt, &r.CreatedAt, &r.UpdatedAt,
 	)
 }
