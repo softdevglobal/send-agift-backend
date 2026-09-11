@@ -21,6 +21,8 @@ type Reel struct {
 	Status           string     `json:"status"`     // draft | published | archived
 	DurationMs       *int       `json:"duration_ms,omitempty"`
 	ViewCount        int64      `json:"view_count"`
+	LikeCount        int64      `json:"like_count"`       // denormalized; social.reel_likes
+	CommentCount     int64      `json:"comment_count"`    // denormalized; social.reel_comments
 	PublishedAt      *time.Time `json:"published_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
@@ -67,6 +69,12 @@ type ReelDetails struct {
 	Thumbnail *ReelMediaItem      `json:"thumbnail,omitempty"`
 	Shop      *ReelShopSummary    `json:"shop,omitempty"`
 	Product   *ReelProductSummary `json:"product,omitempty"`
+	// LikedByMe is set when the caller sent JWT or X-Guest-Token and already liked.
+	LikedByMe bool `json:"liked_by_me"`
+	// RecentLikers is the latest 3 public liker names (feed / get reel).
+	RecentLikers []ReelLikerPreview `json:"recent_likers"`
+	// Comments is every visible comment on this reel (newest first).
+	Comments []ReelCommentView `json:"comments"`
 }
 
 // ReelFeed is a page of public reels with a cursor for the next page.

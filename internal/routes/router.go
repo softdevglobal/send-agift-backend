@@ -39,6 +39,8 @@ func New(
 	products *handlers.ProductHandler,
 	// Handler instance that manages seller reels and the public reel feed
 	reels *handlers.ReelHandler,
+	// Handler instance that manages public reel likes and comments
+	reelSocial *handlers.ReelSocialHandler,
 	// Handler instance that manages customer↔seller chat
 	messaging *handlers.MessagingHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
@@ -62,7 +64,7 @@ func New(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Bootstrap-Secret"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Bootstrap-Secret", "X-Guest-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -129,6 +131,9 @@ func New(
 		// Public reel feed (no JWT) + seller reel CRUD (seller JWT)
 		// Example: GET /api/v1/reels, POST /api/v1/sellers/me/shops/{shopID}/reels
 		RegisterReelRoutes(r, reels, jwtSecret)
+
+		// Public reel likes + comments (customer JWT or X-Guest-Token on same URLs)
+		RegisterReelSocialRoutes(r, reelSocial, jwtSecret)
 
 		// Customer↔seller product inquiry and order chat
 		// Example: POST /api/v1/conversations, GET /api/v1/conversations/{id}/messages

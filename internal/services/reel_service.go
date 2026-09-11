@@ -35,6 +35,7 @@ const (
 // ReelService owns seller reel creation and the public customer feed.
 type ReelService struct {
 	reels   *repository.ReelRepository
+	social  *repository.ReelSocialRepository
 	sellers *repository.SellerRepository
 	s3      *S3Service
 	bucket  string
@@ -42,11 +43,12 @@ type ReelService struct {
 
 func NewReelService(
 	reels *repository.ReelRepository,
+	social *repository.ReelSocialRepository,
 	sellers *repository.SellerRepository,
 	s3 *S3Service,
 	bucket string,
 ) *ReelService {
-	return &ReelService{reels: reels, sellers: sellers, s3: s3, bucket: bucket}
+	return &ReelService{reels: reels, social: social, sellers: sellers, s3: s3, bucket: bucket}
 }
 
 // ReelMediaInput is one already-uploaded file (via /media/presign-upload) attached to a reel.
@@ -265,6 +267,11 @@ func (s *ReelService) GetPublic(ctx context.Context, reelID string) (*models.Ree
 		log.Printf("reel view count: %v", err)
 	}
 	details.ViewCount++
+	page := []models.ReelDetails{*details}
+	if err := s.attachSocial(ctx, page); err != nil {
+		return nil, err
+	}
+	*details = page[0]
 	return details, nil
 }
 
@@ -325,7 +332,57 @@ func (s *ReelService) Feed(ctx context.Context, f ReelFeedFilter) (*models.ReelF
 			feed.NextCursor = &next
 		}
 	}
+	if err := s.attachSocial(ctx, feed.Items); err != nil {
+		return nil, err
+	}
 	return feed, nil
+}
+
+// attachSocial adds latest 3 likers + all visible comments onto public reel payloads.
+func (s *ReelService) attachSocial(ctx context.Context, items []models.ReelDetails) error {
+	if s.social == nil || len(items) == 0 {
+		for i := range items {
+			if items[i].RecentLikers == nil {
+				items[i].RecentLikers = []models.ReelLikerPreview{}
+			}
+			if items[i].Comments == nil {
+				items[i].Comments = []models.ReelCommentView{}
+			}
+		}
+		return nil
+	}
+
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.ID.String()
+	}
+
+	likersByReel, err := s.social.ListRecentLikersForReels(ctx, ids, 3)
+	if err != nil {
+		return err
+	}
+	commentsByReel, err := s.social.ListVisibleCommentsForReels(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	for i := range items {
+		id := items[i].ID
+		likers := likersByReel[id]
+		items[i].RecentLikers = make([]models.ReelLikerPreview, 0, len(likers))
+		for _, l := range likers {
+			items[i].RecentLikers = append(items[i].RecentLikers, models.ReelLikerPreview{
+				Type:        l.Type,
+				DisplayName: l.DisplayName,
+			})
+		}
+		rows := commentsByReel[id]
+		items[i].Comments = make([]models.ReelCommentView, 0, len(rows))
+		for _, c := range rows {
+			items[i].Comments = append(items[i].Comments, models.ToCommentView(c))
+		}
+	}
+	return nil
 }
 
 // resolveProductID validates that a tagged product exists in the reel's shop.

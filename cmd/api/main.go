@@ -49,6 +49,7 @@ func main() {
 	idempotency := repository.NewIdempotencyRepository(pool)
 	mediaAssets := repository.NewMediaRepository(pool)
 	reels := repository.NewReelRepository(pool)
+	reelSocial := repository.NewReelSocialRepository(pool)
 	messaging := repository.NewMessagingRepository(pool)
 
 	// s3Service issues presigned URLs so clients upload straight to the bucket
@@ -65,7 +66,8 @@ func main() {
 	orderService := services.NewOrderService(orders, customers, countries)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers)
-	reelService := services.NewReelService(reels, sellers, s3Service, cfg.S3Bucket)
+	reelService := services.NewReelService(reels, reelSocial, sellers, s3Service, cfg.S3Bucket)
+	reelSocialService := services.NewReelSocialService(reelSocial)
 	messagingService := services.NewMessagingService(messaging, orders, customers, sellers, admins, s3Service, cfg.S3Bucket)
 	shippoClient := services.NewShippoClient(cfg.ShippoAPIKey)
 	shippingService := services.NewShippingService(shippoClient, shipments, idempotency, mediaAssets, s3Service, cfg.ShippoLabelBucket)
@@ -82,6 +84,7 @@ func main() {
 	sellerOrderHandler := handlers.NewSellerOrderHandler(orderService)
 	productHandler := handlers.NewProductHandler(productService)
 	reelHandler := handlers.NewReelHandler(reelService)
+	reelSocialHandler := handlers.NewReelSocialHandler(reelSocialService, cfg.JWTSecret)
 	messagingHandler := handlers.NewMessagingHandler(messagingService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
@@ -90,7 +93,7 @@ func main() {
 	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
 	shippingHandler := handlers.NewShippingHandler(shippingService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, messagingHandler, mediaHandler, placesHandler, shippingHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, messagingHandler, mediaHandler, placesHandler, shippingHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name

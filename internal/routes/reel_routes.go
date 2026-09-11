@@ -13,7 +13,8 @@ import (
 //   - shop reel    → posted on the shop route with no product_id (shop's own video)
 //   - product reel → posted on the product route (or with product_id in the body)
 //
-// Public (no JWT) — the TikTok-style feed:
+// Public (no JWT) — the TikTok-style feed (each item includes like_count,
+// latest 3 recent_likers, and all visible comments):
 //
 //	GET /reels                    — newest published public reels (cursor paginated)
 //	GET /reels/{id}               — one reel, counts a view
