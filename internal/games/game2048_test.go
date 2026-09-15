@@ -239,3 +239,44 @@ func TestEmptyMoveLog(t *testing.T) {
 		t.Errorf("moves used = %d, want 0", res.MovesUsed)
 	}
 }
+
+// TestCrossLanguageGolden locks this engine to the Flutter one.
+//
+// The app plays the same seed with the same repeating direction cycle and must
+// land on exactly these numbers. They were produced independently by the Dart
+// implementation, and the matching assertion lives in the mobile repo at
+// test/game_2048_test.dart.
+//
+// If this fails, the two engines have drifted and honest players will start
+// having their scores flagged. Fix the drift; do not update the constants
+// unless both sides change together behind a new game version.
+func TestCrossLanguageGolden(t *testing.T) {
+	const seed = "cafebabe"
+	cfg := DefaultConfig()
+
+	g, err := NewGame2048(seed, cfg)
+	if err != nil {
+		t.Fatalf("new game: %v", err)
+	}
+
+	dirs := []string{MoveUp, MoveLeft, MoveDown, MoveRight}
+	for i := 0; i < 400 && g.HasMoves(); i++ {
+		if _, err := g.Move(dirs[i%len(dirs)]); err != nil {
+			t.Fatalf("move %d: %v", i, err)
+		}
+	}
+
+	if got, want := g.Score(), int64(2348); got != want {
+		t.Errorf("score = %d, want %d (Dart engine disagrees)", got, want)
+	}
+	if got, want := g.HighestTile(), 256; got != want {
+		t.Errorf("highest tile = %d, want %d", got, want)
+	}
+	if g.HasMoves() {
+		t.Error("expected the board to be dead after the cycle")
+	}
+	wantBoard := []int{2, 16, 8, 2, 32, 4, 2, 8, 2, 64, 256, 16, 8, 16, 4, 2}
+	if !reflect.DeepEqual(g.Board(), wantBoard) {
+		t.Errorf("board  = %v\nwant   = %v", g.Board(), wantBoard)
+	}
+}
