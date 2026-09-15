@@ -18,10 +18,10 @@ const (
 // engine cannot interpret.
 var ErrInvalidMove = errors.New("invalid move")
 
-// Config holds the rules both the server and the client run. It is stored per
+// Config2048 holds the rules both the server and the client run. It is stored per
 // game version and snapshotted onto each session, so editing a version can
 // never change how an already-started game is scored.
-type Config struct {
+type Config2048 struct {
 	BoardSize         int `json:"board_size"`
 	StartTiles        int `json:"start_tiles"`
 	SpawnFourPercent  int `json:"spawn_four_percent"`
@@ -31,9 +31,9 @@ type Config struct {
 	SessionTTLSeconds int `json:"session_ttl_seconds"`
 }
 
-// DefaultConfig mirrors the 1.0.0 version seeded by migration 000027.
-func DefaultConfig() Config {
-	return Config{
+// DefaultConfig2048 mirrors the 1.0.0 version seeded by migration 000027.
+func DefaultConfig2048() Config2048 {
+	return Config2048{
 		BoardSize:         4,
 		StartTiles:        2,
 		SpawnFourPercent:  10,
@@ -46,8 +46,8 @@ func DefaultConfig() Config {
 
 // withDefaults fills zero values so a partially-populated config from the
 // database still produces a playable game rather than a divide-by-zero board.
-func (c Config) withDefaults() Config {
-	d := DefaultConfig()
+func (c Config2048) withDefaults() Config2048 {
+	d := DefaultConfig2048()
 	if c.BoardSize <= 0 {
 		c.BoardSize = d.BoardSize
 	}
@@ -75,7 +75,7 @@ func (c Config) withDefaults() Config {
 // move: same slide order, same merge rule, same spawn order (position drawn
 // before value). Any divergence shows up as a score mismatch on submit.
 type Game2048 struct {
-	cfg   Config
+	cfg   Config2048
 	rng   *DeterministicRNG
 	board []int // flat, row-major: board[row*size+col]
 	score int64
@@ -83,7 +83,7 @@ type Game2048 struct {
 
 // NewGame2048 builds a fresh game from a server seed and places the starting
 // tiles, exactly as the client does when it receives the same seed.
-func NewGame2048(seed string, cfg Config) (*Game2048, error) {
+func NewGame2048(seed string, cfg Config2048) (*Game2048, error) {
 	state, err := ParseSeed(seed)
 	if err != nil {
 		return nil, err
@@ -267,10 +267,10 @@ func (g *Game2048) HasMoves() bool {
 	return false
 }
 
-// ReplayResult is what the server derives by re-playing a submitted move log.
+// Result2048 is what the server derives by re-playing a submitted move log.
 // Score here is the only score that counts; whatever the client claimed is
 // treated as an unverified hint.
-type ReplayResult struct {
+type Result2048 struct {
 	Score       int64
 	HighestTile int
 	MovesUsed   int // moves that actually changed the board
@@ -287,7 +287,7 @@ type ReplayResult struct {
 // sends the moves it made, and we compute the result ourselves. A modified app
 // cannot invent a score without also inventing a move sequence that genuinely
 // produces it under these rules.
-func Replay(seed string, cfg Config, moves []string) (*ReplayResult, error) {
+func Replay2048(seed string, cfg Config2048, moves []string) (*Result2048, error) {
 	cfg = cfg.withDefaults()
 
 	if len(moves) > cfg.MaxMoves {
@@ -299,7 +299,7 @@ func Replay(seed string, cfg Config, moves []string) (*ReplayResult, error) {
 		return nil, err
 	}
 
-	res := &ReplayResult{}
+	res := &Result2048{}
 	for i, m := range moves {
 		// Moves sent after the board is already dead cannot have happened.
 		if !g.HasMoves() {

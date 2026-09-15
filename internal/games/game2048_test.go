@@ -63,13 +63,13 @@ func TestDeterminism(t *testing.T) {
 	const seed = "a1b2c3d4"
 	moves := []string{"left", "up", "right", "down", "left", "up", "left", "down"}
 
-	first, err := Replay(seed, DefaultConfig(), moves)
+	first, err := Replay2048(seed, DefaultConfig2048(), moves)
 	if err != nil {
 		t.Fatalf("first replay: %v", err)
 	}
 
 	for i := 0; i < 50; i++ {
-		again, err := Replay(seed, DefaultConfig(), moves)
+		again, err := Replay2048(seed, DefaultConfig2048(), moves)
 		if err != nil {
 			t.Fatalf("replay %d: %v", i, err)
 		}
@@ -82,11 +82,11 @@ func TestDeterminism(t *testing.T) {
 // TestStartingBoardIsSeeded checks the opening position comes from the seed,
 // so players cannot reroll a bad start by restarting the app.
 func TestStartingBoardIsSeeded(t *testing.T) {
-	a, err := NewGame2048("00000001", DefaultConfig())
+	a, err := NewGame2048("00000001", DefaultConfig2048())
 	if err != nil {
 		t.Fatalf("new game: %v", err)
 	}
-	b, err := NewGame2048("00000001", DefaultConfig())
+	b, err := NewGame2048("00000001", DefaultConfig2048())
 	if err != nil {
 		t.Fatalf("new game: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestStartingBoardIsSeeded(t *testing.T) {
 		t.Fatalf("same seed gave different boards: %v vs %v", a.Board(), b.Board())
 	}
 
-	c, err := NewGame2048("ffffffff", DefaultConfig())
+	c, err := NewGame2048("ffffffff", DefaultConfig2048())
 	if err != nil {
 		t.Fatalf("new game: %v", err)
 	}
@@ -113,8 +113,8 @@ func TestStartingBoardIsSeeded(t *testing.T) {
 			t.Errorf("starting tile has value %d, want 2 or 4", v)
 		}
 	}
-	if filled != DefaultConfig().StartTiles {
-		t.Errorf("board has %d starting tiles, want %d", filled, DefaultConfig().StartTiles)
+	if filled != DefaultConfig2048().StartTiles {
+		t.Errorf("board has %d starting tiles, want %d", filled, DefaultConfig2048().StartTiles)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestStartingBoardIsSeeded(t *testing.T) {
 // stepping a game move by move must equal replaying the same log in one go.
 func TestReplayMatchesLivePlay(t *testing.T) {
 	const seed = "deadbeef"
-	cfg := DefaultConfig()
+	cfg := DefaultConfig2048()
 
 	live, err := NewGame2048(seed, cfg)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestReplayMatchesLivePlay(t *testing.T) {
 		played = append(played, dir)
 	}
 
-	res, err := Replay(seed, cfg, played)
+	res, err := Replay2048(seed, cfg, played)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -159,10 +159,10 @@ func TestReplayMatchesLivePlay(t *testing.T) {
 
 // TestReplayRejectsBadInput covers the cheat paths the replay must refuse.
 func TestReplayRejectsBadInput(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := DefaultConfig2048()
 
 	t.Run("unknown direction", func(t *testing.T) {
-		if _, err := Replay("00000001", cfg, []string{"left", "diagonal"}); err == nil {
+		if _, err := Replay2048("00000001", cfg, []string{"left", "diagonal"}); err == nil {
 			t.Fatal("expected an error for an unknown direction")
 		}
 	})
@@ -174,7 +174,7 @@ func TestReplayRejectsBadInput(t *testing.T) {
 		for i := range moves {
 			moves[i] = MoveLeft
 		}
-		if _, err := Replay("00000001", small, moves); err == nil {
+		if _, err := Replay2048("00000001", small, moves); err == nil {
 			t.Fatal("expected an error when the move log exceeds max_moves")
 		}
 	})
@@ -199,7 +199,7 @@ func TestReplayRejectsBadInput(t *testing.T) {
 			t.Skip("board did not fill within the move budget")
 		}
 		played = append(played, MoveLeft)
-		if _, err := Replay(seed, cfg, played); err == nil {
+		if _, err := Replay2048(seed, cfg, played); err == nil {
 			t.Fatal("expected an error for a move played after game over")
 		}
 	})
@@ -212,7 +212,7 @@ func TestForgedScoreCannotBeatReplay(t *testing.T) {
 	const seed = "12345678"
 	moves := []string{"left", "up", "left", "up", "left"}
 
-	res, err := Replay(seed, DefaultConfig(), moves)
+	res, err := Replay2048(seed, DefaultConfig2048(), moves)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestForgedScoreCannotBeatReplay(t *testing.T) {
 
 // TestEmptyMoveLog covers a player who opens the game and submits immediately.
 func TestEmptyMoveLog(t *testing.T) {
-	res, err := Replay("00000001", DefaultConfig(), nil)
+	res, err := Replay2048("00000001", DefaultConfig2048(), nil)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestEmptyMoveLog(t *testing.T) {
 // unless both sides change together behind a new game version.
 func TestCrossLanguageGolden(t *testing.T) {
 	const seed = "cafebabe"
-	cfg := DefaultConfig()
+	cfg := DefaultConfig2048()
 
 	g, err := NewGame2048(seed, cfg)
 	if err != nil {

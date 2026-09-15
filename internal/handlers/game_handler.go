@@ -121,6 +121,12 @@ func (h *GameHandler) writeError(w http.ResponseWriter, err error, fallback stri
 		utils.Error(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, services.ErrSocialIdentityRequired):
 		utils.Error(w, http.StatusUnauthorized, "sign in or send an X-Guest-Token to play")
+	// Official competition attempts are submitted here too.
+	case errors.Is(err, services.ErrCompetitionClosed):
+		// A score received at or after the close does not count (§13.6).
+		utils.Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, services.ErrCompetitionNotFound):
+		utils.Error(w, http.StatusNotFound, "competition not found")
 	default:
 		log.Printf("game handler: %s: %v", fallback, err)
 		utils.Error(w, http.StatusInternalServerError, fallback)
