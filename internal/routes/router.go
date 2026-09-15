@@ -43,6 +43,8 @@ func New(
 	reelSocial *handlers.ReelSocialHandler,
 	// Handler instance that manages customer↔seller chat
 	messaging *handlers.MessagingHandler,
+	// Handler instance that manages the skill-game collection and scores
+	games *handlers.GameHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
 	// Handler instance that proxies Google Places address lookups
@@ -138,6 +140,10 @@ func New(
 		// Customer↔seller product inquiry and order chat
 		// Example: POST /api/v1/conversations, GET /api/v1/conversations/{id}/messages
 		RegisterMessagingRoutes(r, messaging, jwtSecret)
+
+		// Skill-game collection: catalog, seeded sessions, server-scored results
+		// Example: POST /api/v1/games/2048/sessions
+		RegisterGameRoutes(r, games, jwtSecret)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload
