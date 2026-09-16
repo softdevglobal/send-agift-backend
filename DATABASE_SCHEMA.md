@@ -38,7 +38,7 @@ Diagram entity names use underscores because Mermaid does not allow dots, so
 | `admin` | platform staff accounts | `admin_users` |
 | `customer` | buyer identity, their address book, gift recipients, wishlist | `customers`, `customer_addresses`, `recipients`, `recipient_addresses`, `saved_gifts` |
 | `seller` | merchant identity, storefronts, catalogue, reels | `sellers`, `seller_addresses`, `shops`, `products`, `inventory`, `reels`, `reel_media` |
-| `marketplace` | transactions | `orders`, `order_items`, `shipments` |
+| `marketplace` | transactions + reviews | `orders`, `order_items`, `shipments`, `product_reviews`, `product_review_media`, `product_review_votes` |
 | `media` | one row per stored file, whatever owns it | `media_assets` |
 | `public` | migration bookkeeping only | `schema_migrations` |
 
@@ -127,11 +127,18 @@ erDiagram
 
     marketplace_orders ||--o{ marketplace_order_items : order_id
     marketplace_orders ||--o{ marketplace_shipments : order_id
+    marketplace_orders ||--o{ marketplace_product_reviews : order_id
     marketplace_order_items ||--o{ marketplace_shipments : order_item_id
+    marketplace_order_items ||--o| marketplace_product_reviews : "order_item_id (unique)"
+    marketplace_product_reviews ||--o{ marketplace_product_review_media : review_id
+    marketplace_product_reviews ||--o{ marketplace_product_review_votes : review_id
+    customer_customers ||--o{ marketplace_product_reviews : customer_id
+    customer_customers ||--o{ marketplace_product_review_votes : customer_id
 
     seller_reels ||--o{ seller_reel_media : reel_id
     media_media_assets ||--o{ seller_reel_media : media_asset_id
     media_media_assets ||--o{ seller_reels : thumbnail_media_id
+    media_media_assets ||--o{ marketplace_product_review_media : media_asset_id
     media_media_assets ||--o{ core_country_payment_providers : approval_document_media_id
 
     admin_admin_users {
@@ -715,6 +722,107 @@ becomes `delivered` when every line is `delivered` or `cancelled`.
 Because `product_id` has no `ON DELETE` clause, a product that appears on any order cannot
 be deleted — `DELETE /sellers/me/products/{id}` fails with a FK violation on sold products.
 
+### Product reviews (AliExpress-style)
+
+Verified-purchase reviews: one row per delivered `order_item`, overall + breakdown stars,
+optional photos, seller reply, and helpful votes. Photos reuse `media.media_assets`
+(same pattern as `seller.reel_media`).
+
+```mermaid
+erDiagram
+    marketplace_order_items ||--o| marketplace_product_reviews : "order_item_id UNIQUE CASCADE"
+    marketplace_orders ||--o{ marketplace_product_reviews : "order_id CASCADE"
+    seller_products ||--o{ marketplace_product_reviews : product_id
+    seller_shops ||--o{ marketplace_product_reviews : shop_id
+    seller_sellers ||--o{ marketplace_product_reviews : seller_id
+    customer_customers ||--o{ marketplace_product_reviews : customer_id
+    marketplace_product_reviews ||--o{ marketplace_product_review_media : "review_id CASCADE"
+    marketplace_product_reviews ||--o{ marketplace_product_review_votes : "review_id CASCADE"
+    media_media_assets ||--o{ marketplace_product_review_media : media_asset_id
+    customer_customers ||--o{ marketplace_product_review_votes : "customer_id CASCADE"
+
+    marketplace_product_reviews {
+        uuid id PK
+        uuid product_id FK
+        uuid shop_id FK
+        uuid seller_id FK
+        uuid customer_id FK
+        uuid order_id FK
+        uuid order_item_id FK "UNIQUE"
+        int rating
+        int product_quality_rating
+        int shipping_rating
+        int seller_service_rating
+        text title
+        text body
+        bool is_anonymous
+        text status
+        text seller_reply
+        int helpful_count
+    }
+    marketplace_product_review_media {
+        uuid id PK
+        uuid review_id FK
+        uuid media_asset_id FK
+        int position
+    }
+    marketplace_product_review_votes {
+        uuid id PK
+        uuid review_id FK
+        uuid customer_id FK
+        bool is_helpful
+    }
+```
+
+### `marketplace.product_reviews`
+
+| Column | Type | Key / constraint | Notes |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `product_id` | uuid | **FK → `seller.products(id)`**, NOT NULL | product being reviewed |
+| `shop_id` | uuid | **FK → `seller.shops(id)`**, NOT NULL | denormalized for shop rating queries |
+| `seller_id` | uuid | **FK → `seller.sellers(id)`**, NOT NULL | denormalized for seller rating |
+| `customer_id` | uuid | **FK → `customer.customers(id)`**, NOT NULL, indexed | reviewer |
+| `order_id` | uuid | **FK → `marketplace.orders(id)` ON DELETE CASCADE**, NOT NULL, indexed | purchase proof |
+| `order_item_id` | uuid | **FK → `marketplace.order_items(id)` ON DELETE CASCADE**, NOT NULL **UNIQUE** | one review per line |
+| `rating` | smallint | NOT NULL CHECK 1–5 | overall stars on the product card |
+| `product_quality_rating` | smallint | NOT NULL CHECK 1–5 | item quality |
+| `shipping_rating` | smallint | NOT NULL CHECK 1–5 | delivery experience |
+| `seller_service_rating` | smallint | NOT NULL CHECK 1–5 | seller communication / service |
+| `title` | text | nullable | short headline |
+| `body` | text | nullable | review text |
+| `is_anonymous` | boolean | NOT NULL DEFAULT false | hide name on storefront |
+| `status` | text | DEFAULT `published`, CHECK | `pending`, `published`, `hidden`, `rejected` |
+| `seller_reply` | text | nullable | optional seller response |
+| `seller_replied_at` | timestamptz | nullable | |
+| `helpful_count` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | denormalized upvote count |
+| `created_at`, `updated_at` | timestamptz | NOT NULL | |
+
+API should only allow create when the line’s `fulfilment_status = 'delivered'`.
+
+### `marketplace.product_review_media`
+
+| Column | Type | Key / constraint | Notes |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `review_id` | uuid | **FK → `marketplace.product_reviews(id)` ON DELETE CASCADE**, indexed | |
+| `media_asset_id` | uuid | **FK → `media.media_assets(id)` ON DELETE CASCADE** | image/video file |
+| `position` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | carousel order |
+| `created_at` | timestamptz | NOT NULL | |
+| — | — | **UNIQUE (review_id, position)** | |
+| — | — | **UNIQUE (review_id, media_asset_id)** | |
+
+### `marketplace.product_review_votes`
+
+| Column | Type | Key / constraint | Notes |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `review_id` | uuid | **FK → `marketplace.product_reviews(id)` ON DELETE CASCADE**, indexed | |
+| `customer_id` | uuid | **FK → `customer.customers(id)` ON DELETE CASCADE** | voter |
+| `is_helpful` | boolean | NOT NULL | true = helpful, false = not helpful |
+| `created_at` | timestamptz | NOT NULL | |
+| — | — | **UNIQUE (review_id, customer_id)** | one vote per customer per review |
+
 ---
 
 ## 11. Section: shipping
@@ -963,6 +1071,16 @@ Every real FK in the database, child → parent.
 | 34 | `seller.reels.thumbnail_media_id` | `media.media_assets.id` | SET NULL |
 | 35 | `seller.reel_media.reel_id` | `seller.reels.id` | CASCADE |
 | 36 | `seller.reel_media.media_asset_id` | `media.media_assets.id` | CASCADE |
+| 37 | `marketplace.product_reviews.product_id` | `seller.products.id` | restrict |
+| 38 | `marketplace.product_reviews.shop_id` | `seller.shops.id` | restrict |
+| 39 | `marketplace.product_reviews.seller_id` | `seller.sellers.id` | restrict |
+| 40 | `marketplace.product_reviews.customer_id` | `customer.customers.id` | restrict |
+| 41 | `marketplace.product_reviews.order_id` | `marketplace.orders.id` | CASCADE |
+| 42 | `marketplace.product_reviews.order_item_id` (UNIQUE) | `marketplace.order_items.id` | CASCADE |
+| 43 | `marketplace.product_review_media.review_id` | `marketplace.product_reviews.id` | CASCADE |
+| 44 | `marketplace.product_review_media.media_asset_id` | `media.media_assets.id` | CASCADE |
+| 45 | `marketplace.product_review_votes.review_id` | `marketplace.product_reviews.id` | CASCADE |
+| 46 | `marketplace.product_review_votes.customer_id` | `customer.customers.id` | CASCADE |
 
 "restrict" means no `ON DELETE` clause was declared, so Postgres uses `NO ACTION` and the
 delete fails while children exist.
@@ -1024,6 +1142,7 @@ Every CHECK-constrained value in one place.
 | `marketplace.orders.customer_type` | `personal`, `corporate` | `personal` |
 | `marketplace.orders.status` | `draft`, `pending_payment`, `paid`, `accepted`, `preparing`, `dispatched`, `delivered`, `cancelled`, `refunded` | `draft` (the API always creates `pending_payment`) |
 | `marketplace.order_items.fulfilment_status` | `pending`, `accepted`, `preparing`, `ready`, `dispatched`, `delivered`, `cancelled` | `pending` |
+| `marketplace.product_reviews.status` | `pending`, `published`, `hidden`, `rejected` | `published` |
 | `marketplace.shipments.delivery_mode` | `courier`, `seller_managed`, `pickup` | none — NOT NULL, always `courier` today |
 | `marketplace.shipments.status` | `pending`, `label_created`, `collected`, `in_transit`, `delivered`, `failed`, `returned` | `pending` |
 | `media.media_assets.owner_type` | `customer`, `seller`, `admin`, `system` | none — NOT NULL |
@@ -1072,6 +1191,13 @@ Beyond the implicit primary-key and unique-constraint indexes.
 | `idx_order_items_seller_id` | `marketplace.order_items` | (`seller_id`) | seller dashboard |
 | `idx_order_items_shop_id` | `marketplace.order_items` | (`shop_id`) | per-shop reporting |
 | `idx_order_items_product_id` | `marketplace.order_items` | (`product_id`) | product sales |
+| `idx_product_reviews_product` | `marketplace.product_reviews` | (`product_id`, `created_at DESC`) WHERE `status='published'` | product review list |
+| `idx_product_reviews_shop` | `marketplace.product_reviews` | (`shop_id`, `created_at DESC`) WHERE `status='published'` | shop review list |
+| `idx_product_reviews_seller` | `marketplace.product_reviews` | (`seller_id`, `created_at DESC`) | seller dashboard |
+| `idx_product_reviews_customer` | `marketplace.product_reviews` | (`customer_id`, `created_at DESC`) | my reviews |
+| `idx_product_reviews_order` | `marketplace.product_reviews` | (`order_id`) | reviews for an order |
+| `idx_product_review_media_review_id` | `marketplace.product_review_media` | (`review_id`, `position`) | review photo carousel |
+| `idx_product_review_votes_review_id` | `marketplace.product_review_votes` | (`review_id`) | vote tally |
 | `idx_shipments_order_id` | `marketplace.shipments` | (`order_id`) | order shipments |
 | `idx_shipments_order_item_id` | `marketplace.shipments` | (`order_item_id`) | line shipment |
 | `idx_shipments_pending_order_item` | `marketplace.shipments` | **UNIQUE** (`order_item_id`) WHERE `status='pending'` | one open quote per line |
@@ -1115,6 +1241,7 @@ Applied in filename order, tracked in `schema_migrations`. Numbering has gaps �
 | `000018_create_idempotency_keys` | re-creates `core.idempotency_keys` for databases that ran `000002` before it was merged in |
 | `000021_shipment_shipping_details` | drops the product-level shipping columns and order-item shipping JSON; adds `shipments.order_item_id`, `is_international`, `parcel_details`, `customs_declaration`, `provider_customs_declaration_id`, and the pending-quote unique index |
 | `000022_create_seller_reels` | `seller.reels`, `seller.reel_media`, and the partial feed index |
+| `000027_create_product_reviews` | `marketplace.product_reviews`, `product_review_media`, `product_review_votes` (AliExpress-style ratings + photos + helpful votes) |
 
 Every file is written to be re-runnable (`IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`), so
 a partially migrated database can catch up. Down files exist for each version but are not
@@ -1149,4 +1276,7 @@ Which routes touch which tables — handy when you change a column.
 | `marketplace.orders` | `GET /customers/me/orders`, `GET /sellers/me/order-items/{id}`, webhook completion | `POST /customers/me/orders`, cancel, webhook |
 | `marketplace.order_items` | `GET /sellers/me/order-items`, order detail | order create, accept, label purchase (`dispatched`), webhook (`delivered`) |
 | `marketplace.shipments` | shipping context lookup, webhook | `POST …/shipping/rates` (pending quote), `POST …/shipping/labels`, webhook status |
+| `marketplace.product_reviews` | `GET /products/{id}/reviews`, `GET /reviews/{id}`, customer/seller review routes | `POST /customers/me/order-items/{id}/reviews`, update/delete/reply |
+| `marketplace.product_review_media` | review reads | review create/update/delete |
+| `marketplace.product_review_votes` | review reads (`voted_helpful`) | `PUT/DELETE /reviews/{id}/vote` |
 | `public.schema_migrations` | migration runner | migration runner |

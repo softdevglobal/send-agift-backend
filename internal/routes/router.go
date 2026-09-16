@@ -41,6 +41,8 @@ func New(
 	reels *handlers.ReelHandler,
 	// Handler instance that manages public reel likes and comments
 	reelSocial *handlers.ReelSocialHandler,
+	// Handler instance that manages AliExpress-style product reviews
+	productReviews *handlers.ProductReviewHandler,
 	// Handler instance that manages customer↔seller chat
 	messaging *handlers.MessagingHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
@@ -134,6 +136,9 @@ func New(
 
 		// Public reel likes + comments (customer JWT or X-Guest-Token on same URLs)
 		RegisterReelSocialRoutes(r, reelSocial, jwtSecret)
+
+		// Product reviews (public list/summary + customer create/vote + seller reply)
+		RegisterProductReviewRoutes(r, productReviews, jwtSecret)
 
 		// Customer↔seller product inquiry and order chat
 		// Example: POST /api/v1/conversations, GET /api/v1/conversations/{id}/messages

@@ -171,6 +171,7 @@ Middleware used on those groups:
 | Checkout pricing | `order_service.go` + `order_repository.GetCheckoutProduct` | Server snapshots price/seller/shop; client never sends amounts |
 | Multi-seller fulfilment | `seller_order_handler.go`, `order_service.go`, `shipping_service.go`, `shipment_repository.go` | Sellers act on `order_items.id`; webhook completes one line then maybe the order |
 | Reels + S3 files | `media_handler.go` → client PUT to S3 → `reel_service.go` → `reel_repository.go` + `media.media_assets` | Presign keeps the API off the upload bandwidth path; DB stores keys + `cdn_url` |
+| Product reviews | `product_review_*` + `media_handler` (`review-photo`) + `order_repository.GetItemForCustomer` | Verified purchase (delivered line); photos via `media.media_assets`; helpful votes |
 | Label PDF storage | `shipping_service.go` + `s3_service.Upload` + `media_repository.go` | Download Shippo PDF, store in S3, save `media_assets` row, link `shipments.label_media_id` |
 | Address autocomplete | `places_*` | API key stays on server; frontend only sees place_id / address fields |
 
@@ -1143,6 +1144,10 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 | GET | `/reels/{id}` | — | `ReelHandler.GetPublic` |
 | GET | `/shops/{shopId}/reels` | — | `ReelHandler.FeedByShop` |
 | GET | `/products/{productId}/reels` | — | `ReelHandler.FeedByProduct` |
+| GET | `/products/{productId}/reviews` | — | `ProductReviewHandler.ListByProduct` |
+| GET | `/products/{productId}/reviews/summary` | — | `ProductReviewHandler.SummaryByProduct` |
+| GET | `/shops/{shopId}/reviews` | — | `ProductReviewHandler.ListByShop` |
+| GET | `/reviews/{id}` | — | `ProductReviewHandler.GetPublic` |
 | GET | `/places/autocomplete` | — (120 req/min per IP) | `PlacesHandler.Autocomplete` |
 | GET | `/places/details` | — (120 req/min per IP) | `PlacesHandler.Details` |
 | POST | `/webhooks/shippo/tracking` | — | `ShippingHandler.ShippoWebhook` |
@@ -1193,6 +1198,13 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 | GET | `/customers/me/orders` | `OrderHandler.List` |
 | GET | `/customers/me/orders/{id}` | `OrderHandler.Get` |
 | POST | `/customers/me/orders/{id}/cancel` | `OrderHandler.Cancel` |
+| POST | `/customers/me/order-items/{orderItemId}/reviews` | `ProductReviewHandler.Create` |
+| GET | `/customers/me/reviews` | `ProductReviewHandler.ListMine` |
+| GET | `/customers/me/reviews/{id}` | `ProductReviewHandler.GetMine` |
+| PUT | `/customers/me/reviews/{id}` | `ProductReviewHandler.Update` |
+| DELETE | `/customers/me/reviews/{id}` | `ProductReviewHandler.Delete` |
+| PUT | `/reviews/{id}/vote` | `ProductReviewHandler.Vote` |
+| DELETE | `/reviews/{id}/vote` | `ProductReviewHandler.ClearVote` |
 
 ### role = seller
 
@@ -1228,6 +1240,10 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 | GET | `/sellers/me/reels/{id}` | `ReelHandler.Get` |
 | PUT | `/sellers/me/reels/{id}` | `ReelHandler.Update` |
 | DELETE | `/sellers/me/reels/{id}` | `ReelHandler.Delete` |
+| GET | `/sellers/me/reviews` | `ProductReviewHandler.ListForSeller` |
+| GET | `/sellers/me/reviews/{id}` | `ProductReviewHandler.GetForSeller` |
+| PUT | `/sellers/me/reviews/{id}/reply` | `ProductReviewHandler.Reply` |
+| DELETE | `/sellers/me/reviews/{id}/reply` | `ProductReviewHandler.ClearReply` |
 
 ---
 
