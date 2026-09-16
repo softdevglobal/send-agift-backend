@@ -17,6 +17,7 @@ Diagram entity names use underscores because Mermaid does not allow dots, so
 - [8. Section: sellers and shops](#8-section-sellers-and-shops)
 - [9. Section: catalogue and wishlist](#9-section-catalogue-and-wishlist)
 - [10. Section: orders](#10-section-orders)
+- [10a. Section: product reviews](#10a-section-product-reviews)
 - [11. Section: shipping](#11-section-shipping)
 - [12. Section: media](#12-section-media)
 - [13. Section: reels](#13-section-reels)
@@ -722,11 +723,16 @@ becomes `delivered` when every line is `delivered` or `cancelled`.
 Because `product_id` has no `ON DELETE` clause, a product that appears on any order cannot
 be deleted — `DELETE /sellers/me/products/{id}` fails with a FK violation on sold products.
 
-### Product reviews (AliExpress-style)
+---
 
-Verified-purchase reviews: one row per delivered `order_item`, overall + breakdown stars,
-optional photos, seller reply, and helpful votes. Photos reuse `media.media_assets`
-(same pattern as `seller.reel_media`).
+## 10a. Section: product reviews
+
+AliExpress-style verified-purchase reviews (migration `000027_create_product_reviews`).
+One review per delivered `order_item`, overall + breakdown stars, optional photos, seller
+reply, and helpful votes. Photos reuse `media.media_assets` (same pattern as
+`seller.reel_media`).
+
+### ER diagram
 
 ```mermaid
 erDiagram
@@ -738,7 +744,7 @@ erDiagram
     customer_customers ||--o{ marketplace_product_reviews : customer_id
     marketplace_product_reviews ||--o{ marketplace_product_review_media : "review_id CASCADE"
     marketplace_product_reviews ||--o{ marketplace_product_review_votes : "review_id CASCADE"
-    media_media_assets ||--o{ marketplace_product_review_media : media_asset_id
+    media_media_assets ||--o{ marketplace_product_review_media : "media_asset_id CASCADE"
     customer_customers ||--o{ marketplace_product_review_votes : "customer_id CASCADE"
 
     marketplace_product_reviews {
@@ -749,39 +755,106 @@ erDiagram
         uuid customer_id FK
         uuid order_id FK
         uuid order_item_id FK "UNIQUE"
-        int rating
-        int product_quality_rating
-        int shipping_rating
-        int seller_service_rating
+        smallint rating
+        smallint product_quality_rating
+        smallint shipping_rating
+        smallint seller_service_rating
         text title
         text body
         bool is_anonymous
         text status
         text seller_reply
+        timestamptz seller_replied_at
         int helpful_count
+        timestamptz created_at
+        timestamptz updated_at
     }
     marketplace_product_review_media {
         uuid id PK
         uuid review_id FK
         uuid media_asset_id FK
         int position
+        timestamptz created_at
     }
     marketplace_product_review_votes {
         uuid id PK
         uuid review_id FK
         uuid customer_id FK
         bool is_helpful
+        timestamptz created_at
     }
 ```
 
-### `marketplace.product_reviews`
+### Foreign keys (child → parent)
+
+| Child column | Parent | On delete | Why |
+| --- | --- | --- | --- |
+| `product_reviews.product_id` | `seller.products.id` | restrict | product on a review cannot be hard-deleted |
+| `product_reviews.shop_id` | `seller.shops.id` | restrict | denormalized shop for listing |
+| `product_reviews.seller_id` | `seller.sellers.id` | restrict | denormalized seller for listing / reply auth |
+| `product_reviews.customer_id` | `customer.customers.id` | restrict | reviewer; customers soft-delete |
+| `product_reviews.order_id` | `marketplace.orders.id` | **CASCADE** | deleting order removes its reviews |
+| `product_reviews.order_item_id` | `marketplace.order_items.id` | **CASCADE** + **UNIQUE** | one review per purchased line |
+| `product_review_media.review_id` | `product_reviews.id` | **CASCADE** | deleting review removes photo links |
+| `product_review_media.media_asset_id` | `media.media_assets.id` | **CASCADE** | deleting file row clears the link |
+| `product_review_votes.review_id` | `product_reviews.id` | **CASCADE** | deleting review removes votes |
+| `product_review_votes.customer_id` | `customer.customers.id` | **CASCADE** | hard-deleting voter removes their vote |
+
+### CREATE TABLE (migration `000027`)
+
+```sql
+CREATE TABLE marketplace.product_reviews (
+    id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id               uuid NOT NULL REFERENCES seller.products (id),
+    shop_id                  uuid NOT NULL REFERENCES seller.shops (id),
+    seller_id                uuid NOT NULL REFERENCES seller.sellers (id),
+    customer_id              uuid NOT NULL REFERENCES customer.customers (id),
+    order_id                 uuid NOT NULL REFERENCES marketplace.orders (id) ON DELETE CASCADE,
+    order_item_id            uuid NOT NULL UNIQUE REFERENCES marketplace.order_items (id) ON DELETE CASCADE,
+    rating                   smallint NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    product_quality_rating   smallint NOT NULL CHECK (product_quality_rating BETWEEN 1 AND 5),
+    shipping_rating          smallint NOT NULL CHECK (shipping_rating BETWEEN 1 AND 5),
+    seller_service_rating    smallint NOT NULL CHECK (seller_service_rating BETWEEN 1 AND 5),
+    title                    text,
+    body                     text,
+    is_anonymous             boolean NOT NULL DEFAULT false,
+    status                   text NOT NULL DEFAULT 'published'
+                             CHECK (status IN ('pending', 'published', 'hidden', 'rejected')),
+    seller_reply             text,
+    seller_replied_at        timestamptz,
+    helpful_count            integer NOT NULL DEFAULT 0 CHECK (helpful_count >= 0),
+    created_at               timestamptz NOT NULL DEFAULT now(),
+    updated_at               timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE marketplace.product_review_media (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    review_id       uuid NOT NULL REFERENCES marketplace.product_reviews (id) ON DELETE CASCADE,
+    media_asset_id  uuid NOT NULL REFERENCES media.media_assets (id) ON DELETE CASCADE,
+    position        integer NOT NULL DEFAULT 0 CHECK (position >= 0),
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (review_id, position),
+    UNIQUE (review_id, media_asset_id)
+);
+
+CREATE TABLE marketplace.product_review_votes (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    review_id    uuid NOT NULL REFERENCES marketplace.product_reviews (id) ON DELETE CASCADE,
+    customer_id  uuid NOT NULL REFERENCES customer.customers (id) ON DELETE CASCADE,
+    is_helpful   boolean NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (review_id, customer_id)
+);
+```
+
+### `marketplace.product_reviews` — columns
 
 | Column | Type | Key / constraint | Notes |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
 | `product_id` | uuid | **FK → `seller.products(id)`**, NOT NULL | product being reviewed |
 | `shop_id` | uuid | **FK → `seller.shops(id)`**, NOT NULL | denormalized for shop rating queries |
-| `seller_id` | uuid | **FK → `seller.sellers(id)`**, NOT NULL | denormalized for seller rating |
+| `seller_id` | uuid | **FK → `seller.sellers(id)`**, NOT NULL | denormalized; seller list/reply auth |
 | `customer_id` | uuid | **FK → `customer.customers(id)`**, NOT NULL, indexed | reviewer |
 | `order_id` | uuid | **FK → `marketplace.orders(id)` ON DELETE CASCADE**, NOT NULL, indexed | purchase proof |
 | `order_item_id` | uuid | **FK → `marketplace.order_items(id)` ON DELETE CASCADE**, NOT NULL **UNIQUE** | one review per line |
@@ -795,12 +868,12 @@ erDiagram
 | `status` | text | DEFAULT `published`, CHECK | `pending`, `published`, `hidden`, `rejected` |
 | `seller_reply` | text | nullable | optional seller response |
 | `seller_replied_at` | timestamptz | nullable | |
-| `helpful_count` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | denormalized upvote count |
+| `helpful_count` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | denormalized count of `is_helpful = true` votes |
 | `created_at`, `updated_at` | timestamptz | NOT NULL | |
 
-API should only allow create when the line’s `fulfilment_status = 'delivered'`.
+API only allows create when the line’s `fulfilment_status = 'delivered'`.
 
-### `marketplace.product_review_media`
+### `marketplace.product_review_media` — columns
 
 | Column | Type | Key / constraint | Notes |
 | --- | --- | --- | --- |
@@ -812,7 +885,7 @@ API should only allow create when the line’s `fulfilment_status = 'delivered'`
 | — | — | **UNIQUE (review_id, position)** | |
 | — | — | **UNIQUE (review_id, media_asset_id)** | |
 
-### `marketplace.product_review_votes`
+### `marketplace.product_review_votes` — columns
 
 | Column | Type | Key / constraint | Notes |
 | --- | --- | --- | --- |
@@ -822,6 +895,88 @@ API should only allow create when the line’s `fulfilment_status = 'delivered'`
 | `is_helpful` | boolean | NOT NULL | true = helpful, false = not helpful |
 | `created_at` | timestamptz | NOT NULL | |
 | — | — | **UNIQUE (review_id, customer_id)** | one vote per customer per review |
+
+### Example rows (how FKs link)
+
+Assume these existing ids:
+
+| Role | Table | Example id |
+| --- | --- | --- |
+| Customer (reviewer) | `customer.customers` | `9c2f1111-aaaa-bbbb-cccc-ddddeeeeffff` |
+| Customer (voter) | `customer.customers` | `aaaa2222-bbbb-cccc-dddd-eeeeffff0000` |
+| Seller | `seller.sellers` | `77aa1111-2222-3333-4444-555566667777` |
+| Shop | `seller.shops` | `d40b1111-2222-3333-4444-555566667777` |
+| Product | `seller.products` | `317ae580-aaaa-bbbb-cccc-ddddeeeeffff` |
+| Order | `marketplace.orders` | `c7f9a1b2-1111-2222-3333-444455556666` |
+| Order item (delivered) | `marketplace.order_items` | `60fca39c-9818-456a-a0a0-8c753c39182b` |
+| Media file | `media.media_assets` | `m1111111-2222-3333-4444-555566667777` |
+
+**`marketplace.product_reviews` (1 row)**
+
+| Column | Value |
+| --- | --- |
+| `id` | `a1b2c3d4-1111-2222-3333-444455556666` |
+| `product_id` | `317ae580-aaaa-bbbb-cccc-ddddeeeeffff` → products |
+| `shop_id` | `d40b1111-2222-3333-4444-555566667777` → shops |
+| `seller_id` | `77aa1111-2222-3333-4444-555566667777` → sellers |
+| `customer_id` | `9c2f1111-aaaa-bbbb-cccc-ddddeeeeffff` → customers |
+| `order_id` | `c7f9a1b2-1111-2222-3333-444455556666` → orders |
+| `order_item_id` | `60fca39c-9818-456a-a0a0-8c753c39182b` → order_items (**unique**) |
+| `rating` | `5` |
+| `product_quality_rating` | `5` |
+| `shipping_rating` | `4` |
+| `seller_service_rating` | `5` |
+| `title` | `Great gift` |
+| `body` | `Arrived on time` |
+| `is_anonymous` | `false` |
+| `status` | `published` |
+| `seller_reply` | `null` |
+| `helpful_count` | `1` |
+
+**`marketplace.product_review_media` (1 row)**
+
+| Column | Value |
+| --- | --- |
+| `id` | `rm111111-2222-3333-4444-555566667777` |
+| `review_id` | `a1b2c3d4-1111-2222-3333-444455556666` → product_reviews |
+| `media_asset_id` | `m1111111-2222-3333-4444-555566667777` → media_assets |
+| `position` | `0` |
+
+**`marketplace.product_review_votes` (1 row)**
+
+| Column | Value |
+| --- | --- |
+| `id` | `v1111111-2222-3333-4444-555566667777` |
+| `review_id` | `a1b2c3d4-1111-2222-3333-444455556666` → product_reviews |
+| `customer_id` | `aaaa2222-bbbb-cccc-dddd-eeeeffff0000` → customers |
+| `is_helpful` | `true` |
+
+```
+order_item (delivered)
+    └── product_reviews          (1:1 via order_item_id)
+            ├── product_review_media[]  → media_assets
+            └── product_review_votes[]  → customers (voters)
+```
+
+### How a review resolves in the API
+
+```
+GET /products/{productId}/reviews
+  → marketplace.product_reviews   WHERE product_id AND status='published'
+  → marketplace.product_review_media  ON review_id  (order by position)
+  → media.media_assets               ON media_asset_id  → cdn_url
+  → customer.customers               ON customer_id     → display_name (or "Anonymous")
+
+GET /sellers/me/reviews
+  → marketplace.product_reviews   WHERE seller_id = JWT subject
+
+PUT /sellers/me/reviews/{id}/reply
+  → UPDATE product_reviews SET seller_reply=… WHERE id AND seller_id = JWT
+
+PUT /reviews/{id}/vote
+  → UPSERT product_review_votes (review_id, customer_id)
+  → recount helpful_count on product_reviews
+```
 
 ---
 
@@ -1109,17 +1264,18 @@ What actually disappears when a row goes.
 | Delete | Cascades to | Survives |
 | --- | --- | --- |
 | `core.countries` | nothing | **fails** if any customer, seller, address, order, or capability references it |
-| `customer.customers` (hard) | `customer_addresses`, `recipients` → `recipient_addresses`, `saved_gifts` | **fails** if the customer has orders |
+| `customer.customers` (hard) | `customer_addresses`, `recipients` → `recipient_addresses`, `saved_gifts`, `product_review_votes` | **fails** if the customer has orders or authored `product_reviews` (`customer_id` restrict) |
 | `customer.customers` (API soft delete) | nothing | everything, including their addresses and orders |
 | `customer.recipients` | `recipient_addresses` | orders keep the line, `recipient_id` becomes null |
-| `seller.sellers` (hard) | `seller_addresses`, `shops` → `products` → `inventory`, `reels` → `reel_media` | **fails** if the seller has order items or shipments |
+| `seller.sellers` (hard) | `seller_addresses`, `shops` → `products` → `inventory`, `reels` → `reel_media` | **fails** if the seller has order items, shipments, or `product_reviews` |
 | `seller.sellers` (API soft delete) | nothing | everything, including `active` shops still shown publicly |
-| `seller.shops` | `products` → `inventory`, `reels` → `reel_media` | **fails** if any product is on an order item |
-| `seller.products` | `inventory`, `saved_gifts` rows; `reels.product_id` → null | **fails** if the product is on an order item |
+| `seller.shops` | `products` → `inventory`, `reels` → `reel_media` | **fails** if any product is on an order item or `product_reviews` |
+| `seller.products` | `inventory`, `saved_gifts` rows; `reels.product_id` → null | **fails** if the product is on an order item or `product_reviews` |
 | `seller.reels` | `reel_media`; the S3 objects are deleted best-effort by the service | the `media_assets` rows are deleted explicitly by the repository |
-| `media.media_assets` | `reel_media` rows; `reels.thumbnail_media_id` → null | `shipments.label_media_id` and `orders.media_greeting_id` become dangling (no FK) |
-| `marketplace.orders` | `order_items` → `shipments` | — |
-| `marketplace.order_items` | `shipments` for that line | the order header |
+| `media.media_assets` | `reel_media` rows; `product_review_media` rows; `reels.thumbnail_media_id` → null | `shipments.label_media_id` and `orders.media_greeting_id` become dangling (no FK) |
+| `marketplace.orders` | `order_items` → `shipments`; `product_reviews` → media links + votes | — |
+| `marketplace.order_items` | `shipments` for that line; `product_reviews` for that line (CASCADE) | the order header |
+| `marketplace.product_reviews` | `product_review_media`, `product_review_votes`; service also deletes linked `media_assets` | — |
 
 ---
 
