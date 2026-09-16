@@ -43,6 +43,8 @@ var allowedFolders = map[string]string{
 	"reel-photo":     "public/reels/photos",
 	"chat-image":     "public/chat/images",
 	"chat-document":  "public/chat/documents",
+	"review-photo":   "public/reviews/photos",
+	"review-video":   "public/reviews/videos",
 }
 
 // PresignUpload issues a short-lived URL the client can PUT a file to directly.
