@@ -421,6 +421,71 @@ func (s *ShippingService) downloadAndStoreLabel(ctx context.Context, labelURL st
 	return s.s3.Upload(ctx, "labels", "label.pdf", resp.Body, "application/pdf")
 }
 
+// ManualShipmentInput is the body for marking an order item shipped without a
+// Shippo label — the fallback for a lane no connected carrier account quotes
+// (a common case: Shippo's test carriers are all US/Canada/Europe and will
+// never return a rate for, say, a domestic Sri Lanka shipment).
+type ManualShipmentInput struct {
+	// The seller's own courier, e.g. "Kandy Express Couriers". Required: the
+	// customer needs some name to ask about, even without live tracking.
+	CourierProvider string `json:"courier_provider"`
+	// The seller's own tracking number or reference. Required for the same
+	// reason.
+	TrackingNumber string `json:"tracking_number"`
+	// A tracking page URL, if the seller's courier has one. Optional.
+	TrackingURL string `json:"tracking_url"`
+}
+
+// MarkShippedManually records a seller-arranged shipment — no Shippo label,
+// no carrier rate — and dispatches the order item. It exists for exactly the
+// case GetRates cannot help with: a real shipment on a lane none of Shippo's
+// carrier accounts serve, where waiting for a rate that will never come would
+// leave the order stuck at "accepted" forever.
+func (s *ShippingService) MarkShippedManually(ctx context.Context, sellerID, orderItemID string, in ManualShipmentInput) (*models.Shipment, error) {
+	provider := strings.TrimSpace(in.CourierProvider)
+	tracking := strings.TrimSpace(in.TrackingNumber)
+	if provider == "" || tracking == "" {
+		return nil, ErrInvalidInput
+	}
+
+	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err
+	}
+	if sc.FulfilmentStatus != "accepted" && sc.FulfilmentStatus != "preparing" && sc.FulfilmentStatus != "ready" {
+		return nil, ErrShippingNotReady
+	}
+
+	shipment := &models.Shipment{
+		OrderID:         sc.OrderID,
+		OrderItemID:     &sc.OrderItemID,
+		SellerID:        sc.SellerID,
+		CourierProvider: &provider,
+		TrackingNumber:  &tracking,
+		// No carrier account, no label — the seller is fulfilling this
+		// themselves, so there is nothing further for Shippo's webhook to
+		// update. "in_transit" is the closest existing status to "the seller
+		// has sent this and here is a number to ask about it".
+		DeliveryMode: "seller_managed",
+		Status:       "in_transit",
+	}
+	trackingURL := strings.TrimSpace(in.TrackingURL)
+	if trackingURL != "" {
+		shipment.ProviderTrackingURL = &trackingURL
+	}
+
+	if err := s.shipments.Create(ctx, shipment); err != nil {
+		return nil, err
+	}
+	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
+		return nil, err
+	}
+	return shipment, nil
+}
+
 // LabelURL returns a temporary download link for the label PDF the seller
 // already bought for this order item.
 //

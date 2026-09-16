@@ -77,8 +77,8 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 			coalesce(se.trading_name, s.name, se.legal_name), se.email, coalesce(se.phone, ''),
 			sa.line1, coalesce(sa.line2, ''), sa.city, coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
 			coalesce(fc.iso_code, ''),
-			r.name, coalesce(r.email::text, ''), coalesce(r.phone, ''),
-			ra.line1, coalesce(ra.line2, ''), ra.city, coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
+			coalesce(r.name, ''), coalesce(r.email::text, ''), coalesce(r.phone, ''),
+			coalesce(ra.line1, ''), coalesce(ra.line2, ''), coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
 			coalesce(tc.iso_code, ''),
 			sh.parcel_details, sh.customs_declaration
 		from marketplace.order_items oi
@@ -181,11 +181,11 @@ func (r *ShipmentRepository) Create(ctx context.Context, s *models.Shipment) err
 	}
 	return r.db.QueryRow(ctx, `
 		insert into marketplace.shipments (
-			order_id, seller_id, courier_provider, tracking_number, label_media_id,
+			order_id, order_item_id, seller_id, courier_provider, tracking_number, label_media_id,
 			delivery_mode, status, provider_shipment_id, provider_tracking_url, provider_metadata
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		returning id, created_at, updated_at`,
-		s.OrderID, s.SellerID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID,
+		s.OrderID, s.OrderItemID, s.SellerID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID,
 		s.DeliveryMode, s.Status, s.ProviderShipmentID, s.ProviderTrackingURL, meta,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }

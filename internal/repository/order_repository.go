@@ -153,12 +153,26 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 }
 
 func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]models.OrderItem, error) {
+	// Each line carries its shipment so the customer can follow the parcel.
+	// A line can have more than one shipment row — a pending quote is written
+	// when the seller asks for rates, before any label exists — so the lateral
+	// picks the real one: anything past 'pending', most recent first.
 	rows, err := r.db.Query(ctx, `
-		select id, order_id, seller_id, shop_id, product_id, quantity,
-		       unit_amount, total_amount, fulfilment_status, created_at, updated_at
-		from marketplace.order_items
-		where order_id = $1
-		order by created_at asc`, orderID)
+		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
+		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+		       sh.courier_provider, sh.tracking_number, sh.provider_tracking_url,
+		       sh.status, sh.delivery_mode, sh.delivered_at, sh.created_at
+		from marketplace.order_items oi
+		left join lateral (
+			select s.courier_provider, s.tracking_number, s.provider_tracking_url,
+			       s.status, s.delivery_mode, s.delivered_at, s.created_at
+			from marketplace.shipments s
+			where s.order_item_id = oi.id and s.status <> 'pending'
+			order by s.created_at desc
+			limit 1
+		) sh on true
+		where oi.order_id = $1
+		order by oi.created_at asc`, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,12 +180,38 @@ func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]mode
 
 	items := []models.OrderItem{}
 	for rows.Next() {
-		var it models.OrderItem
+		var (
+			it           models.OrderItem
+			courier      *string
+			trackingNo   *string
+			trackingURL  *string
+			shipStatus   *string
+			deliveryMode *string
+			deliveredAt  *time.Time
+			shippedAt    *time.Time
+		)
 		if err := rows.Scan(
 			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
 			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
+			&courier, &trackingNo, &trackingURL,
+			&shipStatus, &deliveryMode, &deliveredAt, &shippedAt,
 		); err != nil {
 			return nil, err
+		}
+		// No shipment row yet: the line simply has not shipped.
+		if shipStatus != nil && shippedAt != nil {
+			tracking := models.OrderItemTracking{
+				CourierProvider: courier,
+				TrackingNumber:  trackingNo,
+				TrackingURL:     trackingURL,
+				Status:          *shipStatus,
+				DeliveredAt:     deliveredAt,
+				ShippedAt:       *shippedAt,
+			}
+			if deliveryMode != nil {
+				tracking.DeliveryMode = *deliveryMode
+			}
+			it.Tracking = &tracking
 		}
 		items = append(items, it)
 	}
