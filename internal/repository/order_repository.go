@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -151,12 +153,26 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 }
 
 func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]models.OrderItem, error) {
+	// Each line carries its shipment so the customer can follow the parcel.
+	// A line can have more than one shipment row — a pending quote is written
+	// when the seller asks for rates, before any label exists — so the lateral
+	// picks the real one: anything past 'pending', most recent first.
 	rows, err := r.db.Query(ctx, `
-		select id, order_id, seller_id, shop_id, product_id, quantity,
-		       unit_amount, total_amount, fulfilment_status, created_at, updated_at
-		from marketplace.order_items
-		where order_id = $1
-		order by created_at asc`, orderID)
+		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
+		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+		       sh.courier_provider, sh.tracking_number, sh.provider_tracking_url,
+		       sh.status, sh.delivery_mode, sh.delivered_at, sh.created_at
+		from marketplace.order_items oi
+		left join lateral (
+			select s.courier_provider, s.tracking_number, s.provider_tracking_url,
+			       s.status, s.delivery_mode, s.delivered_at, s.created_at
+			from marketplace.shipments s
+			where s.order_item_id = oi.id and s.status <> 'pending'
+			order by s.created_at desc
+			limit 1
+		) sh on true
+		where oi.order_id = $1
+		order by oi.created_at asc`, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,12 +180,38 @@ func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]mode
 
 	items := []models.OrderItem{}
 	for rows.Next() {
-		var it models.OrderItem
+		var (
+			it           models.OrderItem
+			courier      *string
+			trackingNo   *string
+			trackingURL  *string
+			shipStatus   *string
+			deliveryMode *string
+			deliveredAt  *time.Time
+			shippedAt    *time.Time
+		)
 		if err := rows.Scan(
 			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
 			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
+			&courier, &trackingNo, &trackingURL,
+			&shipStatus, &deliveryMode, &deliveredAt, &shippedAt,
 		); err != nil {
 			return nil, err
+		}
+		// No shipment row yet: the line simply has not shipped.
+		if shipStatus != nil && shippedAt != nil {
+			tracking := models.OrderItemTracking{
+				CourierProvider: courier,
+				TrackingNumber:  trackingNo,
+				TrackingURL:     trackingURL,
+				Status:          *shipStatus,
+				DeliveredAt:     deliveredAt,
+				ShippedAt:       *shippedAt,
+			}
+			if deliveryMode != nil {
+				tracking.DeliveryMode = *deliveryMode
+			}
+			it.Tracking = &tracking
 		}
 		items = append(items, it)
 	}
@@ -288,8 +330,43 @@ func (r *OrderRepository) GetItemForCustomer(ctx context.Context, customerID, it
 
 func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID string) (*models.SellerOrderItemDetails, error) {
 	d := &models.SellerOrderItemDetails{}
-	var recipient models.Recipient
-	var addr models.RecipientAddress
+
+	// An order placed without a recipient (e.g. a personal order sent to the
+	// buyer themselves) leaves o.recipient_id NULL, so the LEFT JOINs return
+	// an all-NULL row for r.* and ra.*. Recipient and RecipientAddress model
+	// their required columns (id, name, created_at, ...) as non-nullable Go
+	// types, which pgx cannot scan a NULL into — so every recipient/address
+	// column is scanned into a nullable holder here and the structs are only
+	// built when a recipient actually exists.
+	var (
+		recipientID               *uuid.UUID
+		recipientCustomerID       *uuid.UUID
+		recipientName             *string
+		recipientRelationship     *string
+		recipientEmail            *string
+		recipientPhone            *string
+		recipientImageURL         *string
+		recipientDefaultAddressID *uuid.UUID
+		recipientPreferences      json.RawMessage
+		recipientCreatedAt        *time.Time
+		recipientUpdatedAt        *time.Time
+
+		addrID          *uuid.UUID
+		addrRecipientID *uuid.UUID
+		addrCountryID   *uuid.UUID
+		addrLabel       *string
+		addrType        *string
+		addrLine1       *string
+		addrLine2       *string
+		addrCity        *string
+		addrRegion      *string
+		addrPostalCode  *string
+		addrLatitude    *float64
+		addrLongitude   *float64
+		addrIsDefault   *bool
+		addrCreatedAt   *time.Time
+		addrUpdatedAt   *time.Time
+	)
 
 	err := r.db.QueryRow(ctx, `
 		select
@@ -317,11 +394,11 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 		&d.Product.ID, &d.Product.ShopID, &d.Product.Name, &d.Product.Slug, &d.Product.Description, &d.Product.ProductType, &d.Product.PriceAmount,
 		&d.Product.Currency, &d.Product.Status, &d.Product.OccasionTags, &d.Product.CustomerTypeVisibility,
 		&d.Product.PointsDisplayEnabled, &d.Product.PrepMinutes, &d.Product.CreatedAt, &d.Product.UpdatedAt, &d.Product.ImageURL,
-		&recipient.ID, &recipient.CustomerID, &recipient.Name, &recipient.Relationship, &recipient.Email, &recipient.Phone, &recipient.ImageURL,
-		&recipient.DefaultAddressID, &recipient.Preferences, &recipient.CreatedAt, &recipient.UpdatedAt,
-		&addr.ID, &addr.RecipientID, &addr.CountryID, &addr.Label, &addr.AddressType, &addr.Line1, &addr.Line2,
-		&addr.City, &addr.Region, &addr.PostalCode, &addr.Latitude, &addr.Longitude, &addr.IsDefault,
-		&addr.CreatedAt, &addr.UpdatedAt,
+		&recipientID, &recipientCustomerID, &recipientName, &recipientRelationship, &recipientEmail, &recipientPhone, &recipientImageURL,
+		&recipientDefaultAddressID, &recipientPreferences, &recipientCreatedAt, &recipientUpdatedAt,
+		&addrID, &addrRecipientID, &addrCountryID, &addrLabel, &addrType, &addrLine1, &addrLine2,
+		&addrCity, &addrRegion, &addrPostalCode, &addrLatitude, &addrLongitude, &addrIsDefault,
+		&addrCreatedAt, &addrUpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderItemNotFound
@@ -329,12 +406,69 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 	if err != nil {
 		return nil, err
 	}
-	if recipient.ID != uuid.Nil {
+
+	if recipientID != nil {
+		recipient := models.Recipient{
+			ID:               *recipientID,
+			Relationship:     recipientRelationship,
+			Email:            recipientEmail,
+			Phone:            recipientPhone,
+			ImageURL:         recipientImageURL,
+			DefaultAddressID: recipientDefaultAddressID,
+			Preferences:      recipientPreferences,
+		}
+		if recipientCustomerID != nil {
+			recipient.CustomerID = *recipientCustomerID
+		}
+		if recipientName != nil {
+			recipient.Name = *recipientName
+		}
+		if recipientCreatedAt != nil {
+			recipient.CreatedAt = *recipientCreatedAt
+		}
+		if recipientUpdatedAt != nil {
+			recipient.UpdatedAt = *recipientUpdatedAt
+		}
 		d.Recipient = &recipient
 	}
-	if addr.ID != uuid.Nil {
+
+	if addrID != nil {
+		addr := models.RecipientAddress{
+			ID:         *addrID,
+			Label:      addrLabel,
+			Line2:      addrLine2,
+			Region:     addrRegion,
+			PostalCode: addrPostalCode,
+			Latitude:   addrLatitude,
+			Longitude:  addrLongitude,
+		}
+		if addrRecipientID != nil {
+			addr.RecipientID = *addrRecipientID
+		}
+		if addrCountryID != nil {
+			addr.CountryID = *addrCountryID
+		}
+		if addrType != nil {
+			addr.AddressType = *addrType
+		}
+		if addrLine1 != nil {
+			addr.Line1 = *addrLine1
+		}
+		if addrCity != nil {
+			addr.City = *addrCity
+		}
+		if addrIsDefault != nil {
+			addr.IsDefault = *addrIsDefault
+		}
+		if addrCreatedAt != nil {
+			addr.CreatedAt = *addrCreatedAt
+		}
+		if addrUpdatedAt != nil {
+			addr.UpdatedAt = *addrUpdatedAt
+		}
 		d.ShippingAddress = &addr
 	}
+
 	return d, nil
 }
 

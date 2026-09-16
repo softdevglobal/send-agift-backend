@@ -229,11 +229,26 @@ func (r *MessagingRepository) participantsByConversation(ctx context.Context, id
 	if len(ids) == 0 {
 		return out, nil
 	}
+	// user_id is polymorphic, so the name/photo come from whichever table the
+	// participant's role points at.
 	rows, err := r.db.Query(ctx, `
-		select id, conversation_id, user_id, role, last_read_at, joined_at
-		from messaging.conversation_participants
-		where conversation_id = any($1)
-		order by joined_at asc`, ids)
+		select p.id, p.conversation_id, p.user_id, p.role, p.last_read_at, p.joined_at,
+		       case p.role
+		           when 'customer' then nullif(btrim(cu.display_name), '')
+		           when 'seller'   then coalesce(nullif(btrim(se.trading_name), ''), se.legal_name)
+		           when 'admin'    then nullif(btrim(ad.display_name), '')
+		       end as display_name,
+		       case p.role
+		           when 'customer' then cu.image_url
+		           when 'seller'   then se.image_url
+		           when 'admin'    then ad.image_url
+		       end as image_url
+		from messaging.conversation_participants p
+		left join customer.customers cu on p.role = 'customer' and cu.id = p.user_id
+		left join seller.sellers se     on p.role = 'seller'   and se.id = p.user_id
+		left join admin.admin_users ad  on p.role = 'admin'    and ad.id = p.user_id
+		where p.conversation_id = any($1)
+		order by p.joined_at asc`, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +256,10 @@ func (r *MessagingRepository) participantsByConversation(ctx context.Context, id
 
 	for rows.Next() {
 		var p models.ConversationParticipant
-		if err := rows.Scan(&p.ID, &p.ConversationID, &p.UserID, &p.Role, &p.LastReadAt, &p.JoinedAt); err != nil {
+		if err := rows.Scan(
+			&p.ID, &p.ConversationID, &p.UserID, &p.Role, &p.LastReadAt, &p.JoinedAt,
+			&p.DisplayName, &p.ImageURL,
+		); err != nil {
 			return nil, err
 		}
 		out[p.ConversationID] = append(out[p.ConversationID], p)

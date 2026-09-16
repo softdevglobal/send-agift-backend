@@ -13,7 +13,20 @@ import (
 	"myapp/internal/models"
 )
 
-var ErrShipmentNotFound = errors.New("shipment not found")
+var (
+	ErrShipmentNotFound = errors.New("shipment not found")
+	// ErrShipmentLabelNotFound means the shipment exists but no label has been
+	// bought for it yet, so there is no PDF to hand back.
+	ErrShipmentLabelNotFound = errors.New("shipment label not found")
+)
+
+// ShipmentLabel is the stored label PDF for one order item.
+type ShipmentLabel struct {
+	ObjectPath     string
+	MimeType       string
+	TrackingNumber *string
+	Provider       *string
+}
 
 // ShipmentRepository persists shipping quotes/labels on marketplace.shipments.
 type ShipmentRepository struct {
@@ -64,8 +77,8 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 			coalesce(se.trading_name, s.name, se.legal_name), se.email, coalesce(se.phone, ''),
 			sa.line1, coalesce(sa.line2, ''), sa.city, coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
 			coalesce(fc.iso_code, ''),
-			r.name, coalesce(r.email::text, ''), coalesce(r.phone, ''),
-			ra.line1, coalesce(ra.line2, ''), ra.city, coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
+			coalesce(r.name, ''), coalesce(r.email::text, ''), coalesce(r.phone, ''),
+			coalesce(ra.line1, ''), coalesce(ra.line2, ''), coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
 			coalesce(tc.iso_code, ''),
 			sh.parcel_details, sh.customs_declaration
 		from marketplace.order_items oi
@@ -168,11 +181,11 @@ func (r *ShipmentRepository) Create(ctx context.Context, s *models.Shipment) err
 	}
 	return r.db.QueryRow(ctx, `
 		insert into marketplace.shipments (
-			order_id, seller_id, courier_provider, tracking_number, label_media_id,
+			order_id, order_item_id, seller_id, courier_provider, tracking_number, label_media_id,
 			delivery_mode, status, provider_shipment_id, provider_tracking_url, provider_metadata
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		returning id, created_at, updated_at`,
-		s.OrderID, s.SellerID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID,
+		s.OrderID, s.OrderItemID, s.SellerID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID,
 		s.DeliveryMode, s.Status, s.ProviderShipmentID, s.ProviderTrackingURL, meta,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
@@ -259,4 +272,48 @@ func (r *ShipmentRepository) MarkOrderItemDispatched(ctx context.Context, orderI
 		set fulfilment_status = 'dispatched', updated_at = now()
 		where id = $1`, orderItemID)
 	return err
+}
+
+// GetLabelForSeller returns the stored label PDF for the seller's own order
+// item. The seller id is part of the query rather than checked afterwards, so
+// one seller can never read another's label by guessing an order item id.
+func (r *ShipmentRepository) GetLabelForSeller(ctx context.Context, sellerID, orderItemID string) (*ShipmentLabel, error) {
+	sellerUUID, err := uuid.Parse(sellerID)
+	if err != nil {
+		return nil, ErrShipmentNotFound
+	}
+	itemUUID, err := uuid.Parse(orderItemID)
+	if err != nil {
+		return nil, ErrShipmentNotFound
+	}
+
+	var (
+		label      ShipmentLabel
+		objectPath *string
+		mimeType   *string
+	)
+	err = r.db.QueryRow(ctx, `
+		select a.object_path, a.mime_type, s.tracking_number, s.courier_provider
+		from marketplace.shipments s
+		left join media.media_assets a on a.id = s.label_media_id
+		where s.order_item_id = $1 and s.seller_id = $2`,
+		itemUUID, sellerUUID,
+	).Scan(&objectPath, &mimeType, &label.TrackingNumber, &label.Provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrShipmentNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	// A shipment row exists from the rate quote before any label is bought.
+	if objectPath == nil || *objectPath == "" {
+		return nil, ErrShipmentLabelNotFound
+	}
+
+	label.ObjectPath = *objectPath
+	label.MimeType = "application/pdf"
+	if mimeType != nil && *mimeType != "" {
+		label.MimeType = *mimeType
+	}
+	return &label, nil
 }

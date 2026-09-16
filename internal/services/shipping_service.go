@@ -18,7 +18,21 @@ var (
 	ErrShippingNotReady      = errors.New("order item is not ready for shipping")
 	ErrShippingAddress       = errors.New("shipping addresses are incomplete")
 	ErrShippingProvider      = errors.New("shipping provider error")
+	ErrShippingLabelNotFound = errors.New("shipping label not found")
 )
+
+// LabelLink is a short-lived link to a bought label PDF.
+type LabelLink struct {
+	URL            string  `json:"url"`
+	MimeType       string  `json:"mime_type"`
+	ExpiresInSecs  int     `json:"expires_in_seconds"`
+	TrackingNumber *string `json:"tracking_number,omitempty"`
+	Provider       *string `json:"provider,omitempty"`
+}
+
+// labelLinkTTL is how long a label download link stays valid. Short, because
+// the PDF carries the recipient's full address and the link needs no auth.
+const labelLinkTTL = 10 * time.Minute
 
 // ShippingService orchestrates rates, label purchase, and tracking webhooks.
 // Flow: accept order item → GetRates (stores pending shipment) → BuyLabel (updates same row).
@@ -54,7 +68,7 @@ func NewShippingService(
 
 // ShippingRatesResult is returned by GetRates for the seller to pick a carrier rate.
 type ShippingRatesResult struct {
-	ShipmentObjectID     string       `json:"shipment_object_id"`                // Shippo shipment id
+	ShipmentObjectID     string       `json:"shipment_object_id"`               // Shippo shipment id
 	CustomsDeclarationID string       `json:"customs_declaration_id,omitempty"` // set for international
 	International        bool         `json:"international"`
 	Rates                []ShippoRate `json:"rates"`
@@ -134,7 +148,16 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 		return nil, fmt.Errorf("%w: %v", ErrShippingProvider, err)
 	}
 	if len(shippoShipment.Rates) == 0 {
-		return nil, fmt.Errorf("%w: no rates returned — use valid US addresses in test mode and ensure the seller shop has an address linked", ErrShippingProvider)
+		// Shippo returns 200/SUCCESS with an empty rates array (not an error)
+		// when it has no carrier account able to quote this lane — most often
+		// a real domestic or international route with no test-mode simulation,
+		// e.g. neither address is one of Shippo's US test addresses. Shippo's
+		// own per-shipment messages say why; surface them instead of only the
+		// generic hint, which otherwise reads as a config problem every time.
+		if detail := formatShippoMessages(shippoShipment.Messages); detail != "" && detail != "unknown error" {
+			return nil, fmt.Errorf("%w: no rates returned — %s", ErrShippingProvider, detail)
+		}
+		return nil, fmt.Errorf("%w: no rates returned — Shippo's test carriers do not quote every lane; use one of Shippo's documented US test addresses, or connect a real carrier account for this route", ErrShippingProvider)
 	}
 
 	// Persist quote so BuyLabel can update this same pending row.
@@ -396,4 +419,100 @@ func (s *ShippingService) downloadAndStoreLabel(ctx context.Context, labelURL st
 		return "", fmt.Errorf("download label: status %d", resp.StatusCode)
 	}
 	return s.s3.Upload(ctx, "labels", "label.pdf", resp.Body, "application/pdf")
+}
+
+// ManualShipmentInput is the body for marking an order item shipped without a
+// Shippo label — the fallback for a lane no connected carrier account quotes
+// (a common case: Shippo's test carriers are all US/Canada/Europe and will
+// never return a rate for, say, a domestic Sri Lanka shipment).
+type ManualShipmentInput struct {
+	// The seller's own courier, e.g. "Kandy Express Couriers". Required: the
+	// customer needs some name to ask about, even without live tracking.
+	CourierProvider string `json:"courier_provider"`
+	// The seller's own tracking number or reference. Required for the same
+	// reason.
+	TrackingNumber string `json:"tracking_number"`
+	// A tracking page URL, if the seller's courier has one. Optional.
+	TrackingURL string `json:"tracking_url"`
+}
+
+// MarkShippedManually records a seller-arranged shipment — no Shippo label,
+// no carrier rate — and dispatches the order item. It exists for exactly the
+// case GetRates cannot help with: a real shipment on a lane none of Shippo's
+// carrier accounts serve, where waiting for a rate that will never come would
+// leave the order stuck at "accepted" forever.
+func (s *ShippingService) MarkShippedManually(ctx context.Context, sellerID, orderItemID string, in ManualShipmentInput) (*models.Shipment, error) {
+	provider := strings.TrimSpace(in.CourierProvider)
+	tracking := strings.TrimSpace(in.TrackingNumber)
+	if provider == "" || tracking == "" {
+		return nil, ErrInvalidInput
+	}
+
+	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err
+	}
+	if sc.FulfilmentStatus != "accepted" && sc.FulfilmentStatus != "preparing" && sc.FulfilmentStatus != "ready" {
+		return nil, ErrShippingNotReady
+	}
+
+	shipment := &models.Shipment{
+		OrderID:         sc.OrderID,
+		OrderItemID:     &sc.OrderItemID,
+		SellerID:        sc.SellerID,
+		CourierProvider: &provider,
+		TrackingNumber:  &tracking,
+		// No carrier account, no label — the seller is fulfilling this
+		// themselves, so there is nothing further for Shippo's webhook to
+		// update. "in_transit" is the closest existing status to "the seller
+		// has sent this and here is a number to ask about it".
+		DeliveryMode: "seller_managed",
+		Status:       "in_transit",
+	}
+	trackingURL := strings.TrimSpace(in.TrackingURL)
+	if trackingURL != "" {
+		shipment.ProviderTrackingURL = &trackingURL
+	}
+
+	if err := s.shipments.Create(ctx, shipment); err != nil {
+		return nil, err
+	}
+	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
+		return nil, err
+	}
+	return shipment, nil
+}
+
+// LabelURL returns a temporary download link for the label PDF the seller
+// already bought for this order item.
+//
+// Labels live in a private bucket, so they are never served by a public URL —
+// the seller gets a short-lived presigned link instead, and only for an order
+// item that is their own.
+func (s *ShippingService) LabelURL(ctx context.Context, sellerID, orderItemID string) (*LabelLink, error) {
+	label, err := s.shipments.GetLabelForSeller(ctx, sellerID, orderItemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrShipmentLabelNotFound) {
+			return nil, ErrShippingLabelNotFound
+		}
+		if errors.Is(err, repository.ErrShipmentNotFound) {
+			return nil, ErrShippingNotReady
+		}
+		return nil, err
+	}
+
+	url, err := s.s3.PresignGetURL(ctx, label.ObjectPath, labelLinkTTL)
+	if err != nil {
+		return nil, err
+	}
+	return &LabelLink{
+		URL:            url,
+		MimeType:       label.MimeType,
+		ExpiresInSecs:  int(labelLinkTTL.Seconds()),
+		TrackingNumber: label.TrackingNumber,
+		Provider:       label.Provider,
+	}, nil
 }

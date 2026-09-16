@@ -26,19 +26,43 @@ type Order struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
+// OrderItemTracking is the part of a shipment a customer is allowed to see:
+// who is carrying the parcel and how to follow it. Deliberately not the whole
+// shipment row — the label PDF, provider ids, parcel dimensions and customs
+// paperwork are the seller's business, not the buyer's.
+type OrderItemTracking struct {
+	// Carrier name, e.g. "USPS", or the seller's own courier when they
+	// arranged delivery themselves.
+	CourierProvider *string `json:"courier_provider,omitempty"`
+	TrackingNumber  *string `json:"tracking_number,omitempty"`
+	// The carrier's own tracking page. Absent for some seller-arranged
+	// shipments, where the number is all the customer gets.
+	TrackingURL *string `json:"tracking_url,omitempty"`
+	// Shipment progress: label_created | collected | in_transit | delivered |
+	// failed | returned.
+	Status string `json:"status"`
+	// "courier" for a bought carrier label, "seller_managed" when the seller
+	// shipped it themselves outside the carrier integration.
+	DeliveryMode string     `json:"delivery_mode"`
+	DeliveredAt  *time.Time `json:"delivered_at,omitempty"`
+	ShippedAt    time.Time  `json:"shipped_at"`
+}
+
 // OrderItem maps to marketplace.order_items — one product from one shop.
 type OrderItem struct {
-	ID                uuid.UUID `json:"id"`
-	OrderID           uuid.UUID `json:"order_id"`
-	SellerID          uuid.UUID `json:"seller_id"`
-	ShopID            uuid.UUID `json:"shop_id"`
-	ProductID         uuid.UUID `json:"product_id"`
-	Quantity          int       `json:"quantity"`
-	UnitAmount        int       `json:"unit_amount"`
-	TotalAmount       int       `json:"total_amount"`
-	FulfilmentStatus  string    `json:"fulfilment_status"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID               uuid.UUID `json:"id"`
+	OrderID          uuid.UUID `json:"order_id"`
+	SellerID         uuid.UUID `json:"seller_id"`
+	ShopID           uuid.UUID `json:"shop_id"`
+	ProductID        uuid.UUID `json:"product_id"`
+	Quantity         int       `json:"quantity"`
+	UnitAmount       int       `json:"unit_amount"`
+	TotalAmount      int       `json:"total_amount"`
+	FulfilmentStatus string    `json:"fulfilment_status"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	// Present once the line has actually been shipped.
+	Tracking *OrderItemTracking `json:"tracking,omitempty"`
 }
 
 // OrderDetails is an order header with its line items.
