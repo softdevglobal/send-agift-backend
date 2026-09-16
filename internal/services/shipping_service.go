@@ -148,7 +148,16 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 		return nil, fmt.Errorf("%w: %v", ErrShippingProvider, err)
 	}
 	if len(shippoShipment.Rates) == 0 {
-		return nil, fmt.Errorf("%w: no rates returned — use valid US addresses in test mode and ensure the seller shop has an address linked", ErrShippingProvider)
+		// Shippo returns 200/SUCCESS with an empty rates array (not an error)
+		// when it has no carrier account able to quote this lane — most often
+		// a real domestic or international route with no test-mode simulation,
+		// e.g. neither address is one of Shippo's US test addresses. Shippo's
+		// own per-shipment messages say why; surface them instead of only the
+		// generic hint, which otherwise reads as a config problem every time.
+		if detail := formatShippoMessages(shippoShipment.Messages); detail != "" && detail != "unknown error" {
+			return nil, fmt.Errorf("%w: no rates returned — %s", ErrShippingProvider, detail)
+		}
+		return nil, fmt.Errorf("%w: no rates returned — Shippo's test carriers do not quote every lane; use one of Shippo's documented US test addresses, or connect a real carrier account for this route", ErrShippingProvider)
 	}
 
 	// Persist quote so BuyLabel can update this same pending row.
