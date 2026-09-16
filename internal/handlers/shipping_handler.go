@@ -79,6 +79,20 @@ func (h *ShippingHandler) BuyLabel(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusCreated, shipment)
 }
 
+// LabelURL handles GET /sellers/me/order-items/{orderItemID}/shipping/label.
+// Returns a short-lived download link for the label PDF already bought.
+func (h *ShippingHandler) LabelURL(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	orderItemID := chi.URLParam(r, "orderItemID")
+
+	link, err := h.shipping.LabelURL(r.Context(), sellerID, orderItemID)
+	if err != nil {
+		h.writeError(w, err, "could not get the shipping label")
+		return
+	}
+	utils.JSON(w, http.StatusOK, link)
+}
+
 // ShippoWebhook handles POST /webhooks/shippo/tracking.
 // Updates marketplace.shipments tracking status; marks order delivered when applicable.
 func (h *ShippingHandler) ShippoWebhook(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +115,8 @@ func (h *ShippingHandler) writeError(w http.ResponseWriter, err error, fallback 
 		utils.Error(w, http.StatusServiceUnavailable, "shipping provider not configured")
 	case errors.Is(err, services.ErrShippingNotReady):
 		utils.Error(w, http.StatusConflict, "order item is not ready for shipping")
+	case errors.Is(err, services.ErrShippingLabelNotFound):
+		utils.Error(w, http.StatusNotFound, "no shipping label has been bought for this order item")
 	case errors.Is(err, services.ErrShippingAddress):
 		utils.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrOrderNotFound):

@@ -13,7 +13,20 @@ import (
 	"myapp/internal/models"
 )
 
-var ErrShipmentNotFound = errors.New("shipment not found")
+var (
+	ErrShipmentNotFound = errors.New("shipment not found")
+	// ErrShipmentLabelNotFound means the shipment exists but no label has been
+	// bought for it yet, so there is no PDF to hand back.
+	ErrShipmentLabelNotFound = errors.New("shipment label not found")
+)
+
+// ShipmentLabel is the stored label PDF for one order item.
+type ShipmentLabel struct {
+	ObjectPath     string
+	MimeType       string
+	TrackingNumber *string
+	Provider       *string
+}
 
 // ShipmentRepository persists shipping quotes/labels on marketplace.shipments.
 type ShipmentRepository struct {
@@ -259,4 +272,48 @@ func (r *ShipmentRepository) MarkOrderItemDispatched(ctx context.Context, orderI
 		set fulfilment_status = 'dispatched', updated_at = now()
 		where id = $1`, orderItemID)
 	return err
+}
+
+// GetLabelForSeller returns the stored label PDF for the seller's own order
+// item. The seller id is part of the query rather than checked afterwards, so
+// one seller can never read another's label by guessing an order item id.
+func (r *ShipmentRepository) GetLabelForSeller(ctx context.Context, sellerID, orderItemID string) (*ShipmentLabel, error) {
+	sellerUUID, err := uuid.Parse(sellerID)
+	if err != nil {
+		return nil, ErrShipmentNotFound
+	}
+	itemUUID, err := uuid.Parse(orderItemID)
+	if err != nil {
+		return nil, ErrShipmentNotFound
+	}
+
+	var (
+		label      ShipmentLabel
+		objectPath *string
+		mimeType   *string
+	)
+	err = r.db.QueryRow(ctx, `
+		select a.object_path, a.mime_type, s.tracking_number, s.courier_provider
+		from marketplace.shipments s
+		left join media.media_assets a on a.id = s.label_media_id
+		where s.order_item_id = $1 and s.seller_id = $2`,
+		itemUUID, sellerUUID,
+	).Scan(&objectPath, &mimeType, &label.TrackingNumber, &label.Provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrShipmentNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	// A shipment row exists from the rate quote before any label is bought.
+	if objectPath == nil || *objectPath == "" {
+		return nil, ErrShipmentLabelNotFound
+	}
+
+	label.ObjectPath = *objectPath
+	label.MimeType = "application/pdf"
+	if mimeType != nil && *mimeType != "" {
+		label.MimeType = *mimeType
+	}
+	return &label, nil
 }

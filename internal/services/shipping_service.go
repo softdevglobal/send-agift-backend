@@ -18,7 +18,21 @@ var (
 	ErrShippingNotReady      = errors.New("order item is not ready for shipping")
 	ErrShippingAddress       = errors.New("shipping addresses are incomplete")
 	ErrShippingProvider      = errors.New("shipping provider error")
+	ErrShippingLabelNotFound = errors.New("shipping label not found")
 )
+
+// LabelLink is a short-lived link to a bought label PDF.
+type LabelLink struct {
+	URL            string  `json:"url"`
+	MimeType       string  `json:"mime_type"`
+	ExpiresInSecs  int     `json:"expires_in_seconds"`
+	TrackingNumber *string `json:"tracking_number,omitempty"`
+	Provider       *string `json:"provider,omitempty"`
+}
+
+// labelLinkTTL is how long a label download link stays valid. Short, because
+// the PDF carries the recipient's full address and the link needs no auth.
+const labelLinkTTL = 10 * time.Minute
 
 // ShippingService orchestrates rates, label purchase, and tracking webhooks.
 // Flow: accept order item → GetRates (stores pending shipment) → BuyLabel (updates same row).
@@ -54,7 +68,7 @@ func NewShippingService(
 
 // ShippingRatesResult is returned by GetRates for the seller to pick a carrier rate.
 type ShippingRatesResult struct {
-	ShipmentObjectID     string       `json:"shipment_object_id"`                // Shippo shipment id
+	ShipmentObjectID     string       `json:"shipment_object_id"`               // Shippo shipment id
 	CustomsDeclarationID string       `json:"customs_declaration_id,omitempty"` // set for international
 	International        bool         `json:"international"`
 	Rates                []ShippoRate `json:"rates"`
@@ -396,4 +410,35 @@ func (s *ShippingService) downloadAndStoreLabel(ctx context.Context, labelURL st
 		return "", fmt.Errorf("download label: status %d", resp.StatusCode)
 	}
 	return s.s3.Upload(ctx, "labels", "label.pdf", resp.Body, "application/pdf")
+}
+
+// LabelURL returns a temporary download link for the label PDF the seller
+// already bought for this order item.
+//
+// Labels live in a private bucket, so they are never served by a public URL —
+// the seller gets a short-lived presigned link instead, and only for an order
+// item that is their own.
+func (s *ShippingService) LabelURL(ctx context.Context, sellerID, orderItemID string) (*LabelLink, error) {
+	label, err := s.shipments.GetLabelForSeller(ctx, sellerID, orderItemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrShipmentLabelNotFound) {
+			return nil, ErrShippingLabelNotFound
+		}
+		if errors.Is(err, repository.ErrShipmentNotFound) {
+			return nil, ErrShippingNotReady
+		}
+		return nil, err
+	}
+
+	url, err := s.s3.PresignGetURL(ctx, label.ObjectPath, labelLinkTTL)
+	if err != nil {
+		return nil, err
+	}
+	return &LabelLink{
+		URL:            url,
+		MimeType:       label.MimeType,
+		ExpiresInSecs:  int(labelLinkTTL.Seconds()),
+		TrackingNumber: label.TrackingNumber,
+		Provider:       label.Provider,
+	}, nil
 }
