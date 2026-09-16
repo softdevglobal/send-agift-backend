@@ -45,8 +45,8 @@ func RegisterGameRoutes(r chi.Router, games *handlers.GameHandler, jwtSecret str
 	})
 
 	// Superadmin only: who is playing, who is winning, and the anti-cheat
-	// review queue. Boards here show full names and emails, so ordinary
-	// admins do not get them.
+	// review queue. These boards carry full names and emails, and reviewing a
+	// score changes a leaderboard, so ordinary admins do not get them.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("superadmin"))
