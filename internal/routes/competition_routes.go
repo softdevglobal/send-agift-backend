@@ -22,7 +22,7 @@ import (
 //
 // Official scores are submitted through POST /games/sessions/{sessionID}/submit.
 //
-// Superadmin JWT: the lifecycle from draft to winners, every action audited.
+// Admin JWT: the lifecycle from draft to winners, every action audited.
 func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.OptionalCustomerOrGuest(jwtSecret, false))
@@ -40,8 +40,8 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, jwt
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
-		// Superadmin only: prizes, winners and money-shaped actions.
-		r.Use(middleware.RequireRole("superadmin"))
+		// Prizes, winners and money-shaped actions; every one is audited.
+		r.Use(middleware.RequireRole("admin"))
 
 		r.Get("/admin/competitions", c.AdminList)
 		r.Post("/admin/competitions", c.Create)

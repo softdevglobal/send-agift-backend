@@ -17,33 +17,29 @@ import (
 // change — a log that failed to replay stays rejected.
 var ErrScoreNotReviewable = errors.New("score cannot be reviewed")
 
-// adminPlayer shapes a player for the admin console: customers by name (or
-// email), guests by a short tag of their device id.
-func adminPlayer(customerID *uuid.UUID, guest, name, email, country *string) models.AdminPlayer {
-	if customerID != nil {
-		p := models.AdminPlayer{Kind: "customer", CustomerID: customerID, Email: email, CountryName: country}
-		switch {
-		case name != nil && strings.TrimSpace(*name) != "":
-			p.Name = strings.TrimSpace(*name)
-		case email != nil:
-			p.Name = *email
-		default:
-			p.Name = "Customer"
-		}
-		return p
+// adminPlayer shapes a signed-in player for the admin console. The console
+// deliberately reports on identified customers only — every admin query
+// filters `customer_id is not null` — so there is no guest branch here.
+func adminPlayer(customerID uuid.UUID, name, email, country *string) models.AdminPlayer {
+	p := models.AdminPlayer{Kind: "customer", CustomerID: &customerID, Email: email, CountryName: country}
+	switch {
+	case name != nil && strings.TrimSpace(*name) != "":
+		p.Name = strings.TrimSpace(*name)
+	case email != nil && strings.TrimSpace(*email) != "":
+		p.Name = strings.TrimSpace(*email)
+	default:
+		p.Name = "Customer"
 	}
-	tag := ""
-	if guest != nil {
-		tag = strings.ToUpper(strings.ReplaceAll(*guest, "-", ""))
-		if len(tag) > 6 {
-			tag = tag[:6]
-		}
-	}
-	return models.AdminPlayer{Kind: "guest", Name: strings.TrimSpace("Guest " + tag)}
+	return p
 }
 
 // AdminGameSummaries returns every game in the catalog with its practice
 // activity and best scorer. Counts cover every version of a game.
+//
+// Guest plays are excluded everywhere: an admin reviewing scores needs a
+// person they can contact, verify against an age and country gate, and pay a
+// prize to, and an anonymous device token is none of those. Guests still
+// play, and still appear on the public in-app board.
 func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.AdminGameSummary, error) {
 	rows, err := r.db.Query(ctx, `
 		with g as (
@@ -56,23 +52,24 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 			select v.game_id, count(*) as plays, max(s.started_at) as last_played
 			from competition.game_sessions s
 			join competition.game_versions v on v.id = s.game_version_id
-			where s.mode = 'practice'
+			where s.mode = 'practice' and s.customer_id is not null
 			group by v.game_id
 		), scores as (
 			select v.game_id,
 			       count(*) as scores,
-			       count(distinct coalesce(sc.customer_id::text, sc.guest_token)) as players,
+			       count(distinct sc.customer_id) as players,
 			       count(*) filter (where sc.validation_status = 'manual_review') as review,
 			       count(*) filter (where sc.validation_status = 'rejected') as rejected
 			from competition.game_scores sc
 			join competition.game_versions v on v.id = sc.game_version_id
+			where sc.customer_id is not null
 			group by v.game_id
 		), top as (
 			select distinct on (v.game_id)
-			       v.game_id, sc.score, sc.customer_id, sc.guest_token
+			       v.game_id, sc.score, sc.customer_id
 			from competition.game_scores sc
 			join competition.game_versions v on v.id = sc.game_version_id
-			where sc.validation_status = 'accepted'
+			where sc.validation_status = 'accepted' and sc.customer_id is not null
 			order by v.game_id, sc.score desc, sc.duration_ms asc, sc.created_at asc
 		), comps as (
 			select v.game_id, count(*) as n
@@ -83,7 +80,7 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 		select g.slug, g.name, g.game_type, g.status, coalesce(g.version, ''),
 		       coalesce(p.plays, 0), coalesce(s.scores, 0), coalesce(s.players, 0),
 		       coalesce(s.review, 0), coalesce(s.rejected, 0), coalesce(cp.n, 0),
-		       p.last_played, t.score, t.customer_id, t.guest_token,
+		       p.last_played, t.score, t.customer_id,
 		       c.display_name, c.email, co.name
 		from g
 		left join plays p on p.game_id = g.id
@@ -104,17 +101,16 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 			s                    models.AdminGameSummary
 			topScore             *int64
 			topCustomer          *uuid.UUID
-			topGuest             *string
 			name, email, country *string
 		)
 		if err := rows.Scan(&s.Slug, &s.Name, &s.GameType, &s.Status, &s.Version,
 			&s.Plays, &s.Scores, &s.Players, &s.UnderReview, &s.Rejected, &s.Competitions,
-			&s.LastPlayedAt, &topScore, &topCustomer, &topGuest, &name, &email, &country); err != nil {
+			&s.LastPlayedAt, &topScore, &topCustomer, &name, &email, &country); err != nil {
 			return nil, err
 		}
-		if topScore != nil {
+		if topScore != nil && topCustomer != nil {
 			s.TopScore = topScore
-			p := adminPlayer(topCustomer, topGuest, name, email, country)
+			p := adminPlayer(*topCustomer, name, email, country)
 			s.TopPlayer = &p
 		}
 		out = append(out, s)
@@ -122,32 +118,33 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 	return out, rows.Err()
 }
 
-// AdminLeaderboard ranks every player's best accepted score for a game,
-// across all its versions, with how often they played.
+// AdminLeaderboard ranks every signed-in player's best accepted score for a
+// game, across all its versions, with how often they played. Guest scores are
+// left out; see AdminGameSummaries for why.
 func (r *GameRepository) AdminLeaderboard(ctx context.Context, slug string, limit int) ([]models.AdminLeaderboardRow, error) {
 	rows, err := r.db.Query(ctx, `
 		with sc as (
-			select sc.*, coalesce(sc.customer_id::text, sc.guest_token) as player
+			select sc.*
 			from competition.game_scores sc
 			join competition.game_versions v on v.id = sc.game_version_id
 			join competition.games g on g.id = v.game_id
-			where g.slug = $1
+			where g.slug = $1 and sc.customer_id is not null
 		), agg as (
-			select player, count(*) as plays, max(created_at) as last_played
+			select customer_id, count(*) as plays, max(created_at) as last_played
 			from sc
-			group by player
+			group by customer_id
 		), best as (
-			select distinct on (player) player, customer_id, guest_token, score, duration_ms, created_at
+			select distinct on (customer_id) customer_id, score, duration_ms, created_at
 			from sc
 			where validation_status = 'accepted'
-			order by player, score desc, duration_ms asc, created_at asc
+			order by customer_id, score desc, duration_ms asc, created_at asc
 		)
 		select rank() over (order by b.score desc, b.duration_ms asc) as rnk,
-		       b.customer_id, b.guest_token, c.display_name, c.email, co.name,
+		       b.customer_id, c.display_name, c.email, co.name,
 		       b.score, b.duration_ms, a.plays, b.created_at, a.last_played
 		from best b
-		join agg a on a.player = b.player
-		left join customer.customers c on c.id = b.customer_id
+		join agg a on a.customer_id = b.customer_id
+		join customer.customers c on c.id = b.customer_id
 		left join core.countries co on co.id = c.country_id
 		order by rnk asc, b.created_at asc
 		limit $2`, slug, limit)
@@ -160,31 +157,31 @@ func (r *GameRepository) AdminLeaderboard(ctx context.Context, slug string, limi
 	for rows.Next() {
 		var (
 			row                  models.AdminLeaderboardRow
-			customerID           *uuid.UUID
-			guest                *string
+			customerID           uuid.UUID
 			name, email, country *string
 		)
-		if err := rows.Scan(&row.Rank, &customerID, &guest, &name, &email, &country,
+		if err := rows.Scan(&row.Rank, &customerID, &name, &email, &country,
 			&row.BestScore, &row.DurationMs, &row.Plays, &row.AchievedAt, &row.LastPlayedAt); err != nil {
 			return nil, err
 		}
-		row.Player = adminPlayer(customerID, guest, name, email, country)
+		row.Player = adminPlayer(customerID, name, email, country)
 		out = append(out, row)
 	}
 	return out, rows.Err()
 }
 
-// AdminScores lists a game's most recent practice scores, optionally only
-// those with one validation status (e.g. manual_review).
+// AdminScores lists a game's most recent practice scores by signed-in
+// players, optionally only those with one validation status (e.g.
+// manual_review). Guest submissions are not part of the review queue.
 func (r *GameRepository) AdminScores(ctx context.Context, slug, status string, limit int) ([]models.AdminGameScore, error) {
 	rows, err := r.db.Query(ctx, `
-		select sc.session_id, sc.customer_id, sc.guest_token, c.display_name, c.email, co.name,
+		select sc.session_id, sc.customer_id, c.display_name, c.email, co.name,
 		       sc.score, sc.client_score, sc.moves_count, sc.duration_ms,
 		       sc.validation_status, sc.review_reason, sc.stats, sc.created_at
 		from competition.game_scores sc
 		join competition.game_versions v on v.id = sc.game_version_id
 		join competition.games g on g.id = v.game_id
-		left join customer.customers c on c.id = sc.customer_id
+		join customer.customers c on c.id = sc.customer_id
 		left join core.countries co on co.id = c.country_id
 		where g.slug = $1 and ($2 = '' or sc.validation_status = $2)
 		order by sc.created_at desc
@@ -198,17 +195,16 @@ func (r *GameRepository) AdminScores(ctx context.Context, slug, status string, l
 	for rows.Next() {
 		var (
 			s                    models.AdminGameScore
-			customerID           *uuid.UUID
-			guest                *string
+			customerID           uuid.UUID
 			name, email, country *string
 			stats                []byte
 		)
-		if err := rows.Scan(&s.SessionID, &customerID, &guest, &name, &email, &country,
+		if err := rows.Scan(&s.SessionID, &customerID, &name, &email, &country,
 			&s.Score, &s.ClientScore, &s.MovesCount, &s.DurationMs,
 			&s.ValidationStatus, &s.ReviewReason, &stats, &s.CreatedAt); err != nil {
 			return nil, err
 		}
-		s.Player = adminPlayer(customerID, guest, name, email, country)
+		s.Player = adminPlayer(customerID, name, email, country)
 		s.Stats = map[string]int64{}
 		if len(stats) > 0 {
 			if err := json.Unmarshal(stats, &s.Stats); err != nil {
