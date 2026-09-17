@@ -396,3 +396,105 @@ func (r *ShipmentRepository) MarkLocalDelivered(ctx context.Context, shipmentID,
 
 	return tx.Commit(ctx) // save all three changes together
 }
+// CartShipFrom is one shop's dispatch address, for quoting delivery before an
+// order exists.
+type CartShipFrom struct {
+	ShopID     uuid.UUID
+	Name       string
+	Street1    string
+	Street2    string
+	City       string
+	Region     string
+	PostalCode string
+	CountryISO string
+	Phone      string
+	Email      string
+}
+
+// CartShipTo is the recipient's delivery address.
+type CartShipTo struct {
+	Name       string
+	Street1    string
+	Street2    string
+	City       string
+	Region     string
+	PostalCode string
+	CountryISO string
+	Phone      string
+	Email      string
+}
+
+// ShipFromForShops resolves each shop's dispatch address.
+//
+// Quoting at checkout cannot reuse GetShippingContext: that starts from an
+// order item, and at checkout no order exists yet. A cart can also span
+// several shops, each posting its own parcel from its own address, so rates
+// are quoted per shop and summed.
+func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uuid.UUID) (map[uuid.UUID]CartShipFrom, error) {
+	rows, err := r.db.Query(ctx, `
+		select s.id,
+		       coalesce(se.trading_name, s.name, se.legal_name),
+		       coalesce(sa.line1, ''), coalesce(sa.line2, ''), coalesce(sa.city, ''),
+		       coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
+		       coalesce(fc.iso_code, ''), coalesce(se.phone, ''), se.email
+		from seller.shops s
+		inner join seller.sellers se on se.id = s.seller_id
+		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
+		left join core.countries fc on fc.id = sa.country_id
+		where s.id = any($1)`, shopIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]CartShipFrom, len(shopIDs))
+	for rows.Next() {
+		var f CartShipFrom
+		if err := rows.Scan(
+			&f.ShopID, &f.Name, &f.Street1, &f.Street2, &f.City,
+			&f.Region, &f.PostalCode, &f.CountryISO, &f.Phone, &f.Email,
+		); err != nil {
+			return nil, err
+		}
+		out[f.ShopID] = f
+	}
+	return out, rows.Err()
+}
+
+// ShipToForRecipient resolves a recipient's delivery address, scoped to the
+// customer who owns them so one customer cannot quote against another's
+// recipient.
+func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID, recipientID string) (*CartShipTo, error) {
+	customerUUID, err := uuid.Parse(customerID)
+	if err != nil {
+		return nil, ErrShipmentNotFound
+	}
+	recipientUUID, err := uuid.Parse(recipientID)
+	if err != nil {
+		return nil, ErrShipmentNotFound
+	}
+
+	to := &CartShipTo{}
+	err = r.db.QueryRow(ctx, `
+		select coalesce(r.name, ''), coalesce(ra.line1, ''), coalesce(ra.line2, ''),
+		       coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
+		       coalesce(tc.iso_code, ''), coalesce(r.phone, ''), coalesce(r.email::text, '')
+		from customer.recipients r
+		left join customer.recipient_addresses ra on ra.id = coalesce(
+			r.default_address_id,
+			(select id from customer.recipient_addresses where recipient_id = r.id
+			 order by is_default desc, created_at asc limit 1)
+		)
+		left join core.countries tc on tc.id = ra.country_id
+		where r.id = $1 and r.customer_id = $2`,
+		recipientUUID, customerUUID,
+	).Scan(&to.Name, &to.Street1, &to.Street2, &to.City, &to.Region,
+		&to.PostalCode, &to.CountryISO, &to.Phone, &to.Email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrShipmentNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return to, nil
+}

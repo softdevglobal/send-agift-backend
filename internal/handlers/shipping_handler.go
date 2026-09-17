@@ -115,6 +115,25 @@ func (h *ShippingHandler) LabelURL(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, link)
 }
 
+// QuoteDelivery handles POST /customers/me/shipping/quote.
+// Prices delivery for a cart so checkout can show a real total before paying.
+func (h *ShippingHandler) QuoteDelivery(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+
+	var req services.DeliveryQuoteInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	quote, err := h.shipping.QuoteDelivery(r.Context(), customerID, req)
+	if err != nil {
+		h.writeError(w, err, "could not price delivery")
+		return
+	}
+	utils.JSON(w, http.StatusOK, quote)
+}
+
 // ShippoWebhook handles POST /webhooks/shippo/tracking.
 // Updates marketplace.shipments tracking status; marks order delivered when applicable.
 func (h *ShippingHandler) ShippoWebhook(w http.ResponseWriter, r *http.Request) {

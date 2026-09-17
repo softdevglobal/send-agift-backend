@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"myapp/internal/models"
 	"myapp/internal/repository"
@@ -41,6 +45,9 @@ type ShippingService struct {
 	shipments   *repository.ShipmentRepository
 	idempotency *repository.IdempotencyRepository
 	media       *repository.MediaRepository
+	// orders resolves a cart's products to their shops when quoting delivery
+	// at checkout, before any order row exists.
+	orders      *repository.OrderRepository
 	s3          *S3Service
 	labelBucket string // S3 bucket name stored on media.media_assets for label PDFs
 }
@@ -50,6 +57,7 @@ func NewShippingService(
 	shipments *repository.ShipmentRepository,
 	idempotency *repository.IdempotencyRepository,
 	media *repository.MediaRepository,
+	orders *repository.OrderRepository,
 	s3 *S3Service,
 	labelBucket string,
 ) *ShippingService {
@@ -61,6 +69,7 @@ func NewShippingService(
 		shipments:   shipments,
 		idempotency: idempotency,
 		media:       media,
+		orders:      orders,
 		s3:          s3,
 		labelBucket: labelBucket,
 	}
@@ -619,4 +628,259 @@ func (s *ShippingService) CompleteLocalDelivery(ctx context.Context, sellerID, o
 	shipment.Status = "delivered"
 	shipment.DeliveredAt = &now
 	return shipment, nil
+}
+// ── Checkout delivery quote ───────────────────────────────────────────────
+
+// QuoteLineInput is one cart line to be delivered.
+type QuoteLineInput struct {
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+}
+
+// DeliveryQuoteInput asks what delivery will cost for a cart, before any
+// order exists.
+type DeliveryQuoteInput struct {
+	RecipientID string           `json:"recipient_id"`
+	// The date the gift should arrive. Used to pick the cheapest service that
+	// still gets there in time; ignored when absent.
+	DeliveryDate string           `json:"delivery_date"`
+	Items        []QuoteLineInput `json:"items"`
+}
+
+// QuotedShipment is the chosen service for one shop's parcel.
+type QuotedShipment struct {
+	ShopID      string `json:"shop_id"`
+	ShopName    string `json:"shop_name"`
+	Provider    string `json:"provider"`
+	ServiceName string `json:"service_name"`
+	// Minor units, in Currency — matches how every other amount is carried.
+	Amount        int    `json:"amount"`
+	Currency      string `json:"currency"`
+	EstimatedDays int    `json:"estimated_days"`
+	// True when nothing quoted could make the requested date, so the cheapest
+	// available service was chosen instead.
+	MissesDeliveryDate bool `json:"misses_delivery_date"`
+}
+
+// DeliveryQuote is the whole cart's delivery cost.
+type DeliveryQuote struct {
+	Shipments []QuotedShipment `json:"shipments"`
+	// Sum of Shipments, in Currency.
+	Amount   int    `json:"amount"`
+	Currency string `json:"currency"`
+	// True when every shop quoted successfully. False means at least one shop
+	// could not be quoted — no carrier serves that lane, or shipping is not
+	// configured — and delivery for it will be arranged after the order.
+	Complete bool `json:"complete"`
+	// Human-readable reason when Complete is false.
+	Unquoted []string `json:"unquoted,omitempty"`
+}
+
+// QuoteDelivery prices delivery for a cart so the customer sees a real total
+// before paying.
+//
+// One parcel per shop: a cart can span several shops, each dispatching from
+// its own address. Anything that cannot be quoted — Shippo off, no carrier for
+// the lane, a shop with no address — is reported rather than guessed at, and
+// the caller decides whether to let the order through with delivery arranged
+// later.
+func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, in DeliveryQuoteInput) (*DeliveryQuote, error) {
+	if len(in.Items) == 0 || strings.TrimSpace(in.RecipientID) == "" {
+		return nil, ErrInvalidInput
+	}
+
+	to, err := s.shipments.ShipToForRecipient(ctx, customerID, strings.TrimSpace(in.RecipientID))
+	if err != nil {
+		if errors.Is(err, repository.ErrShipmentNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err
+	}
+	if to.Street1 == "" || to.City == "" || to.CountryISO == "" || to.Name == "" {
+		return nil, fmt.Errorf("%w: the recipient needs a street, city and country before delivery can be priced", ErrShippingAddress)
+	}
+
+	// Group the cart by shop: one quoted parcel each.
+	shopOf := map[uuid.UUID]uuid.UUID{} // productID → shopID
+	shopIDs := []uuid.UUID{}
+	seen := map[uuid.UUID]bool{}
+	for _, line := range in.Items {
+		product, err := s.orders.GetCheckoutProduct(ctx, strings.TrimSpace(line.ProductID))
+		if err != nil {
+			return nil, ErrInvalidInput
+		}
+		shopID, err := uuid.Parse(product.ShopID)
+		if err != nil {
+			return nil, ErrInvalidInput
+		}
+		productID, err := uuid.Parse(product.ID)
+		if err != nil {
+			return nil, ErrInvalidInput
+		}
+		shopOf[productID] = shopID
+		if !seen[shopID] {
+			seen[shopID] = true
+			shopIDs = append(shopIDs, shopID)
+		}
+	}
+
+	quote := &DeliveryQuote{Shipments: []QuotedShipment{}, Complete: true}
+	if !s.shippo.Enabled() {
+		quote.Complete = false
+		quote.Unquoted = append(quote.Unquoted, "shipping provider not configured")
+		return quote, nil
+	}
+
+	froms, err := s.shipments.ShipFromForShops(ctx, shopIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	deliverBy := parseDeliveryDate(in.DeliveryDate)
+	toAddr := ShippoAddressInput{
+		Name: to.Name, Street1: to.Street1, Street2: to.Street2, City: to.City,
+		State: to.Region, Zip: to.PostalCode, Country: normalizeCountryISO(to.CountryISO),
+		Phone: to.Phone, Email: to.Email, IsResidential: true,
+	}
+
+	for _, shopID := range shopIDs {
+		from, ok := froms[shopID]
+		if !ok || from.Street1 == "" || from.City == "" || from.CountryISO == "" {
+			quote.Complete = false
+			quote.Unquoted = append(quote.Unquoted, "a shop has no dispatch address set")
+			continue
+		}
+		fromAddr := ShippoAddressInput{
+			Name: from.Name, Street1: from.Street1, Street2: from.Street2, City: from.City,
+			State: from.Region, Zip: from.PostalCode, Country: normalizeCountryISO(from.CountryISO),
+			Phone: from.Phone, Email: from.Email,
+		}
+
+		// No per-product dimensions exist (migration 000021 removed them), so
+		// every parcel is quoted at the standard box. Real weights would need
+		// that column back.
+		shipment, err := s.shippo.CreateShipment(ctx, fromAddr, toAddr, parcelToShippo(defaultDomesticParcel()), "")
+		if err != nil || len(shipment.Rates) == 0 {
+			quote.Complete = false
+			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: no carrier available for this route", from.Name))
+			continue
+		}
+
+		best, missed := pickBestRate(mapShippoRates(shipment.Rates), deliverBy)
+		if best == nil {
+			quote.Complete = false
+			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: no usable rate", from.Name))
+			continue
+		}
+		amount, err := rateAmountMinor(best.Amount)
+		if err != nil {
+			quote.Complete = false
+			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: unreadable rate", from.Name))
+			continue
+		}
+
+		quote.Shipments = append(quote.Shipments, QuotedShipment{
+			ShopID:             shopID.String(),
+			ShopName:           from.Name,
+			Provider:           best.Provider,
+			ServiceName:        best.ServiceName,
+			Amount:             amount,
+			Currency:           best.Currency,
+			EstimatedDays:      best.EstimatedDays,
+			MissesDeliveryDate: missed,
+		})
+		quote.Amount += amount
+		if quote.Currency == "" {
+			quote.Currency = best.Currency
+		}
+	}
+	return quote, nil
+}
+
+// parseDeliveryDate reads the requested arrival date; a zero time means the
+// customer did not pin one down.
+func parseDeliveryDate(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{"2006-01-02", time.RFC3339} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// pickBestRate chooses the service the customer would pick themselves: the
+// cheapest one that still arrives by the date they asked for. When nothing can
+// make that date it falls back to the fastest available and says so, rather
+// than quietly quoting something that will turn up late.
+func pickBestRate(rates []ShippoRate, deliverBy time.Time) (*ShippoRate, bool) {
+	if len(rates) == 0 {
+		return nil, false
+	}
+
+	inTime := []ShippoRate{}
+	if !deliverBy.IsZero() {
+		// Calendar days, not elapsed hours: a date two days out is two days of
+		// delivery time, even though midnight on that date is only ~1.5 days
+		// away. Truncating the fraction would reject a 2-day service that
+		// arrives on the morning of the date asked for, and quote an express
+		// service the customer never needed.
+		now := time.Now().UTC()
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		target := time.Date(deliverBy.Year(), deliverBy.Month(), deliverBy.Day(), 0, 0, 0, 0, time.UTC)
+		daysAvailable := int(target.Sub(today).Hours() / 24)
+		for _, rate := range rates {
+			// A rate with no estimate is not evidence it will arrive in time.
+			if rate.EstimatedDays > 0 && rate.EstimatedDays <= daysAvailable {
+				inTime = append(inTime, rate)
+			}
+		}
+	}
+
+	if len(inTime) > 0 {
+		best := cheapest(inTime)
+		return best, false
+	}
+	if deliverBy.IsZero() {
+		// No date asked for: cheapest overall is the sensible default.
+		return cheapest(rates), false
+	}
+	// Nothing makes the date — the fastest is the closest we can get.
+	fastest := rates[0]
+	for _, rate := range rates[1:] {
+		if rate.EstimatedDays > 0 && (fastest.EstimatedDays == 0 || rate.EstimatedDays < fastest.EstimatedDays) {
+			fastest = rate
+		}
+	}
+	return &fastest, true
+}
+
+func cheapest(rates []ShippoRate) *ShippoRate {
+	best := rates[0]
+	bestAmount, err := rateAmountMinor(best.Amount)
+	if err != nil {
+		bestAmount = math.MaxInt32
+	}
+	for _, rate := range rates[1:] {
+		amount, err := rateAmountMinor(rate.Amount)
+		if err != nil {
+			continue
+		}
+		if amount < bestAmount {
+			best, bestAmount = rate, amount
+		}
+	}
+	return &best
+}
+
+// rateAmountMinor turns Shippo's decimal string ("5.68") into minor units.
+func rateAmountMinor(raw string) (int, error) {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0, err
+	}
+	return int(math.Round(value * 100)), nil
 }

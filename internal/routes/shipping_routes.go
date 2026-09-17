@@ -21,6 +21,15 @@ func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jw
 	// Called by Shippo when tracking status changes (track_updated).
 	r.Post("/webhooks/shippo/tracking", shipping.ShippoWebhook)
 
+	// Customers price delivery at checkout, before any order exists.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth(jwtSecret))
+		r.Use(middleware.RequireRole("customer"))
+
+		// Body: recipient_id, delivery_date, items[{product_id, quantity}].
+		r.Post("/customers/me/shipping/quote", shipping.QuoteDelivery)
+	})
+
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("seller"))

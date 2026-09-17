@@ -72,7 +72,7 @@ func main() {
 	productReviewService := services.NewProductReviewService(productReviews, orders, s3Service, cfg.S3Bucket)
 	messagingService := services.NewMessagingService(messaging, orders, customers, sellers, admins, s3Service, cfg.S3Bucket)
 	shippoClient := services.NewShippoClient(cfg.ShippoAPIKey)
-	shippingService := services.NewShippingService(shippoClient, shipments, idempotency, mediaAssets, s3Service, cfg.ShippoLabelBucket)
+	shippingService := services.NewShippingService(shippoClient, shipments, idempotency, mediaAssets, orders, s3Service, cfg.ShippoLabelBucket)
 
 	authHandler := handlers.NewAuthHandler(authService) // create a new auth handler
 	adminHandler := handlers.NewAdminHandler(adminService) // create a new admin handler
