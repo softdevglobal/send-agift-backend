@@ -34,5 +34,10 @@ func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jw
 		// Body: courier_provider, tracking_number, tracking_url (optional).
 		// Fallback when GetRates returns no rates for the lane at all.
 		r.Post("/sellers/me/order-items/{orderItemID}/shipping/manual", shipping.MarkShippedManually)
+
+	    // Start local delivery// Place these inside the seller-authenticated group so the JWT middleware
+	    // runs first and sets UserIDContextKey.
+		r.Post("/sellers/me/order-items/{orderItemID}/shipping/local", shipping.StartLocalDelivery)              
+		r.Post("/sellers/me/order-items/{orderItemID}/shipping/local/delivered", shipping.CompleteLocalDelivery) 
 	})
 }

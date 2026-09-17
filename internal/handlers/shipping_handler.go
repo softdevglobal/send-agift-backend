@@ -130,6 +130,46 @@ func (h *ShippingHandler) ShippoWebhook(w http.ResponseWriter, r *http.Request) 
 	utils.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// POST /sellers/me/order-items/{orderItemID}/shipping/local
+func (h *ShippingHandler) StartLocalDelivery(w http.ResponseWriter, r *http.Request) {
+	// The seller's ID is placed in the context by the auth middleware (from the JWT).
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+
+	// Read {orderItemID} from the URL path.
+	orderItemID := chi.URLParam(r, "orderItemID")
+
+	var req services.LocalDeliveryInput
+	// Decode the optional body. The error is ignored on purpose, so an empty
+	// body still works (Note just stays "").
+	// Side effect: malformed JSON is also silently ignored.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	shipment, err := h.shipping.StartLocalDelivery(r.Context(), sellerID, orderItemID, req)
+	if err != nil {
+		// Your existing helper maps service errors to status codes
+		// (e.g. ErrOrderNotFound → 404, ErrShippingNotReady → 409/400).
+		h.writeError(w, err, "could not start local delivery")
+		return
+	}
+
+	utils.JSON(w, http.StatusCreated, shipment) // 201, because a new shipment was created
+}
+
+// POST /sellers/me/order-items/{orderItemID}/shipping/local/delivered
+func (h *ShippingHandler) CompleteLocalDelivery(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string) // from the JWT
+	orderItemID := chi.URLParam(r, "orderItemID")                         // from the URL
+	// No body to read for this endpoint.
+
+	shipment, err := h.shipping.CompleteLocalDelivery(r.Context(), sellerID, orderItemID)
+	if err != nil {
+		h.writeError(w, err, "could not complete local delivery")
+		return
+	}
+
+	utils.JSON(w, http.StatusOK, shipment) // 200, because an existing shipment was updated
+}
+
 // writeError maps known shipping service errors to HTTP status codes.
 func (h *ShippingHandler) writeError(w http.ResponseWriter, err error, fallback string) {
 	switch {

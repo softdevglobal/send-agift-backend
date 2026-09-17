@@ -317,3 +317,82 @@ func (r *ShipmentRepository) GetLabelForSeller(ctx context.Context, sellerID, or
 	}
 	return &label, nil
 }
+
+// GetLatestForOrderItem returns the newest shipment for an item that belongs to this seller.
+func (r *ShipmentRepository) GetLatestForOrderItem(ctx context.Context, sellerID, orderItemID string) (*models.Shipment, error) {
+	s := &models.Shipment{} // empty struct that Scan fills in
+
+	err := r.db.QueryRow(ctx, `
+		select id, order_id, order_item_id, seller_id, is_international,
+		       courier_provider, tracking_number, label_media_id, delivery_mode, status,
+		       proof_of_delivery_media_id, delivered_at, provider_shipment_id,
+		       provider_customs_declaration_id, provider_tracking_url, provider_metadata,
+		       parcel_details, customs_declaration, created_at, updated_at
+		from marketplace.shipments
+		where order_item_id = $1 and seller_id = $2
+		order by created_at desc
+		limit 1`, orderItemID, sellerID,
+	).Scan(
+		&s.ID, &s.OrderID, &s.OrderItemID, &s.SellerID, &s.IsInternational,
+		&s.CourierProvider, &s.TrackingNumber, &s.LabelMediaID, &s.DeliveryMode, &s.Status,
+		&s.ProofOfDeliveryMediaID, &s.DeliveredAt, &s.ProviderShipmentID,
+		&s.ProviderCustomsID, &s.ProviderTrackingURL, &s.ProviderMetadata,
+		&s.ParcelDetails, &s.CustomsDeclaration, &s.CreatedAt, &s.UpdatedAt,
+	)
+
+	// No row found: return a clear "not found" error.
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrShipmentNotFound
+	}
+	return s, err // on success err is nil; on any other error the caller checks err first
+}
+
+// MarkLocalDelivered updates shipment, item, and order atomically:
+// either all of the changes happen or none of them do.
+func (r *ShipmentRepository) MarkLocalDelivered(ctx context.Context, shipmentID, orderItemID, orderID uuid.UUID, deliveredAt time.Time) error {
+	tx, err := r.db.Begin(ctx) // start a transaction
+	if err != nil {
+		return err
+	}
+	// If we return early because of an error, undo everything.
+	// After a successful Commit, this Rollback does nothing.
+	defer tx.Rollback(ctx)
+
+	// Step 1: mark the shipment delivered and record when.
+	if _, err := tx.Exec(ctx, `
+		update marketplace.shipments
+		set status = 'delivered', delivered_at = $2, updated_at = now()
+		where id = $1`, shipmentID, deliveredAt); err != nil {
+		return err
+	}
+
+	// Step 2: mark the order item delivered,
+	// unless it was cancelled in the meantime (never revive a cancelled item).
+	if _, err := tx.Exec(ctx, `
+		update marketplace.order_items
+		set fulfilment_status = 'delivered', updated_at = now()
+		where id = $1 and fulfilment_status <> 'cancelled'`, orderItemID); err != nil {
+		return err
+	}
+
+	// Step 3: mark the whole order delivered, but only when every item is finished.
+	if _, err := tx.Exec(ctx, `
+		update marketplace.orders o
+		set status = 'delivered', updated_at = now()
+		where o.id = $1
+		  and o.status <> 'delivered'              -- skip if it's already delivered (no pointless write)
+		  and not exists (                          -- no item is still open...
+		        select 1 from marketplace.order_items oi
+		        where oi.order_id = o.id
+		          and oi.fulfilment_status not in ('delivered', 'cancelled')
+		      )
+		  and exists (                              -- ...and at least one item was really delivered
+		        select 1 from marketplace.order_items oi   --   (so an all-cancelled order isn't marked "delivered")
+		        where oi.order_id = o.id
+		          and oi.fulfilment_status = 'delivered'
+		      )`, orderID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx) // save all three changes together
+}

@@ -516,3 +516,107 @@ func (s *ShippingService) LabelURL(ctx context.Context, sellerID, orderItemID st
 		Provider:       label.Provider,
 	}, nil
 }
+
+// Request body for start local dilicery only optional field
+type LocalDeliveryInput struct {
+	Note string `json:"note"` // Optional free text "Delivery by bike today"
+}
+
+// startLocalDelivery is called when the seller begins a delivery the item personaly 
+func(s *ShippingService) StartLocalDelivery(ctx context.Context, sellerID, orderItemID string, in LocalDeliveryInput) (*models.Shipment, error) {
+	// Load ther order item puls its order info but only if it belongs to the seller 
+	// Ownership check
+	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err // any other DB error is passed up unchanged
+	}
+
+	// only item the seller has accepted for delivery can start delivery
+	// Allowed status : accepted, preparing, ready
+	// Blocked status : dispatched, pending, cancelled
+	if sc.FulfilmentStatus != "accepted" && sc.FulfilmentStatus != "preparing" && sc.FulfilmentStatus != "ready" {
+		return nil, ErrShippingNotReady
+	}
+	
+	// Label shown as the "courier" so the UI has something to display.
+	provider := "Local delivery"
+
+	// Build the new shipment row in memory.
+	shipment := &models.Shipment{
+		OrderID:         sc.OrderID,        // parent order
+		OrderItemID:     &sc.OrderItemID,   // the specific item being delivered (pointer because the column is nullable)
+		SellerID:        sc.SellerID,       // owner of the shipment
+		CourierProvider: &provider,         // "Local delivery" instead of a carrier name
+		DeliveryMode:    "seller_managed",  // existing enum value meaning the seller handles it
+		Status:          "in_transit",      // it's on the way immediately; there is no label or pickup step
+		// TrackingNumber is left nil on purpose: local delivery has no tracking.
+	}
+
+	// If the seller wrote a note, store it in the provider_metadata JSON column.
+	if note := strings.TrimSpace(in.Note); note != "" { // ignore blank or whitespace-only notes
+		meta, _ := json.Marshal(map[string]string{"note": note}) // produces {"note":"..."}; marshaling a string map can't fail
+		shipment.ProviderMetadata = meta
+	}
+
+
+	// INSERT the shipment into marketplace.shipments.
+	// This fills in shipment.ID, CreatedAt, etc.
+	if err := s.shipments.Create(ctx, shipment); err != nil {
+		return nil, err
+	}
+
+	// UPDATE order_items.fulfilment_status = 'dispatched'.
+	// This is also what stops a second "start" call: the status check above
+	// will now fail with ErrShippingNotReady.
+	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
+		return nil, err
+	}
+	return shipment, nil // the handler returns this as JSON with status 201
+}
+
+
+// CompleteLocalDelivery is called when the seller has handed the item to the customer.
+func (s *ShippingService) CompleteLocalDelivery(ctx context.Context, sellerID, orderItemID string) (*models.Shipment, error) {
+	// Same ownership lookup and error mapping as above.
+	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, err
+	}
+
+	// You can only complete something that was started (i.e. is dispatched).
+	if sc.FulfilmentStatus != "dispatched" {
+		return nil, ErrShippingNotReady
+	}
+
+	// Get the most recent shipment for this item.
+	shipment, err := s.shipments.GetLatestForOrderItem(ctx, sellerID, orderItemID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Safety check: this endpoint may only complete *local* deliveries.
+	// If the item was shipped with a courier (manual or Shippo), reject it,
+	// so a seller can't mark a courier parcel as delivered through this route.
+	if shipment.DeliveryMode != "seller_managed" {
+		return nil, ErrInvalidInput
+	}
+
+	now := time.Now().UTC() // one timestamp, reused for the DB and the response
+
+	// One transaction that marks the shipment, the item, and possibly the order as delivered.
+	if err := s.shipments.MarkLocalDelivered(ctx, shipment.ID, sc.OrderItemID, sc.OrderID, now); err != nil {
+		return nil, err
+	}
+
+	// Update the in-memory struct so the response matches the DB,
+	// without querying again.
+	shipment.Status = "delivered"
+	shipment.DeliveredAt = &now
+	return shipment, nil
+}
