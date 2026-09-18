@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,6 +16,9 @@ var (
 )
 
 const idempotencyScopeShipmentLabel = "shipment_label"
+
+// staleProcessingAfter lets a crashed BuyLabel retry the same key.
+const staleProcessingAfter = 30 * time.Second
 
 type IdempotencyRepository struct {
 	db *pgxpool.Pool
@@ -39,10 +43,11 @@ func (r *IdempotencyRepository) Acquire(ctx context.Context, scope, key string) 
 
 	var status string
 	var response json.RawMessage
+	var updatedAt time.Time
 	err = r.db.QueryRow(ctx, `
-		select status, response_body from core.idempotency_keys
+		select status, response_body, updated_at from core.idempotency_keys
 		where key = $1`, key,
-	).Scan(&status, &response)
+	).Scan(&status, &response, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, ErrIdempotencyNotFound
 	}
@@ -52,7 +57,28 @@ func (r *IdempotencyRepository) Acquire(ctx context.Context, scope, key string) 
 	switch status {
 	case "completed":
 		return response, true, nil
+	case "failed":
+		// Previous attempt failed — reclaim for a clean retry.
+		_, err = r.db.Exec(ctx, `
+			update core.idempotency_keys
+			set status = 'processing', response_body = null, updated_at = now()
+			where key = $1 and status = 'failed'`, key)
+		return nil, false, err
 	case "processing":
+		// Crashed / abandoned attempt — reclaim after a short grace period.
+		if time.Since(updatedAt) >= staleProcessingAfter {
+			tag, err = r.db.Exec(ctx, `
+				update core.idempotency_keys
+				set status = 'processing', response_body = null, updated_at = now()
+				where key = $1 and status = 'processing' and updated_at <= $2`,
+				key, time.Now().UTC().Add(-staleProcessingAfter))
+			if err != nil {
+				return nil, false, err
+			}
+			if tag.RowsAffected() == 1 {
+				return nil, false, nil
+			}
+		}
 		return nil, false, ErrIdempotencyConflict
 	default:
 		return nil, false, nil
@@ -64,6 +90,15 @@ func (r *IdempotencyRepository) Complete(ctx context.Context, scope, key string,
 		update core.idempotency_keys
 		set status = 'completed', response_body = $2, updated_at = now()
 		where key = $1 and scope = $3`, key, response, scope)
+	return err
+}
+
+// Fail marks a started key so the same idempotency_key can be retried.
+func (r *IdempotencyRepository) Fail(ctx context.Context, scope, key string) error {
+	_, err := r.db.Exec(ctx, `
+		update core.idempotency_keys
+		set status = 'failed', updated_at = now()
+		where key = $1 and scope = $2 and status = 'processing'`, key, scope)
 	return err
 }
 

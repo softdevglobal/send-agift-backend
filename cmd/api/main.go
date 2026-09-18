@@ -64,7 +64,7 @@ func main() {
 	countryService := services.NewCountryService(countries)
 	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
 	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
-	orderService := services.NewOrderService(orders, customers, countries)
+	orderService := services.NewOrderService(orders, customers, countries, shipments)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers)
 	reelService := services.NewReelService(reels, reelSocial, sellers, s3Service, cfg.S3Bucket)

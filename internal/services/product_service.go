@@ -42,7 +42,9 @@ type ProductInput struct {
 	PointsDisplayEnabled   bool     `json:"points_display_enabled"`
 	PrepMinutes            int      `json:"prep_minutes"`
 	ImageURL               *string  `json:"image_url"`
-	Inventory              *InventoryInput `json:"inventory"`
+	// Parcel matches the seller shipping form (length/width/height/weight).
+	Parcel    *models.ProductParcel `json:"parcel"`
+	Inventory *InventoryInput       `json:"inventory"`
 }
 
 type InventoryInput struct {
@@ -232,6 +234,36 @@ func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput) (*models.Pr
 		in.OccasionTags = []string{}
 	}
 
+	var parcel *models.ProductParcel
+	if in.Parcel != nil {
+		p := *in.Parcel
+		p.Length = strings.TrimSpace(p.Length)
+		p.Width = strings.TrimSpace(p.Width)
+		p.Height = strings.TrimSpace(p.Height)
+		p.DistanceUnit = strings.ToLower(strings.TrimSpace(p.DistanceUnit))
+		p.Weight = strings.TrimSpace(p.Weight)
+		p.MassUnit = strings.ToLower(strings.TrimSpace(p.MassUnit))
+		if p.Length != "" || p.Width != "" || p.Height != "" || p.Weight != "" {
+			if p.DistanceUnit == "" {
+				p.DistanceUnit = "cm"
+			}
+			if p.MassUnit == "" {
+				p.MassUnit = "kg"
+			}
+			switch p.DistanceUnit {
+			case "cm", "in":
+			default:
+				return nil, ErrInvalidProduct
+			}
+			switch p.MassUnit {
+			case "kg", "lb":
+			default:
+				return nil, ErrInvalidProduct
+			}
+			parcel = &p
+		}
+	}
+
 	return &models.Product{
 		ID:                     id,
 		Name:                   in.Name,
@@ -246,6 +278,7 @@ func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput) (*models.Pr
 		PointsDisplayEnabled:   in.PointsDisplayEnabled,
 		PrepMinutes:            in.PrepMinutes,
 		ImageURL:               in.ImageURL,
+		Parcel:                 parcel,
 	}, nil
 }
 

@@ -27,6 +27,7 @@ func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jw
 		r.Use(middleware.RequireRole("customer"))
 
 		// Body: recipient_id, delivery_date, items[{product_id, quantity}].
+		// Response: shops[].options with days_available (AliExpress-style) + shipments[] recommended.
 		r.Post("/customers/me/shipping/quote", shipping.QuoteDelivery)
 	})
 

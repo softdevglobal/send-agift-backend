@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,37 @@ type Product struct {
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 	ImageURL               *string   `json:"image_url,omitempty"`
+	// Shipping parcel used for delivery quotes / rates (seller form dims).
+	Parcel *ProductParcel `json:"parcel,omitempty"`
+}
+
+// ProductParcel is the package size/weight stored on a product.
+type ProductParcel struct {
+	Length       string `json:"length"`
+	Width        string `json:"width"`
+	Height       string `json:"height"`
+	DistanceUnit string `json:"distance_unit"`
+	Weight       string `json:"weight"`
+	MassUnit     string `json:"mass_unit"`
+}
+
+// ProductParcelFromNullable builds a parcel when any dimension/weight is set.
+func ProductParcelFromNullable(length, width, height, distanceUnit, weight, massUnit *string) *ProductParcel {
+	val := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return strings.TrimSpace(*p)
+	}
+	l, w, h := val(length), val(width), val(height)
+	du, wt, mu := val(distanceUnit), val(weight), val(massUnit)
+	if l == "" && w == "" && h == "" && wt == "" {
+		return nil
+	}
+	return &ProductParcel{
+		Length: l, Width: w, Height: h,
+		DistanceUnit: du, Weight: wt, MassUnit: mu,
+	}
 }
 
 // Inventory maps to seller.inventory.

@@ -45,6 +45,8 @@ type ShippingContext struct {
 	OrderItemID      uuid.UUID
 	SellerID         uuid.UUID
 	FulfilmentStatus string
+	DeliveryAmount   int    // marketplace.orders.delivery_amount (customer-facing shipping total)
+	Currency         string // marketplace.orders.currency
 	FromName         string
 	FromEmail        string
 	FromPhone        string
@@ -65,6 +67,13 @@ type ShippingContext struct {
 	ToCountryISO     string
 	StoredParcel     json.RawMessage // marketplace.shipments.parcel_details (pending)
 	StoredCustoms    json.RawMessage // marketplace.shipments.customs_declaration (pending)
+	StoredMetadata   json.RawMessage // marketplace.shipments.provider_metadata (pending; may hold checkout_quote)
+	ProductParcelLength       *string
+	ProductParcelWidth        *string
+	ProductParcelHeight       *string
+	ProductParcelDistanceUnit *string
+	ProductParcelWeight       *string
+	ProductParcelMassUnit     *string
 }
 
 // GetShippingContext loads ship-from (shop address), ship-to (recipient address),
@@ -74,17 +83,21 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 	err := r.db.QueryRow(ctx, `
 		select
 			o.id, oi.id, oi.seller_id, oi.fulfilment_status,
+			o.delivery_amount, o.currency,
 			coalesce(se.trading_name, s.name, se.legal_name), se.email, coalesce(se.phone, ''),
 			sa.line1, coalesce(sa.line2, ''), sa.city, coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
 			coalesce(fc.iso_code, ''),
 			coalesce(r.name, ''), coalesce(r.email::text, ''), coalesce(r.phone, ''),
 			coalesce(ra.line1, ''), coalesce(ra.line2, ''), coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
 			coalesce(tc.iso_code, ''),
-			sh.parcel_details, sh.customs_declaration
+			sh.parcel_details, sh.customs_declaration, sh.provider_metadata,
+			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
+			p.parcel_weight, p.parcel_mass_unit
 		from marketplace.order_items oi
 		inner join marketplace.orders o on o.id = oi.order_id
 		inner join seller.sellers se on se.id = oi.seller_id
 		inner join seller.shops s on s.id = oi.shop_id
+		inner join seller.products p on p.id = oi.product_id
 		left join marketplace.shipments sh on sh.order_item_id = oi.id and sh.status = 'pending'
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
 		left join customer.recipients r on r.id = o.recipient_id
@@ -98,11 +111,14 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		orderItemID, sellerID,
 	).Scan(
 		&sc.OrderID, &sc.OrderItemID, &sc.SellerID, &sc.FulfilmentStatus,
+		&sc.DeliveryAmount, &sc.Currency,
 		&sc.FromName, &sc.FromEmail, &sc.FromPhone,
 		&sc.FromStreet1, &sc.FromStreet2, &sc.FromCity, &sc.FromRegion, &sc.FromPostalCode, &sc.FromCountryISO,
 		&sc.ToName, &sc.ToEmail, &sc.ToPhone,
 		&sc.ToStreet1, &sc.ToStreet2, &sc.ToCity, &sc.ToRegion, &sc.ToPostalCode, &sc.ToCountryISO,
-		&sc.StoredParcel, &sc.StoredCustoms,
+		&sc.StoredParcel, &sc.StoredCustoms, &sc.StoredMetadata,
+		&sc.ProductParcelLength, &sc.ProductParcelWidth, &sc.ProductParcelHeight, &sc.ProductParcelDistanceUnit,
+		&sc.ProductParcelWeight, &sc.ProductParcelMassUnit,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound

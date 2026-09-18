@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,9 @@ var (
 	ErrShippingAddress       = errors.New("shipping addresses are incomplete")
 	ErrShippingProvider      = errors.New("shipping provider error")
 	ErrShippingLabelNotFound = errors.New("shipping label not found")
+	// ErrCourierChangeRequiresChat: customer locked a courier at checkout; seller must
+	// message the customer before buying a different carrier/service.
+	ErrCourierChangeRequiresChat = errors.New("use the customer-selected courier, or message the customer to agree a change first")
 )
 
 // LabelLink is a short-lived link to a bought label PDF.
@@ -75,12 +79,34 @@ func NewShippingService(
 	}
 }
 
+// CheckoutSelectedRate is the courier the customer was shown/selected at checkout
+// (saved on place-order). Seller UI should highlight this; BuyLabel still needs a
+// fresh rate_object_id from Rates because checkout Shippo rate ids expire.
+type CheckoutSelectedRate struct {
+	Provider     string `json:"provider"`
+	ServiceName  string `json:"service_name"`
+	Amount       int    `json:"amount"` // minor units (cents)
+	AmountMajor  string `json:"amount_major,omitempty"` // e.g. "45.65" for display
+	Currency     string `json:"currency"`
+	RateObjectID string `json:"rate_object_id,omitempty"` // expired checkout id; informational only
+}
+
 // ShippingRatesResult is returned by GetRates for the seller to pick a carrier rate.
 type ShippingRatesResult struct {
-	ShipmentObjectID     string       `json:"shipment_object_id"`               // Shippo shipment id
-	CustomsDeclarationID string       `json:"customs_declaration_id,omitempty"` // set for international
-	International        bool         `json:"international"`
-	Rates                []ShippoRate `json:"rates"`
+	ShipmentObjectID     string                `json:"shipment_object_id"`               // Shippo shipment id
+	CustomsDeclarationID string                `json:"customs_declaration_id,omitempty"` // set for international
+	International        bool                  `json:"international"`
+	Rates                []ShippoRate          `json:"rates"`
+	CheckoutSelected     *CheckoutSelectedRate `json:"checkout_selected,omitempty"`
+	// Fresh Shippo rate_object_id matching checkout provider+service, when available.
+	RecommendedRateObjectID string `json:"recommended_rate_object_id,omitempty"`
+	// Customer-facing shipping total on the order (same figure shown at checkout).
+	CustomerDeliveryAmount int    `json:"customer_delivery_amount"`
+	Currency               string `json:"currency,omitempty"`
+	// MustBuyCustomerCourier is true when checkout locked a courier; BuyLabel must
+	// use recommended_rate_object_id (or matching provider+service). To use another
+	// rate, message the customer first — the API will reject a silent change.
+	MustBuyCustomerCourier bool `json:"must_buy_customer_courier"`
 }
 
 // BuyLabelInput is the body for purchasing a label from a previously quoted rate.
@@ -88,6 +114,10 @@ type BuyLabelInput struct {
 	RateObjectID   string `json:"rate_object_id"`
 	Provider       string `json:"provider"`
 	IdempotencyKey string `json:"idempotency_key"`
+	// UseCustomerSelected ignores a stale/wrong rate_object_id and buys the
+	// courier locked at checkout from the latest /shipping/rates response.
+	// Preferred when GetRates was called more than once (Shippo rate ids change).
+	UseCustomerSelected bool `json:"use_customer_selected"`
 }
 
 // GetRates creates a Shippo shipment (with customs if international), returns carrier rates,
@@ -116,7 +146,9 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	international := isInternationalShipment(from.Country, to.Country)
 
 	// Prefer posted body; reuse parcel/customs already stored on a pending shipment if omitted.
-	shippingIn, err := mergeShippingInput(posted, sc.StoredParcel, sc.StoredCustoms)
+	// Fall back to the order item's product.parcel (seller catalog dims from the form).
+	productParcelJSON := productParcelStoredJSON(sc)
+	shippingIn, err := mergeShippingInput(posted, firstNonEmptyJSON(sc.StoredParcel, productParcelJSON), sc.StoredCustoms)
 	if err != nil {
 		return nil, ErrInvalidInput
 	}
@@ -169,8 +201,27 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 		return nil, fmt.Errorf("%w: no rates returned — Shippo's test carriers do not quote every lane; use one of Shippo's documented US test addresses, or connect a real carrier account for this route", ErrShippingProvider)
 	}
 
+	rates := mapShippoRates(shippoShipment.Rates)
+	checkoutSelected := parseCheckoutSelected(sc.StoredMetadata)
+	recommendedRateID := matchCheckoutRateObjectID(rates, checkoutSelected)
+
 	// Persist quote so BuyLabel can update this same pending row.
-	ratesMeta, _ := json.Marshal(map[string]any{"rates": shippoShipment.Rates})
+	// Keep checkout_selected so later rates calls still know what the customer picked.
+	metaPayload := map[string]any{"rates": shippoShipment.Rates}
+	if checkoutSelected != nil {
+		metaPayload["checkout_quote"] = map[string]any{
+			"rate_object_id": checkoutSelected.RateObjectID,
+			"provider":       checkoutSelected.Provider,
+			"service_name":   checkoutSelected.ServiceName,
+			"amount":         checkoutSelected.Amount,
+			"currency":       checkoutSelected.Currency,
+			"source":         "checkout_quote",
+		}
+	}
+	if recommendedRateID != "" {
+		metaPayload["recommended_rate_object_id"] = recommendedRateID
+	}
+	ratesMeta, _ := json.Marshal(metaPayload)
 	providerShipmentID := shippoShipment.ObjectID
 	quote := &models.Shipment{
 		OrderID:            sc.OrderID,
@@ -192,34 +243,275 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	}
 
 	return &ShippingRatesResult{
-		ShipmentObjectID:     shippoShipment.ObjectID,
-		CustomsDeclarationID: customsDeclarationID,
-		International:        international,
-		Rates:                mapShippoRates(shippoShipment.Rates),
+		ShipmentObjectID:        shippoShipment.ObjectID,
+		CustomsDeclarationID:    customsDeclarationID,
+		International:           international,
+		Rates:                   rates,
+		CheckoutSelected:        checkoutSelected,
+		RecommendedRateObjectID: recommendedRateID,
+		CustomerDeliveryAmount:  sc.DeliveryAmount,
+		Currency:                sc.Currency,
+		MustBuyCustomerCourier:  checkoutSelected != nil,
 	}, nil
+}
+
+// parseCheckoutSelected reads the courier chosen at customer checkout from pending
+// shipment provider_metadata (flat checkout fields or nested checkout_quote).
+func parseCheckoutSelected(meta json.RawMessage) *CheckoutSelectedRate {
+	if len(meta) == 0 || string(meta) == "null" || string(meta) == "{}" {
+		return nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &root); err != nil {
+		return nil
+	}
+	src := root
+	if nested, ok := root["checkout_quote"]; ok {
+		var inner map[string]json.RawMessage
+		if err := json.Unmarshal(nested, &inner); err == nil {
+			src = inner
+		}
+	}
+	getStr := func(key string) string {
+		raw, ok := src[key]
+		if !ok {
+			return ""
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return strings.TrimSpace(s)
+		}
+		return ""
+	}
+	provider := getStr("provider")
+	service := getStr("service_name")
+	if provider == "" && service == "" {
+		return nil
+	}
+	amount := 0
+	if raw, ok := src["amount"]; ok {
+		_ = json.Unmarshal(raw, &amount)
+	}
+	return &CheckoutSelectedRate{
+		Provider:     provider,
+		ServiceName:  service,
+		Amount:       amount,
+		AmountMajor:  fmt.Sprintf("%.2f", float64(amount)/100.0),
+		Currency:     getStr("currency"),
+		RateObjectID: getStr("rate_object_id"),
+	}
+}
+
+func matchCheckoutRateObjectID(rates []ShippoRate, selected *CheckoutSelectedRate) string {
+	if selected == nil {
+		return ""
+	}
+	// Prefer exact provider+service match.
+	for _, r := range rates {
+		if rateMatchesCheckout(r.Provider, r.ServiceName, selected) {
+			return r.ObjectID
+		}
+	}
+	return ""
+}
+
+func normalizeCourierLabel(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
+}
+
+func courierLabelsCompatible(a, b string) bool {
+	a, b = normalizeCourierLabel(a), normalizeCourierLabel(b)
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+	return strings.Contains(a, b) || strings.Contains(b, a)
+}
+
+func rateMatchesCheckout(provider, serviceName string, selected *CheckoutSelectedRate) bool {
+	if selected == nil {
+		return true
+	}
+	prov := strings.TrimSpace(selected.Provider)
+	svc := strings.TrimSpace(selected.ServiceName)
+	if prov == "" && svc == "" {
+		return false
+	}
+	gotProv := strings.TrimSpace(provider)
+	gotSvc := strings.TrimSpace(serviceName)
+
+	if prov != "" && !courierLabelsCompatible(gotProv, prov) {
+		// Sometimes checkout stores the full label in service_name only.
+		combined := strings.TrimSpace(gotProv + " " + gotSvc)
+		if !courierLabelsCompatible(combined, prov) && !courierLabelsCompatible(gotSvc, prov) {
+			return false
+		}
+	}
+	if svc != "" {
+		if courierLabelsCompatible(gotSvc, svc) {
+			return true
+		}
+		combined := strings.TrimSpace(gotProv + " " + gotSvc)
+		if courierLabelsCompatible(combined, svc) {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
+// formatMinorMoney formats minor units for human-readable errors (4565 → "45.65 USD").
+func formatMinorMoney(amountMinor int, currency string) string {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if currency == "" {
+		currency = "USD"
+	}
+	major := float64(amountMinor) / 100.0
+	return fmt.Sprintf("%.2f %s", major, currency)
+}
+
+// findStoredRate looks up a rate_object_id inside pending provider_metadata.rates
+// (Shippo raw or mapped shape).
+func findStoredRate(meta json.RawMessage, rateObjectID string) (provider, serviceName string, ok bool) {
+	rateObjectID = strings.TrimSpace(rateObjectID)
+	if rateObjectID == "" || len(meta) == 0 {
+		return "", "", false
+	}
+	var root struct {
+		Rates []json.RawMessage `json:"rates"`
+	}
+	if err := json.Unmarshal(meta, &root); err != nil || len(root.Rates) == 0 {
+		return "", "", false
+	}
+	for _, raw := range root.Rates {
+		var mapped ShippoRate
+		if err := json.Unmarshal(raw, &mapped); err == nil && strings.TrimSpace(mapped.ObjectID) == rateObjectID {
+			return mapped.Provider, mapped.ServiceName, true
+		}
+		var shippoRaw struct {
+			ObjectID     string `json:"object_id"`
+			Provider     string `json:"provider"`
+			ServiceLevel struct {
+				Name string `json:"name"`
+			} `json:"servicelevel"`
+		}
+		if err := json.Unmarshal(raw, &shippoRaw); err == nil && strings.TrimSpace(shippoRaw.ObjectID) == rateObjectID {
+			return shippoRaw.Provider, shippoRaw.ServiceLevel.Name, true
+		}
+	}
+	return "", "", false
+}
+
+// recommendedRateIDFromMetadata returns the fresh rate id matching checkout,
+// from the latest GetRates upsert (ids change every rates call).
+func recommendedRateIDFromMetadata(meta json.RawMessage, selected *CheckoutSelectedRate) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(meta, &root); err != nil {
+		return ""
+	}
+	if raw, ok := root["recommended_rate_object_id"]; ok {
+		var id string
+		if err := json.Unmarshal(raw, &id); err == nil && strings.TrimSpace(id) != "" {
+			return strings.TrimSpace(id)
+		}
+	}
+	ratesRaw, ok := root["rates"]
+	if !ok {
+		return ""
+	}
+	var rawRates []json.RawMessage
+	if err := json.Unmarshal(ratesRaw, &rawRates); err != nil {
+		return ""
+	}
+	rates := make([]ShippoRate, 0, len(rawRates))
+	for _, raw := range rawRates {
+		var mapped ShippoRate
+		if err := json.Unmarshal(raw, &mapped); err == nil && mapped.ObjectID != "" {
+			if mapped.ServiceName == "" {
+				var shippoRaw struct {
+					ObjectID     string `json:"object_id"`
+					Provider     string `json:"provider"`
+					ServiceLevel struct {
+						Name string `json:"name"`
+					} `json:"servicelevel"`
+				}
+				if err := json.Unmarshal(raw, &shippoRaw); err == nil {
+					mapped.ObjectID = shippoRaw.ObjectID
+					mapped.Provider = shippoRaw.Provider
+					mapped.ServiceName = shippoRaw.ServiceLevel.Name
+				}
+			}
+			rates = append(rates, mapped)
+			continue
+		}
+		var shippoRaw struct {
+			ObjectID     string `json:"object_id"`
+			Provider     string `json:"provider"`
+			ServiceLevel struct {
+				Name string `json:"name"`
+			} `json:"servicelevel"`
+		}
+		if err := json.Unmarshal(raw, &shippoRaw); err == nil && shippoRaw.ObjectID != "" {
+			rates = append(rates, ShippoRate{
+				ObjectID: shippoRaw.ObjectID, Provider: shippoRaw.Provider, ServiceName: shippoRaw.ServiceLevel.Name,
+			})
+		}
+	}
+	return matchCheckoutRateObjectID(rates, selected)
+}
+
+func firstNonEmptyJSON(a, b json.RawMessage) json.RawMessage {
+	if len(a) > 0 && string(a) != "null" {
+		return a
+	}
+	return b
+}
+
+func productParcelStoredJSON(sc *repository.ShippingContext) json.RawMessage {
+	parcel := models.ProductParcelFromNullable(
+		sc.ProductParcelLength, sc.ProductParcelWidth, sc.ProductParcelHeight,
+		sc.ProductParcelDistanceUnit, sc.ProductParcelWeight, sc.ProductParcelMassUnit,
+	)
+	if parcel == nil || parcel.Length == "" || parcel.Width == "" || parcel.Height == "" || parcel.Weight == "" {
+		return nil
+	}
+	in := ParcelInput{
+		Length: parcel.Length, Width: parcel.Width, Height: parcel.Height,
+		DistanceUnit: parcel.DistanceUnit, Weight: parcel.Weight, MassUnit: parcel.MassUnit,
+	}
+	if in.DistanceUnit == "" {
+		in.DistanceUnit = "cm"
+	}
+	if in.MassUnit == "" {
+		in.MassUnit = "kg"
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // BuyLabel purchases a Shippo label for rate_object_id, uploads the PDF to S3,
 // and updates the pending shipment to status=label_created.
 // IdempotencyKey prevents buying twice if the seller retries the same request.
+// When the customer locked a courier at checkout, rate_object_id must match that
+// provider+service (use recommended_rate_object_id from GetRates).
 func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID string, in BuyLabelInput) (*models.Shipment, error) {
 	if !s.shippo.Enabled() {
 		return nil, ErrShippingNotConfigured
 	}
-	if strings.TrimSpace(in.RateObjectID) == "" || strings.TrimSpace(in.IdempotencyKey) == "" {
-		return nil, ErrInvalidInput
+	if strings.TrimSpace(in.IdempotencyKey) == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidInput)
 	}
-
-	// Return cached shipment if this idempotency_key was already completed.
-	scope := repository.ShipmentLabelScope()
-	if cached, skip, err := s.idempotency.Acquire(ctx, scope, in.IdempotencyKey); err != nil {
-		return nil, err
-	} else if skip {
-		var shipment models.Shipment
-		if err := json.Unmarshal(cached, &shipment); err != nil {
-			return nil, err
-		}
-		return &shipment, nil
+	// Empty rate_object_id → buy the customer-selected courier from the latest rates call.
+	if strings.TrimSpace(in.RateObjectID) == "" {
+		in.UseCustomerSelected = true
 	}
 
 	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
@@ -227,7 +519,82 @@ func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID st
 		return nil, err
 	}
 
-	// Buy label from Shippo using the rate chosen by the seller.
+	if selected := parseCheckoutSelected(sc.StoredMetadata); selected != nil {
+		recommendedID := recommendedRateIDFromMetadata(sc.StoredMetadata, selected)
+		wantID := strings.TrimSpace(in.RateObjectID)
+		autoBuy := in.UseCustomerSelected || wantID == "" ||
+			(selected.RateObjectID != "" && strings.EqualFold(wantID, selected.RateObjectID))
+
+		if autoBuy {
+			if recommendedID == "" {
+				return nil, fmt.Errorf(
+					"%w: call /shipping/rates first, then buy the customer-selected courier %s %s (%s)",
+					ErrCourierChangeRequiresChat,
+					selected.Provider,
+					selected.ServiceName,
+					formatMinorMoney(selected.Amount, selected.Currency),
+				)
+			}
+			in.RateObjectID = recommendedID
+			if strings.TrimSpace(in.Provider) == "" {
+				in.Provider = selected.Provider
+			}
+		} else {
+			provider, serviceName, found := findStoredRate(sc.StoredMetadata, wantID)
+			if !found {
+				return nil, fmt.Errorf(
+					"%w: rate id is from an older /shipping/rates call — call rates again and buy recommended_rate_object_id, or omit rate_object_id (%s %s, %s)",
+					ErrCourierChangeRequiresChat,
+					selected.Provider,
+					selected.ServiceName,
+					formatMinorMoney(selected.Amount, selected.Currency),
+				)
+			}
+			if !rateMatchesCheckout(provider, serviceName, selected) {
+				return nil, fmt.Errorf(
+					"%w: customer selected %s %s (%s) — message the customer before changing",
+					ErrCourierChangeRequiresChat,
+					selected.Provider,
+					selected.ServiceName,
+					formatMinorMoney(selected.Amount, selected.Currency),
+				)
+			}
+			if strings.TrimSpace(in.Provider) == "" {
+				in.Provider = selected.Provider
+			}
+		}
+	} else if strings.TrimSpace(in.RateObjectID) == "" {
+		return nil, fmt.Errorf("%w: rate_object_id is required (call /shipping/rates first)", ErrInvalidInput)
+	}
+
+	// Acquire after validation so a 409 courier mismatch does not lock the key.
+	scope := repository.ShipmentLabelScope()
+	cached, skip, err := s.idempotency.Acquire(ctx, scope, in.IdempotencyKey)
+	if err != nil {
+		if errors.Is(err, repository.ErrIdempotencyConflict) {
+			return nil, fmt.Errorf("%w: wait a moment or use a new idempotency_key", err)
+		}
+		return nil, err
+	}
+	if skip {
+		var shipment models.Shipment
+		if err := json.Unmarshal(cached, &shipment); err != nil {
+			return nil, err
+		}
+		return &shipment, nil
+	}
+
+	shipment, err := s.buyLabelAfterAcquire(ctx, sc, in)
+	if err != nil {
+		_ = s.idempotency.Fail(ctx, scope, in.IdempotencyKey)
+		return nil, err
+	}
+	resp, _ := json.Marshal(shipment)
+	_ = s.idempotency.Complete(ctx, scope, in.IdempotencyKey, resp)
+	return shipment, nil
+}
+
+func (s *ShippingService) buyLabelAfterAcquire(ctx context.Context, sc *repository.ShippingContext, in BuyLabelInput) (*models.Shipment, error) {
 	txn, err := s.shippo.CreateTransaction(ctx, in.RateObjectID)
 	if err != nil {
 		return nil, err
@@ -276,9 +643,6 @@ func (s *ShippingService) BuyLabel(ctx context.Context, sellerID, orderItemID st
 	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
 		return nil, err
 	}
-
-	resp, _ := json.Marshal(shipment)
-	_ = s.idempotency.Complete(ctx, scope, in.IdempotencyKey, resp)
 	return shipment, nil
 }
 
@@ -647,7 +1011,30 @@ type DeliveryQuoteInput struct {
 	Items        []QuoteLineInput `json:"items"`
 }
 
-// QuotedShipment is the chosen service for one shop's parcel.
+// QuotedDeliveryOption is one courier choice for a shop (AliExpress-style row).
+type QuotedDeliveryOption struct {
+	Provider      string `json:"provider"`
+	ServiceName   string `json:"service_name"`
+	Amount        int    `json:"amount"`
+	Currency      string `json:"currency"`
+	EstimatedDays int    `json:"estimated_days"`
+	// DaysAvailable mirrors estimated_days for frontend delivery pickers.
+	DaysAvailable int `json:"days_available"`
+	// True when this is the recommended pick for the requested delivery_date.
+	Recommended      bool   `json:"recommended"`
+	RateObjectID     string `json:"rate_object_id"`
+	ShipmentObjectID string `json:"shipment_object_id"`
+}
+
+// QuotedShopDelivery is all courier options for one shop's parcel.
+type QuotedShopDelivery struct {
+	ShopID           string                 `json:"shop_id"`
+	ShopName         string                 `json:"shop_name"`
+	ShipmentObjectID string                 `json:"shipment_object_id"`
+	Options          []QuotedDeliveryOption `json:"options"`
+}
+
+// QuotedShipment is the recommended service for one shop (compat + place-order echo).
 type QuotedShipment struct {
 	ShopID      string `json:"shop_id"`
 	ShopName    string `json:"shop_name"`
@@ -657,15 +1044,22 @@ type QuotedShipment struct {
 	Amount        int    `json:"amount"`
 	Currency      string `json:"currency"`
 	EstimatedDays int    `json:"estimated_days"`
+	DaysAvailable int    `json:"days_available"`
 	// True when nothing quoted could make the requested date, so the cheapest
 	// available service was chosen instead.
 	MissesDeliveryDate bool `json:"misses_delivery_date"`
+	// Shippo ids echoed back on place-order so pending shipments can be saved.
+	RateObjectID     string `json:"rate_object_id"`
+	ShipmentObjectID string `json:"shipment_object_id"`
 }
 
 // DeliveryQuote is the whole cart's delivery cost.
 type DeliveryQuote struct {
+	// Shops holds AliExpress-style courier options per shop (customer picks one).
+	Shops []QuotedShopDelivery `json:"shops"`
+	// Shipments is the recommended option per shop (same as shops[].options where recommended).
 	Shipments []QuotedShipment `json:"shipments"`
-	// Sum of Shipments, in Currency.
+	// Sum of recommended Shipments, in Currency.
 	Amount   int    `json:"amount"`
 	Currency string `json:"currency"`
 	// True when every shop quoted successfully. False means at least one shop
@@ -680,10 +1074,8 @@ type DeliveryQuote struct {
 // before paying.
 //
 // One parcel per shop: a cart can span several shops, each dispatching from
-// its own address. Anything that cannot be quoted — Shippo off, no carrier for
-// the lane, a shop with no address — is reported rather than guessed at, and
-// the caller decides whether to let the order through with delivery arranged
-// later.
+// its own address. Parcel size comes from product.parcel when set, else default.
+// Anything that cannot be quoted is reported rather than guessed at.
 func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, in DeliveryQuoteInput) (*DeliveryQuote, error) {
 	if len(in.Items) == 0 || strings.TrimSpace(in.RecipientID) == "" {
 		return nil, ErrInvalidInput
@@ -700,10 +1092,13 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		return nil, fmt.Errorf("%w: the recipient needs a street, city and country before delivery can be priced", ErrShippingAddress)
 	}
 
-	// Group the cart by shop: one quoted parcel each.
-	shopOf := map[uuid.UUID]uuid.UUID{} // productID → shopID
+	// Group cart lines by shop and gather parcels for merging.
+	type shopCart struct {
+		shopID  uuid.UUID
+		parcels []ParcelInput
+	}
+	byShop := map[uuid.UUID]*shopCart{}
 	shopIDs := []uuid.UUID{}
-	seen := map[uuid.UUID]bool{}
 	for _, line := range in.Items {
 		product, err := s.orders.GetCheckoutProduct(ctx, strings.TrimSpace(line.ProductID))
 		if err != nil {
@@ -713,18 +1108,24 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		if err != nil {
 			return nil, ErrInvalidInput
 		}
-		productID, err := uuid.Parse(product.ID)
-		if err != nil {
-			return nil, ErrInvalidInput
-		}
-		shopOf[productID] = shopID
-		if !seen[shopID] {
-			seen[shopID] = true
+		sc, ok := byShop[shopID]
+		if !ok {
+			sc = &shopCart{shopID: shopID}
+			byShop[shopID] = sc
 			shopIDs = append(shopIDs, shopID)
 		}
+		qty := line.Quantity
+		if qty < 1 {
+			qty = 1
+		}
+		sc.parcels = append(sc.parcels, parcelFromCheckoutProduct(product, qty))
 	}
 
-	quote := &DeliveryQuote{Shipments: []QuotedShipment{}, Complete: true}
+	quote := &DeliveryQuote{
+		Shops:     []QuotedShopDelivery{},
+		Shipments: []QuotedShipment{},
+		Complete:  true,
+	}
 	if !s.shippo.Enabled() {
 		quote.Complete = false
 		quote.Unquoted = append(quote.Unquoted, "shipping provider not configured")
@@ -756,45 +1157,156 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 			Phone: from.Phone, Email: from.Email,
 		}
 
-		// No per-product dimensions exist (migration 000021 removed them), so
-		// every parcel is quoted at the standard box. Real weights would need
-		// that column back.
-		shipment, err := s.shippo.CreateShipment(ctx, fromAddr, toAddr, parcelToShippo(defaultDomesticParcel()), "")
+		parcel := mergeParcels(byShop[shopID].parcels)
+		shipment, err := s.shippo.CreateShipment(ctx, fromAddr, toAddr, parcelToShippo(parcel), "")
 		if err != nil || len(shipment.Rates) == 0 {
 			quote.Complete = false
 			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: no carrier available for this route", from.Name))
 			continue
 		}
 
-		best, missed := pickBestRate(mapShippoRates(shipment.Rates), deliverBy)
+		rates := mapShippoRates(shipment.Rates)
+		best, missed := pickBestRate(rates, deliverBy)
 		if best == nil {
 			quote.Complete = false
 			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: no usable rate", from.Name))
 			continue
 		}
-		amount, err := rateAmountMinor(best.Amount)
+
+		shopQuote := QuotedShopDelivery{
+			ShopID:           shopID.String(),
+			ShopName:         from.Name,
+			ShipmentObjectID: shipment.ObjectID,
+			Options:          make([]QuotedDeliveryOption, 0, len(rates)),
+		}
+		for _, r := range rates {
+			amount, err := rateAmountMinor(r.Amount)
+			if err != nil {
+				continue
+			}
+			opt := QuotedDeliveryOption{
+				Provider:         r.Provider,
+				ServiceName:      r.ServiceName,
+				Amount:           amount,
+				Currency:         r.Currency,
+				EstimatedDays:    r.EstimatedDays,
+				DaysAvailable:    r.EstimatedDays,
+				Recommended:      r.ObjectID == best.ObjectID,
+				RateObjectID:     r.ObjectID,
+				ShipmentObjectID: shipment.ObjectID,
+			}
+			shopQuote.Options = append(shopQuote.Options, opt)
+		}
+		if len(shopQuote.Options) == 0 {
+			quote.Complete = false
+			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: unreadable rates", from.Name))
+			continue
+		}
+		// Cheapest-first for AliExpress-style lists.
+		sort.SliceStable(shopQuote.Options, func(i, j int) bool {
+			if shopQuote.Options[i].Amount == shopQuote.Options[j].Amount {
+				return shopQuote.Options[i].EstimatedDays < shopQuote.Options[j].EstimatedDays
+			}
+			return shopQuote.Options[i].Amount < shopQuote.Options[j].Amount
+		})
+		quote.Shops = append(quote.Shops, shopQuote)
+
+		bestAmount, err := rateAmountMinor(best.Amount)
 		if err != nil {
 			quote.Complete = false
 			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: unreadable rate", from.Name))
 			continue
 		}
-
 		quote.Shipments = append(quote.Shipments, QuotedShipment{
 			ShopID:             shopID.String(),
 			ShopName:           from.Name,
 			Provider:           best.Provider,
 			ServiceName:        best.ServiceName,
-			Amount:             amount,
+			Amount:             bestAmount,
 			Currency:           best.Currency,
 			EstimatedDays:      best.EstimatedDays,
+			DaysAvailable:      best.EstimatedDays,
 			MissesDeliveryDate: missed,
+			RateObjectID:       best.ObjectID,
+			ShipmentObjectID:   shipment.ObjectID,
 		})
-		quote.Amount += amount
+		quote.Amount += bestAmount
 		if quote.Currency == "" {
 			quote.Currency = best.Currency
 		}
 	}
 	return quote, nil
+}
+
+func parcelFromCheckoutProduct(p *repository.CheckoutProduct, quantity int) ParcelInput {
+	parcel := models.ProductParcelFromNullable(
+		p.ParcelLength, p.ParcelWidth, p.ParcelHeight,
+		p.ParcelDistanceUnit, p.ParcelWeight, p.ParcelMassUnit,
+	)
+	if parcel == nil || parcel.Length == "" || parcel.Width == "" || parcel.Height == "" || parcel.Weight == "" {
+		return defaultDomesticParcel()
+	}
+	out := ParcelInput{
+		Length: parcel.Length, Width: parcel.Width, Height: parcel.Height,
+		DistanceUnit: parcel.DistanceUnit, Weight: parcel.Weight, MassUnit: parcel.MassUnit,
+	}
+	if out.DistanceUnit == "" {
+		out.DistanceUnit = "cm"
+	}
+	if out.MassUnit == "" {
+		out.MassUnit = "kg"
+	}
+	if quantity > 1 {
+		if w, err := strconv.ParseFloat(out.Weight, 64); err == nil {
+			out.Weight = strconv.FormatFloat(w*float64(quantity), 'f', 3, 64)
+		}
+	}
+	return out
+}
+
+// mergeParcels combines line parcels into one Shippo parcel: max dims, summed weight.
+func mergeParcels(parcels []ParcelInput) ParcelInput {
+	if len(parcels) == 0 {
+		return defaultDomesticParcel()
+	}
+	out := parcels[0]
+	sumW := 0.0
+	for i, p := range parcels {
+		if w, err := strconv.ParseFloat(strings.TrimSpace(p.Weight), 64); err == nil {
+			sumW += w
+		}
+		if i == 0 {
+			continue
+		}
+		out.Length = maxDimString(out.Length, p.Length)
+		out.Width = maxDimString(out.Width, p.Width)
+		out.Height = maxDimString(out.Height, p.Height)
+	}
+	if sumW > 0 {
+		out.Weight = strconv.FormatFloat(sumW, 'f', 3, 64)
+	}
+	if out.DistanceUnit == "" {
+		out.DistanceUnit = "cm"
+	}
+	if out.MassUnit == "" {
+		out.MassUnit = "kg"
+	}
+	return out
+}
+
+func maxDimString(a, b string) string {
+	fa, ea := strconv.ParseFloat(strings.TrimSpace(a), 64)
+	fb, eb := strconv.ParseFloat(strings.TrimSpace(b), 64)
+	if ea != nil {
+		return b
+	}
+	if eb != nil {
+		return a
+	}
+	if fb > fa {
+		return strings.TrimSpace(b)
+	}
+	return strings.TrimSpace(a)
 }
 
 // parseDeliveryDate reads the requested arrival date; a zero time means the

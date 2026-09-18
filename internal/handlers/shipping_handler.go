@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/middleware"
+	"myapp/internal/repository"
 	"myapp/internal/services"
 	"myapp/internal/utils"
 )
@@ -50,9 +51,10 @@ func (h *ShippingHandler) GetRates(w http.ResponseWriter, r *http.Request) {
 
 // buyLabelRequest is the body for POST .../shipping/labels.
 type buyLabelRequest struct {
-	RateObjectID   string `json:"rate_object_id"`   // from rates response rates[].object_id
-	Provider       string `json:"provider"`         // e.g. USPS, DHL Express
-	IdempotencyKey string `json:"idempotency_key"`  // unique per purchase; reuse returns cached shipment
+	RateObjectID        string `json:"rate_object_id"`         // from latest rates response rates[].object_id
+	Provider            string `json:"provider"`               // e.g. USPS, DHL Express
+	IdempotencyKey      string `json:"idempotency_key"`        // unique per purchase; reuse returns cached shipment
+	UseCustomerSelected bool   `json:"use_customer_selected"`  // buy checkout courier from latest rates (ids change each rates call)
 }
 
 // BuyLabel handles POST .../shipping/labels.
@@ -68,9 +70,10 @@ func (h *ShippingHandler) BuyLabel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shipment, err := h.shipping.BuyLabel(r.Context(), sellerID, orderItemID, services.BuyLabelInput{
-		RateObjectID:   req.RateObjectID,
-		Provider:       req.Provider,
-		IdempotencyKey: req.IdempotencyKey,
+		RateObjectID:        req.RateObjectID,
+		Provider:            req.Provider,
+		IdempotencyKey:      req.IdempotencyKey,
+		UseCustomerSelected: req.UseCustomerSelected,
 	})
 	if err != nil {
 		h.writeError(w, err, "could not buy shipping label")
@@ -207,8 +210,16 @@ func (h *ShippingHandler) writeError(w http.ResponseWriter, err error, fallback 
 		utils.Error(w, http.StatusBadGateway, strings.TrimPrefix(err.Error(), "shipping provider error: "))
 	case errors.Is(err, services.ErrShippingCustomsRequired):
 		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrCourierChangeRequiresChat):
+		utils.Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, repository.ErrIdempotencyConflict):
+		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrInvalidInput):
-		utils.Error(w, http.StatusBadRequest, "invalid request")
+		msg := err.Error()
+		if msg == "" || msg == services.ErrInvalidInput.Error() {
+			msg = "invalid request"
+		}
+		utils.Error(w, http.StatusBadRequest, msg)
 	default:
 		log.Printf("shipping handler error: %v", err)
 		utils.Error(w, http.StatusInternalServerError, err.Error())
