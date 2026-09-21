@@ -32,16 +32,22 @@ type Engine interface {
 }
 
 var engines = map[string]Engine{
-	Slug2048:       engine2048{},
-	SnakeSlug:      snakeEngine{},
-	SlideSlug:      slideEngine{},
-	BasketballSlug: basketballEngine{},
-	StackSlug:      stackEngine{},
-	ArcherySlug:    archeryEngine{},
-	BlockBlastSlug: blockBlastEngine{},
-	CricketSlug:    cricketEngine{},
-	SlingSlug:      slingEngine{},
-	HillSlug:       hillEngine{},
+	Slug2048:        engine2048{},
+	SnakeSlug:       snakeEngine{},
+	SlideSlug:       slideEngine{},
+	BasketballSlug:  basketballEngine{},
+	StackSlug:       stackEngine{},
+	ArcherySlug:     archeryEngine{},
+	BlockBlastSlug:  blockBlastEngine{},
+	CricketSlug:     cricketEngine{},
+	SlingSlug:       slingEngine{},
+	HillSlug:        hillEngine{},
+	MemorySlug:      memoryEngine{},
+	WhackSlug:       whackEngine{},
+	BubbleSlug:      bubbleEngine{},
+	TowerBlocksSlug: towerBlocksEngine{},
+	FruitSlug:       fruitEngine{},
+	DoodleSlug:      doodleEngine{},
 }
 
 // EngineFor returns the replay engine for a game slug.
