@@ -87,7 +87,6 @@ erDiagram
         text courier_provider
         text tracking_number
         uuid label_media_id
-        jsonb parcel_details
         jsonb customs_declaration
         jsonb provider_metadata
         text provider_shipment_id
@@ -366,7 +365,6 @@ Without `shipping_quotes`, only (1)+(2) are written (no shipment row until selle
 | `amount` | `provider_metadata.amount` | cents customer paid for shipping |
 | `currency` | `provider_metadata.currency` | e.g. `USD` |
 | — | `provider_metadata.source` | fixed `"checkout_quote"` |
-| — | `parcel_details` | **NULL** (seller fills at `/rates`) |
 | — | `customs_declaration` | **NULL** (seller fills at `/rates`) |
 | — | `is_international` | default `false` until `/rates` |
 | — | `courier_provider` | **NULL** until BuyLabel |
@@ -382,7 +380,7 @@ Matching rule: `shipping_quotes[].shop_id` == `order_items.shop_id` (one quote p
 ```sql
 INSERT INTO marketplace.shipments (
   order_id, order_item_id, seller_id, delivery_mode, status, is_international,
-  parcel_details, customs_declaration, provider_shipment_id,
+  customs_declaration, provider_shipment_id,
   provider_customs_declaration_id, provider_metadata
 ) VALUES (...)
 ON CONFLICT (order_item_id) WHERE status = 'pending' DO UPDATE SET
@@ -416,7 +414,6 @@ ON CONFLICT (order_item_id) WHERE status = 'pending' DO UPDATE SET
 | `status` | `pending` |
 | `provider_shipment_id` | `shippo_shipment_xxx` |
 | `provider_metadata` | JSON above |
-| `parcel_details` | null |
 | `customs_declaration` | null |
 | `courier_provider` | null |
 | `tracking_number` | null |
@@ -525,7 +522,7 @@ Rates/labels require status in `accepted` | `preparing` | `ready`.
 1. Order item + fulfilment status.
 2. Shop ship-from address (seller warehouse).
 3. Order recipient ship-to address.
-4. Existing pending shipment (`parcel_details`, `customs_declaration`, `provider_metadata` with checkout quote).
+4. Existing pending shipment (`customs_declaration`, `provider_metadata` with checkout quote) + product parcel columns.
 5. Product parcel columns as fallback.
 
 **Parcel priority:** request body → stored shipment parcel → **product.parcel**.
@@ -536,7 +533,7 @@ Rates/labels require status in `accepted` | `preparing` | `ready`.
 
 | Table | Action |
 |-------|--------|
-| `marketplace.shipments` | **UPSERT** same pending row: fresh `provider_shipment_id`, `parcel_details`, `customs_declaration`, `provider_metadata` |
+| `marketplace.shipments` | **UPSERT** same pending row: fresh `provider_shipment_id`, `customs_declaration`, `provider_metadata` |
 
 **`provider_metadata` after rates:**
 ```json
@@ -1020,7 +1017,6 @@ Tables touched by browse → quote → place order → accept → rates → labe
 | `delivery_mode` | text | `courier` | | | |
 | `status` | text | `pending` | stays `pending` | `label_created` | `in_transit` / `delivered` / … |
 | `is_international` | bool | false default | set from countries | | |
-| `parcel_details` | jsonb | null | seller/product parcel | kept | |
 | `customs_declaration` | jsonb | null | intl customs JSON | kept | |
 | `provider_shipment_id` | text | checkout Shippo shipment id | **fresh** Shippo shipment id | may update | |
 | `provider_customs_declaration_id` | text | | Shippo customs id | | |
@@ -1135,7 +1131,7 @@ unit_amount, total_amount, fulfilment_status='pending'
 ```text
 order_id, order_item_id, seller_id,
 delivery_mode='courier', status='pending', is_international=false,
-parcel_details=null, customs_declaration=null,
+customs_declaration=null,
 provider_shipment_id = shipping_quotes.shipment_object_id,
 provider_customs_declaration_id=null,
 provider_metadata = {
@@ -1393,9 +1389,8 @@ cart items
 ```text
 priority (first non-empty wins):
   1. POST body.parcel
-  2. marketplace.shipments.parcel_details  (saved from earlier rates)
-  3. seller.products.parcel_* via GetShippingContext
-  4. defaultDomesticParcel() for domestic if still empty
+  2. seller.products.parcel_* via GetShippingContext
+  3. defaultDomesticParcel() for domestic if still empty
 ```
 
 Code: `mergeShippingInput(posted, firstNonEmptyJSON(sc.StoredParcel, productParcelJSON), …)`.
@@ -1587,7 +1582,7 @@ mass_unit                      -> mass_unit       // "kg" | "lb" | …
 seller.products.parcel_*
         |
         |  quote: parcelFromCheckoutProduct + mergeParcels
-        |  rates: body > shipment.parcel_details > product parcel > default
+        |  rates: body > product.parcel > default
         v
 ParcelInput  --parcelToShippo-->  { length, width, height, distance_unit, weight, mass_unit }
         |
@@ -1599,7 +1594,7 @@ POST https://api.goshippo.com/shipments/
 rates[] + shipment object_id
         |
         |  stored in marketplace.shipments.provider_metadata / provider_shipment_id
-        |  (and parcel_details on seller rates)
+        |  (customs only persisted on shipment at rates)
         v
 POST https://api.goshippo.com/transactions/  { rate: recommended_rate_object_id }
         |

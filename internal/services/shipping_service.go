@@ -121,7 +121,8 @@ type BuyLabelInput struct {
 }
 
 // GetRates creates a Shippo shipment (with customs if international), returns carrier rates,
-// and upserts a pending row on marketplace.shipments with parcel_details / customs_declaration.
+// and upserts a pending row on marketplace.shipments with customs_declaration / metadata.
+// Parcel size/weight comes from the request body or seller.products.parcel_* (not copied onto shipments).
 func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID string, posted ShippingShipmentInput) (*ShippingRatesResult, error) {
 	if !s.shippo.Enabled() {
 		return nil, ErrShippingNotConfigured
@@ -145,10 +146,8 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	}
 	international := isInternationalShipment(from.Country, to.Country)
 
-	// Prefer posted body; reuse parcel/customs already stored on a pending shipment if omitted.
-	// Fall back to the order item's product.parcel (seller catalog dims from the form).
-	productParcelJSON := productParcelStoredJSON(sc)
-	shippingIn, err := mergeShippingInput(posted, firstNonEmptyJSON(sc.StoredParcel, productParcelJSON), sc.StoredCustoms)
+	// Prefer posted body parcel; fall back to product.parcel. Reuse stored customs if omitted.
+	shippingIn, err := mergeShippingInput(posted, productParcelStoredJSON(sc), sc.StoredCustoms)
 	if err != nil {
 		return nil, ErrInvalidInput
 	}
@@ -164,10 +163,7 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	}
 
 	var customsDeclarationID string
-	var parcelJSON, customsJSON json.RawMessage
-	if parcelBytes, err := json.Marshal(parcel); err == nil {
-		parcelJSON = parcelBytes
-	}
+	var customsJSON json.RawMessage
 
 	// International: create Shippo customs declaration first, then attach its id to the shipment.
 	if international {
@@ -230,7 +226,6 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 		DeliveryMode:       "courier",
 		Status:             "pending",
 		IsInternational:    international,
-		ParcelDetails:      parcelJSON,
 		CustomsDeclaration: customsJSON,
 		ProviderShipmentID: &providerShipmentID,
 		ProviderMetadata:   ratesMeta,
@@ -463,13 +458,6 @@ func recommendedRateIDFromMetadata(meta json.RawMessage, selected *CheckoutSelec
 		}
 	}
 	return matchCheckoutRateObjectID(rates, selected)
-}
-
-func firstNonEmptyJSON(a, b json.RawMessage) json.RawMessage {
-	if len(a) > 0 && string(a) != "null" {
-		return a
-	}
-	return b
 }
 
 func productParcelStoredJSON(sc *repository.ShippingContext) json.RawMessage {
