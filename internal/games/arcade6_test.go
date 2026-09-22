@@ -57,12 +57,14 @@ func TestMemoryPerfectRunClearsTheGrid(t *testing.T) {
 	if !result.Won {
 		t.Fatal("a perfect run should clear the grid")
 	}
-	if result.Stats["matches"] != 8 {
-		t.Fatalf("matches = %d, want 8", result.Stats["matches"])
+	pairs := DefaultMemoryConfig().Pairs
+	if int(result.Stats["matches"]) != pairs {
+		t.Fatalf("matches = %d, want %d", result.Stats["matches"], pairs)
 	}
-	// Eight matches in a row: the streak bonus should beat eight flat matches.
-	if result.Score <= 8*20 {
-		t.Fatalf("score %d should exceed a flat 160 once the streak pays", result.Score)
+	// A run of matches in a row: the streak bonus should beat flat matches.
+	flat := int64(pairs) * int64(DefaultMemoryConfig().PointsPerMatch)
+	if result.Score <= flat {
+		t.Fatalf("score %d should exceed a flat %d once the streak pays", result.Score, flat)
 	}
 }
 

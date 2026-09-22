@@ -48,8 +48,19 @@ func (h *GameHandler) GetGame(w http.ResponseWriter, r *http.Request) {
 
 // StartSession handles POST /games/{slug}/sessions.
 // Returns the server seed the client must use to generate its tiles.
+//
+// An optional ?level= scales up the difficulty for games that support level
+// progression (currently Memory Match) — the harder config it produces is
+// baked into the session at creation time, so replay never has to know a
+// level was involved.
 func (h *GameHandler) StartSession(w http.ResponseWriter, r *http.Request) {
-	session, err := h.games.StartSession(r.Context(), chi.URLParam(r, "slug"), actorFromContext(r))
+	level := 1
+	if raw := r.URL.Query().Get("level"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			level = parsed
+		}
+	}
+	session, err := h.games.StartSession(r.Context(), chi.URLParam(r, "slug"), actorFromContext(r), level)
 	if err != nil {
 		h.writeError(w, err, "could not start game session")
 		return

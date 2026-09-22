@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -96,12 +97,21 @@ func (s *GameService) playable(ctx context.Context, slug string) (*repository.Pl
 	return pg, nil
 }
 
+// maxSessionLevel bounds how far a player can scale a session up, so a
+// crafted level value can't deal an absurd board.
+const maxSessionLevel = 8
+
 // StartSession opens a play and hands the client its seed.
 //
 // The seed is generated here, server-side, so a player cannot keep restarting
 // until they are dealt an easy board, and so this backend can reproduce the
 // exact same game when the score comes back.
-func (s *GameService) StartSession(ctx context.Context, slug string, actor SocialActor) (*models.GameSessionView, error) {
+//
+// level lets a game with level progression (currently Memory Match) ask for
+// a harder board than its base config. The scaled config is computed once,
+// here, and stored on the session itself — replay just reads it back, so a
+// level is never something the server has to remember separately.
+func (s *GameService) StartSession(ctx context.Context, slug string, actor SocialActor, level int) (*models.GameSessionView, error) {
 	identity, err := actor.toIdentity()
 	if err != nil {
 		return nil, err
@@ -112,18 +122,29 @@ func (s *GameService) StartSession(ctx context.Context, slug string, actor Socia
 		return nil, err
 	}
 
+	if level < 1 {
+		level = 1
+	}
+	if level > maxSessionLevel {
+		level = maxSessionLevel
+	}
+	config, err := scaleConfigForLevel(slug, pg.Version.Config, level)
+	if err != nil {
+		return nil, err
+	}
+
 	seed, err := games.NewSeed()
 	if err != nil {
 		return nil, err
 	}
 
-	ttl := time.Duration(games.SessionTTLSeconds(pg.Version.Config)) * time.Second
+	ttl := time.Duration(games.SessionTTLSeconds(config)) * time.Second
 	session, err := s.games.CreateSession(ctx, repository.CreateSessionInput{
 		GameVersionID: pg.Version.ID,
 		Identity:      identity,
 		Mode:          "practice", // official mode arrives with competitions
 		ServerSeed:    seed,
-		Config:        pg.Version.Config,
+		Config:        config,
 		ExpiresAt:     time.Now().Add(ttl),
 	})
 	if err != nil {
@@ -374,6 +395,43 @@ func sessionBelongsTo(session *models.GameSession, identity repository.SocialIde
 func hashMoves(moves []string) string {
 	sum := sha256.Sum256([]byte(strings.Join(moves, ",")))
 	return hex.EncodeToString(sum[:])
+}
+
+// scaleConfigForLevel returns the config a session should actually run with.
+// Only games that define level progression change; everything else plays
+// its base config regardless of what level was asked for.
+func scaleConfigForLevel(slug string, base json.RawMessage, level int) (json.RawMessage, error) {
+	if level > maxSessionLevel {
+		level = maxSessionLevel
+	}
+	if slug != games.MemorySlug || level <= 1 {
+		return base, nil
+	}
+
+	cfg := games.DefaultMemoryConfig()
+	if err := json.Unmarshal(base, &cfg); err != nil {
+		return nil, fmt.Errorf("parse memory config: %w", err)
+	}
+
+	// Half a column's worth of extra pairs a level, so the card count stays a
+	// multiple of the column count and the grid never leaves a ragged row —
+	// whatever the column count actually is.
+	cfg.Pairs += (cfg.Columns / 2) * (level - 1)
+	// The board gets bigger *and* stingier with turns: the ratio of turns to
+	// pairs shrinks a little each level, down to a floor.
+	ratio := 10 - (level - 1)
+	if ratio < 5 {
+		ratio = 5
+	}
+	cfg.MaxTurns = cfg.Pairs * ratio
+	cfg.PointsPerMatch += 2 * (level - 1)
+	cfg.StreakBonus += (level - 1)
+
+	scaled, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal scaled memory config: %w", err)
+	}
+	return scaled, nil
 }
 
 // mapGameRepoErr converts storage errors into service-level ones.

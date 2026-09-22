@@ -20,15 +20,16 @@ type MemoryConfig struct {
 	SessionTTLSeconds int `json:"session_ttl_seconds"`
 }
 
-// DefaultMemoryConfig mirrors the 1.0.0 version seeded by migration 000032.
+// DefaultMemoryConfig mirrors the 1.0.0 version seeded by migration 000032,
+// grown to a 6x6 board by migration 000033 and an 8x8 board by 000034.
 func DefaultMemoryConfig() MemoryConfig {
 	return MemoryConfig{
-		Pairs:             8,
-		Columns:           4,
+		Pairs:             32,
+		Columns:           8,
 		PointsPerMatch:    20,
 		StreakBonus:       10,
 		TurnPenalty:       1,
-		MaxTurns:          80,
+		MaxTurns:          320,
 		MinMsPerFlip:      160,
 		SessionTTLSeconds: defaultSessionTTLSeconds,
 	}
