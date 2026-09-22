@@ -13,6 +13,9 @@ type DoodleConfig struct {
 	Lanes             int `json:"lanes"`
 	Platforms         int `json:"platforms"`
 	SpringEvery       int `json:"spring_every"`
+	// SpringLift is how many ledges a spring carries the player, counting the
+	// spring itself: 1 is no boost at all, 3 throws them two clear of it.
+	SpringLift        int `json:"spring_lift"`
 	PointsPerHop      int `json:"points_per_hop"`
 	SpringBonus       int `json:"spring_bonus"`
 	HeightBonusEvery  int `json:"height_bonus_every"`
@@ -27,6 +30,7 @@ func DefaultDoodleConfig() DoodleConfig {
 		Lanes:             5,
 		Platforms:         120,
 		SpringEvery:       9,
+		SpringLift:        3,
 		PointsPerHop:      8,
 		SpringBonus:       14,
 		HeightBonusEvery:  10,
@@ -46,6 +50,7 @@ func (c DoodleConfig) withDefaults() DoodleConfig {
 	fill(&c.Lanes, d.Lanes)
 	fill(&c.Platforms, d.Platforms)
 	fill(&c.SpringEvery, d.SpringEvery)
+	fill(&c.SpringLift, d.SpringLift)
 	fill(&c.PointsPerHop, d.PointsPerHop)
 	fill(&c.SpringBonus, d.SpringBonus)
 	fill(&c.HeightBonusEvery, d.HeightBonusEvery)
@@ -71,7 +76,7 @@ func (p DoodlePlatform) Has(lane int) bool {
 // DoodleGame is Doodle Jump: the player hops up a tower of ledges, choosing a
 // lane each time. Reachable lanes are limited to the one under them and its
 // neighbours, so a ledge two lanes across is a miss and the round is over.
-// Springs throw the player two ledges up at once and pay a bonus, and every
+// Springs throw the player several ledges up at once and pay a bonus, and every
 // tenth ledge pays a height bonus — so the climb rewards reading ahead.
 //
 // The tower is drawn from the seed, so the server replays the same ledges the
@@ -144,6 +149,7 @@ func (g *DoodleGame) Height() int                 { return g.height }
 func (g *DoodleGame) Hops() int                   { return g.hops }
 func (g *DoodleGame) Lane() int                   { return g.lane }
 func (g *DoodleGame) Fell() bool                  { return g.fell }
+func (g *DoodleGame) Springs() int                { return g.springs }
 func (g *DoodleGame) Platforms() []DoodlePlatform { return g.platforms }
 
 // Reached reports whether the climb has run out of tower.
@@ -184,8 +190,10 @@ func (g *DoodleGame) Hop(lane int) (bool, error) {
 	if next.Spring {
 		g.springs++
 		g.score += int64(g.cfg.SpringBonus)
-		// A spring carries the player over the following ledge.
-		if !g.Topped() {
+		// A spring carries the player clear over the ledges above it. Each
+		// one is skipped outright, so nothing there has to be landed on — it
+		// is the reward for reaching the spring in the first place.
+		for lift := 1; lift < g.cfg.SpringLift && !g.Topped(); lift++ {
 			g.height++
 			g.lane = g.platforms[g.height].Lane
 		}

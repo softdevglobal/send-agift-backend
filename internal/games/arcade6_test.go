@@ -379,23 +379,20 @@ func TestDoodleClimbFollowsTheSeededTower(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tower: %v", err)
 	}
-	// Climb by always hopping to the lane the next ledge is actually in.
+	// Climb by always hopping to the lane the next ledge is actually in,
+	// driving the real game rather than a second copy of its rules — a model
+	// of the climb here would only have to be kept in step with the engine.
 	moves := []string{}
-	height := 0
-	lane := g.Lane()
-	for i := 0; i < 12 && height < len(g.Platforms())-1; i++ {
-		next := g.PlatformAt(height + 1)
+	for i := 0; i < 12 && !(g.Fell() || g.Topped()); i++ {
+		next := g.PlatformAt(g.Height() + 1)
 		// The main ledge is always within one lane by construction; the alt
 		// one may not be, so follow the main.
 		moves = append(moves, strconv.Itoa(next.Lane))
-		lane = next.Lane
-		height++
-		if next.Spring && height < len(g.Platforms())-1 {
-			height++
-			lane = g.PlatformAt(height).Lane
+		if _, err := g.Hop(next.Lane); err != nil {
+			t.Fatalf("hop %d: %v", i, err)
 		}
 	}
-	_ = lane
+
 	result, err := ReplayDoodle(arcadeSeed, DoodleConfig{}, moves)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
@@ -405,6 +402,44 @@ func TestDoodleClimbFollowsTheSeededTower(t *testing.T) {
 	}
 	if result.Stats["height"] < int64(len(moves)) {
 		t.Fatalf("height %d should be at least the %d hops taken", result.Stats["height"], len(moves))
+	}
+}
+
+func TestDoodleSpringLiftsClearOfTheLedgesAbove(t *testing.T) {
+	cfg := DefaultDoodleConfig()
+	g, err := NewDoodleGame(arcadeSeed, cfg)
+	if err != nil {
+		t.Fatalf("tower: %v", err)
+	}
+
+	// Climb until the next ledge up is a spring.
+	for i := 0; i < 200 && !(g.Fell() || g.Topped()); i++ {
+		next := g.PlatformAt(g.Height() + 1)
+		if next.Spring {
+			break
+		}
+		if _, err := g.Hop(next.Lane); err != nil {
+			t.Fatalf("hop %d: %v", i, err)
+		}
+	}
+	next := g.PlatformAt(g.Height() + 1)
+	if !next.Spring || g.Fell() || g.Topped() {
+		t.Skip("no spring came up on this seed within the climb")
+	}
+
+	before := g.Height()
+	springs := g.Springs()
+	if _, err := g.Hop(next.Lane); err != nil {
+		t.Fatalf("spring hop: %v", err)
+	}
+
+	// The whole point of a spring is that the ledges it clears never have to
+	// be landed on, so the height has to jump by the full lift.
+	if got := g.Height() - before; got != cfg.SpringLift {
+		t.Fatalf("a spring lifted %d ledges, want %d", got, cfg.SpringLift)
+	}
+	if g.Springs() != springs+1 {
+		t.Fatalf("springs = %d, want %d", g.Springs(), springs+1)
 	}
 }
 
