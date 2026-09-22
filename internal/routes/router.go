@@ -45,6 +45,10 @@ func New(
 	productReviews *handlers.ProductReviewHandler,
 	// Handler instance that manages customer↔seller chat
 	messaging *handlers.MessagingHandler,
+	// Handler instance that manages the skill-game collection and scores
+	games *handlers.GameHandler,
+	// Handler instance that manages skill competitions, leaderboards and winners
+	competitions *handlers.CompetitionHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
 	// Handler instance that proxies Google Places address lookups
@@ -143,6 +147,14 @@ func New(
 		// Customer↔seller product inquiry and order chat
 		// Example: POST /api/v1/conversations, GET /api/v1/conversations/{id}/messages
 		RegisterMessagingRoutes(r, messaging, jwtSecret)
+
+		// Skill-game collection: catalog, seeded sessions, server-scored results
+		// Example: POST /api/v1/games/2048/sessions
+		RegisterGameRoutes(r, games, jwtSecret)
+
+		// Skill competitions: live leaderboards, official attempts, winners, prize claims
+		// Example: GET /api/v1/competitions/{id}/leaderboard
+		RegisterCompetitionRoutes(r, competitions, jwtSecret)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload
