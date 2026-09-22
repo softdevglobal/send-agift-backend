@@ -14,7 +14,6 @@ type Shipment struct {
 	OrderItemID              *uuid.UUID      `json:"order_item_id,omitempty"`
 	SellerID                 uuid.UUID       `json:"seller_id"`
 	IsInternational          bool            `json:"is_international"`
-	ParcelDetails            json.RawMessage `json:"parcel_details,omitempty"`
 	CustomsDeclaration       json.RawMessage `json:"customs_declaration,omitempty"`
 	CourierProvider          *string         `json:"courier_provider,omitempty"`
 	TrackingNumber           *string         `json:"tracking_number,omitempty"`

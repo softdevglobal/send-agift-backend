@@ -207,7 +207,9 @@ func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID stri
 			sg.id, sg.customer_id, sg.product_id, sg.created_at,
 			p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 			p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-			p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url
+			p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
+			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
+			p.parcel_weight, p.parcel_mass_unit
 		from customer.saved_gifts sg
 		inner join seller.products p on p.id = sg.product_id
 		where sg.customer_id = $1
@@ -221,17 +223,20 @@ func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID stri
 	for rows.Next() {
 		var item models.SavedGiftDetails
 		var p models.Product
+		var length, width, height, distanceUnit, weight, massUnit *string
 		if err := rows.Scan(
 			&item.ID, &item.CustomerID, &item.ProductID, &item.CreatedAt,
 			&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
 			&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
 			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
+			&length, &width, &height, &distanceUnit, &weight, &massUnit,
 		); err != nil {
 			return nil, err
 		}
 		if p.OccasionTags == nil {
 			p.OccasionTags = []string{}
 		}
+		p.Parcel = models.ProductParcelFromNullable(length, width, height, distanceUnit, weight, massUnit)
 		item.Product = p
 		items = append(items, item)
 	}

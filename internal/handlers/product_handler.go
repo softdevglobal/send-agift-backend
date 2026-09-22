@@ -115,7 +115,7 @@ func (h *ProductHandler) UpdateInventory(w http.ResponseWriter, r *http.Request)
 func (h *ProductHandler) writeError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, services.ErrInvalidProduct):
-		utils.Error(w, http.StatusBadRequest, "name, currency required; status must be draft|published|paused|rejected; visibility personal|corporate|both; amounts >= 0")
+		utils.Error(w, http.StatusBadRequest, "name, currency required; status draft|published|paused|rejected; visibility personal|corporate|both; amounts >= 0; media max 12 image/video files with object_path+mime_type")
 	case errors.Is(err, services.ErrInvalidCurrency):
 		utils.Error(w, http.StatusBadRequest, "currency must be a known ISO currency code")
 	case errors.Is(err, services.ErrInvalidInventory):

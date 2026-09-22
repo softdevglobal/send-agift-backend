@@ -38,7 +38,8 @@ type presignUploadResponse struct {
 var allowedFolders = map[string]string{
 	"seller-profile": "public/sellers",
 	"shop-image":     "public/shops",
-	"product-image":  "public/products",
+	"product-image":  "public/products/images",
+	"product-video":  "public/products/videos",
 	"reel-video":     "public/reels/videos",
 	"reel-photo":     "public/reels/photos",
 	"chat-image":     "public/chat/images",

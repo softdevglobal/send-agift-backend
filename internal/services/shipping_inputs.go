@@ -52,24 +52,22 @@ type ShippingShipmentInput struct {
 	CustomsDeclaration *CustomsDeclarationInput `json:"customs_declaration"`
 }
 
-// MarshalStored encodes parcel and customs for JSONB columns on marketplace.shipments.
-func (in ShippingShipmentInput) MarshalStored() (parcel, customs json.RawMessage) {
-	if in.Parcel != nil {
-		parcel, _ = json.Marshal(in.Parcel)
-	}
+// MarshalStored encodes customs for the pending shipment JSONB column.
+// Parcel is not stored on shipments — it comes from seller.products.parcel_*.
+func (in ShippingShipmentInput) MarshalStored() (customs json.RawMessage) {
 	if in.CustomsDeclaration != nil {
 		customs, _ = json.Marshal(in.CustomsDeclaration)
 	}
-	return parcel, customs
+	return customs
 }
 
-// mergeShippingInput prefers the posted body; falls back to values already stored
-// on a pending shipment row (so a second rates call can omit fields already saved).
-func mergeShippingInput(posted ShippingShipmentInput, storedParcel, storedCustoms json.RawMessage) (ShippingShipmentInput, error) {
+// mergeShippingInput prefers the posted body; falls back to product parcel JSON
+// and customs already stored on a pending shipment (so a second rates call can omit them).
+func mergeShippingInput(posted ShippingShipmentInput, productOrStoredParcel, storedCustoms json.RawMessage) (ShippingShipmentInput, error) {
 	out := posted
-	if out.Parcel == nil && len(storedParcel) > 0 {
+	if out.Parcel == nil && len(productOrStoredParcel) > 0 && string(productOrStoredParcel) != "null" {
 		var p ParcelInput
-		if err := json.Unmarshal(storedParcel, &p); err != nil {
+		if err := json.Unmarshal(productOrStoredParcel, &p); err != nil {
 			return ShippingShipmentInput{}, err
 		}
 		out.Parcel = &p

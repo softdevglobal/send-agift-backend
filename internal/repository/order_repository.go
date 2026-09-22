@@ -41,19 +41,29 @@ type CheckoutProduct struct {
 	Status                 string
 	CustomerTypeVisibility string
 	ShopStatus             string
+	ParcelLength           *string
+	ParcelWidth            *string
+	ParcelHeight           *string
+	ParcelDistanceUnit     *string
+	ParcelWeight           *string
+	ParcelMassUnit         *string
 }
 
 func (r *OrderRepository) GetCheckoutProduct(ctx context.Context, productID string) (*CheckoutProduct, error) {
 	p := &CheckoutProduct{}
 	err := r.db.QueryRow(ctx, `
 		select p.id::text, p.shop_id::text, s.seller_id::text, p.price_amount, p.currency,
-		       p.status, p.customer_type_visibility, s.status
+		       p.status, p.customer_type_visibility, s.status,
+		       p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
+		       p.parcel_weight, p.parcel_mass_unit
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.id = $1`, productID,
 	).Scan(
 		&p.ID, &p.ShopID, &p.SellerID, &p.PriceAmount, &p.Currency,
 		&p.Status, &p.CustomerTypeVisibility, &p.ShopStatus,
+		&p.ParcelLength, &p.ParcelWidth, &p.ParcelHeight, &p.ParcelDistanceUnit,
+		&p.ParcelWeight, &p.ParcelMassUnit,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderProductNotFound
@@ -339,6 +349,8 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 	// column is scanned into a nullable holder here and the structs are only
 	// built when a recipient actually exists.
 	var (
+		prodLength, prodWidth, prodHeight, prodDistanceUnit, prodWeight, prodMassUnit *string
+
 		recipientID               *uuid.UUID
 		recipientCustomerID       *uuid.UUID
 		recipientName             *string
@@ -378,6 +390,8 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 			p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 			p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
 			p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
+			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
+			p.parcel_weight, p.parcel_mass_unit,
 			r.id, r.customer_id, r.name, r.relationship, r.email, r.phone, r.image_url,
 			r.default_address_id, r.preferences, r.created_at, r.updated_at,
 			ra.id, ra.recipient_id, ra.country_id, ra.label, ra.address_type, ra.line1, ra.line2,
@@ -394,6 +408,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 		&d.Product.ID, &d.Product.ShopID, &d.Product.Name, &d.Product.Slug, &d.Product.Description, &d.Product.ProductType, &d.Product.PriceAmount,
 		&d.Product.Currency, &d.Product.Status, &d.Product.OccasionTags, &d.Product.CustomerTypeVisibility,
 		&d.Product.PointsDisplayEnabled, &d.Product.PrepMinutes, &d.Product.CreatedAt, &d.Product.UpdatedAt, &d.Product.ImageURL,
+		&prodLength, &prodWidth, &prodHeight, &prodDistanceUnit, &prodWeight, &prodMassUnit,
 		&recipientID, &recipientCustomerID, &recipientName, &recipientRelationship, &recipientEmail, &recipientPhone, &recipientImageURL,
 		&recipientDefaultAddressID, &recipientPreferences, &recipientCreatedAt, &recipientUpdatedAt,
 		&addrID, &addrRecipientID, &addrCountryID, &addrLabel, &addrType, &addrLine1, &addrLine2,
@@ -406,6 +421,8 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 	if err != nil {
 		return nil, err
 	}
+
+	d.Product.Parcel = models.ProductParcelFromNullable(prodLength, prodWidth, prodHeight, prodDistanceUnit, prodWeight, prodMassUnit)
 
 	if recipientID != nil {
 		recipient := models.Recipient{

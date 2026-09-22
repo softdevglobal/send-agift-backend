@@ -1,6 +1,8 @@
 package models
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +25,54 @@ type Product struct {
 	PrepMinutes            int       `json:"prep_minutes"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
-	ImageURL               *string   `json:"image_url,omitempty"`
+	// ImageURL is the cover thumbnail (list cards, order lines). Prefer Media for galleries.
+	ImageURL *string `json:"image_url,omitempty"`
+	// Shipping parcel used for delivery quotes / rates (seller form dims).
+	Parcel *ProductParcel `json:"parcel,omitempty"`
+	// Media is the ordered gallery (images + videos) from seller.product_media.
+	Media []ProductMediaItem `json:"media,omitempty"`
+}
+
+// ProductMediaItem is one gallery file joined with media.media_assets.
+type ProductMediaItem struct {
+	MediaAssetID uuid.UUID       `json:"media_asset_id"`
+	Position     int             `json:"position"`
+	AssetType    string          `json:"asset_type"` // image | video
+	Bucket       string          `json:"bucket"`
+	ObjectPath   string          `json:"object_path"`
+	CDNURL       *string         `json:"cdn_url,omitempty"`
+	MimeType     string          `json:"mime_type"`
+	SizeBytes    int64           `json:"size_bytes"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+}
+
+// ProductParcel is the package size/weight stored on a product.
+type ProductParcel struct {
+	Length       string `json:"length"`
+	Width        string `json:"width"`
+	Height       string `json:"height"`
+	DistanceUnit string `json:"distance_unit"`
+	Weight       string `json:"weight"`
+	MassUnit     string `json:"mass_unit"`
+}
+
+// ProductParcelFromNullable builds a parcel when any dimension/weight is set.
+func ProductParcelFromNullable(length, width, height, distanceUnit, weight, massUnit *string) *ProductParcel {
+	val := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return strings.TrimSpace(*p)
+	}
+	l, w, h := val(length), val(width), val(height)
+	du, wt, mu := val(distanceUnit), val(weight), val(massUnit)
+	if l == "" && w == "" && h == "" && wt == "" {
+		return nil
+	}
+	return &ProductParcel{
+		Length: l, Width: w, Height: h,
+		DistanceUnit: du, Weight: wt, MassUnit: mu,
+	}
 }
 
 // Inventory maps to seller.inventory.

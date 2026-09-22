@@ -45,6 +45,8 @@ type ShippingContext struct {
 	OrderItemID      uuid.UUID
 	SellerID         uuid.UUID
 	FulfilmentStatus string
+	DeliveryAmount   int    // marketplace.orders.delivery_amount (customer-facing shipping total)
+	Currency         string // marketplace.orders.currency
 	FromName         string
 	FromEmail        string
 	FromPhone        string
@@ -63,28 +65,38 @@ type ShippingContext struct {
 	ToRegion         string
 	ToPostalCode     string
 	ToCountryISO     string
-	StoredParcel     json.RawMessage // marketplace.shipments.parcel_details (pending)
-	StoredCustoms    json.RawMessage // marketplace.shipments.customs_declaration (pending)
+	StoredCustoms  json.RawMessage // marketplace.shipments.customs_declaration (pending)
+	StoredMetadata json.RawMessage // marketplace.shipments.provider_metadata (pending; may hold checkout_quote)
+	ProductParcelLength       *string
+	ProductParcelWidth        *string
+	ProductParcelHeight       *string
+	ProductParcelDistanceUnit *string
+	ProductParcelWeight       *string
+	ProductParcelMassUnit     *string
 }
 
 // GetShippingContext loads ship-from (shop address), ship-to (recipient address),
-// and any pending shipment parcel/customs for the seller's order item.
+// product parcel columns, and any pending shipment customs/metadata.
 func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, orderItemID string) (*ShippingContext, error) {
 	sc := &ShippingContext{}
 	err := r.db.QueryRow(ctx, `
 		select
 			o.id, oi.id, oi.seller_id, oi.fulfilment_status,
+			o.delivery_amount, o.currency,
 			coalesce(se.trading_name, s.name, se.legal_name), se.email, coalesce(se.phone, ''),
 			sa.line1, coalesce(sa.line2, ''), sa.city, coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
 			coalesce(fc.iso_code, ''),
 			coalesce(r.name, ''), coalesce(r.email::text, ''), coalesce(r.phone, ''),
 			coalesce(ra.line1, ''), coalesce(ra.line2, ''), coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
 			coalesce(tc.iso_code, ''),
-			sh.parcel_details, sh.customs_declaration
+			sh.customs_declaration, sh.provider_metadata,
+			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
+			p.parcel_weight, p.parcel_mass_unit
 		from marketplace.order_items oi
 		inner join marketplace.orders o on o.id = oi.order_id
 		inner join seller.sellers se on se.id = oi.seller_id
 		inner join seller.shops s on s.id = oi.shop_id
+		inner join seller.products p on p.id = oi.product_id
 		left join marketplace.shipments sh on sh.order_item_id = oi.id and sh.status = 'pending'
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
 		left join customer.recipients r on r.id = o.recipient_id
@@ -98,11 +110,14 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		orderItemID, sellerID,
 	).Scan(
 		&sc.OrderID, &sc.OrderItemID, &sc.SellerID, &sc.FulfilmentStatus,
+		&sc.DeliveryAmount, &sc.Currency,
 		&sc.FromName, &sc.FromEmail, &sc.FromPhone,
 		&sc.FromStreet1, &sc.FromStreet2, &sc.FromCity, &sc.FromRegion, &sc.FromPostalCode, &sc.FromCountryISO,
 		&sc.ToName, &sc.ToEmail, &sc.ToPhone,
 		&sc.ToStreet1, &sc.ToStreet2, &sc.ToCity, &sc.ToRegion, &sc.ToPostalCode, &sc.ToCountryISO,
-		&sc.StoredParcel, &sc.StoredCustoms,
+		&sc.StoredCustoms, &sc.StoredMetadata,
+		&sc.ProductParcelLength, &sc.ProductParcelWidth, &sc.ProductParcelHeight, &sc.ProductParcelDistanceUnit,
+		&sc.ProductParcelWeight, &sc.ProductParcelMassUnit,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound
@@ -117,10 +132,6 @@ func (r *ShipmentRepository) UpsertQuote(ctx context.Context, s *models.Shipment
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
 	}
-	parcel := s.ParcelDetails
-	if len(parcel) == 0 {
-		parcel = json.RawMessage(`null`)
-	}
 	customs := s.CustomsDeclaration
 	if len(customs) == 0 {
 		customs = json.RawMessage(`null`)
@@ -128,12 +139,11 @@ func (r *ShipmentRepository) UpsertQuote(ctx context.Context, s *models.Shipment
 	return r.db.QueryRow(ctx, `
 		insert into marketplace.shipments (
 			order_id, order_item_id, seller_id, delivery_mode, status, is_international,
-			parcel_details, customs_declaration, provider_shipment_id, provider_customs_declaration_id,
+			customs_declaration, provider_shipment_id, provider_customs_declaration_id,
 			provider_metadata
-		) values ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10)
+		) values ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9)
 		on conflict (order_item_id) where status = 'pending' do update set
 			is_international = excluded.is_international,
-			parcel_details = excluded.parcel_details,
 			customs_declaration = excluded.customs_declaration,
 			provider_shipment_id = excluded.provider_shipment_id,
 			provider_customs_declaration_id = excluded.provider_customs_declaration_id,
@@ -141,7 +151,7 @@ func (r *ShipmentRepository) UpsertQuote(ctx context.Context, s *models.Shipment
 			updated_at = now()
 		returning id, created_at, updated_at`,
 		s.OrderID, s.OrderItemID, s.SellerID, s.DeliveryMode, s.IsInternational,
-		parcel, customs, s.ProviderShipmentID, s.ProviderCustomsID, meta,
+		customs, s.ProviderShipmentID, s.ProviderCustomsID, meta,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
 
@@ -163,12 +173,12 @@ func (r *ShipmentRepository) CompleteLabel(ctx context.Context, orderItemID uuid
 		    provider_metadata = $8,
 		    updated_at = now()
 		where order_item_id = $1 and status = 'pending'
-		returning id, order_id, seller_id, is_international, parcel_details, customs_declaration,
+		returning id, order_id, seller_id, is_international, customs_declaration,
 		          delivery_mode, created_at, updated_at`,
 		orderItemID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID, s.Status,
 		s.ProviderShipmentID, s.ProviderTrackingURL, meta,
 	).Scan(
-		&s.ID, &s.OrderID, &s.SellerID, &s.IsInternational, &s.ParcelDetails, &s.CustomsDeclaration,
+		&s.ID, &s.OrderID, &s.SellerID, &s.IsInternational, &s.CustomsDeclaration,
 		&s.DeliveryMode, &s.CreatedAt, &s.UpdatedAt,
 	)
 	return err
@@ -327,7 +337,7 @@ func (r *ShipmentRepository) GetLatestForOrderItem(ctx context.Context, sellerID
 		       courier_provider, tracking_number, label_media_id, delivery_mode, status,
 		       proof_of_delivery_media_id, delivered_at, provider_shipment_id,
 		       provider_customs_declaration_id, provider_tracking_url, provider_metadata,
-		       parcel_details, customs_declaration, created_at, updated_at
+		       customs_declaration, created_at, updated_at
 		from marketplace.shipments
 		where order_item_id = $1 and seller_id = $2
 		order by created_at desc
@@ -337,7 +347,7 @@ func (r *ShipmentRepository) GetLatestForOrderItem(ctx context.Context, sellerID
 		&s.CourierProvider, &s.TrackingNumber, &s.LabelMediaID, &s.DeliveryMode, &s.Status,
 		&s.ProofOfDeliveryMediaID, &s.DeliveredAt, &s.ProviderShipmentID,
 		&s.ProviderCustomsID, &s.ProviderTrackingURL, &s.ProviderMetadata,
-		&s.ParcelDetails, &s.CustomsDeclaration, &s.CreatedAt, &s.UpdatedAt,
+		&s.CustomsDeclaration, &s.CreatedAt, &s.UpdatedAt,
 	)
 
 	// No row found: return a clear "not found" error.
