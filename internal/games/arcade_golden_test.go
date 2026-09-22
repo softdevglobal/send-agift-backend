@@ -102,3 +102,27 @@ func TestHillCrossLanguageGolden(t *testing.T) {
 		}
 	}
 }
+
+// Bubble Shooter's log is a mix of aims — sideways units per 1000 of rise,
+// so the flight banks off the walls — and "s" swaps of the two queued
+// colours. It was played by a bot that picks the best shot available, which
+// is what makes it worth pinning: a bot firing at random on this same seed
+// pops nothing at all, so these numbers only hold if the flight physics and
+// the queue both replay identically on the client.
+var bubbleGoldenLog = strings.Split("-4000,-4000,-4000,s,-3400,s,-3000,s,-3000,-3200,s,-1000,s,-1000,-4000,s,-4000,-4000,-4000,s,-2800,-4000,-4000,s,-2600,-4000,s,-2600,s,-3600,s,-1800,-600,s,-800,-4000,-4000,s,-3400,-4000,-4000,-4000,-4000,-4000,s,-3600,-4000,-4000,s,-3800,-4000,-4000,s,-2600,-4000,-4000,s,-2800,-4000,-4000,s,-3200,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000,-4000", ",")
+
+func TestBubbleCrossLanguageGolden(t *testing.T) {
+	res, err := ReplayBubble("cafebabe", DefaultBubbleConfig(), bubbleGoldenLog)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if res.Score != 810 || res.GameOver || res.MinDurationMs != 13200 {
+		t.Errorf("score %d over %v min %d, want 810 / false / 13200",
+			res.Score, res.GameOver, res.MinDurationMs)
+	}
+	for stat, want := range map[string]int64{"pops": 71, "shots": 60, "best_combo": 1} {
+		if res.Stats[stat] != want {
+			t.Errorf("%s = %d, want %d", stat, res.Stats[stat], want)
+		}
+	}
+}

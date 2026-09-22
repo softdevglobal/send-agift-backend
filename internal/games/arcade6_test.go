@@ -148,7 +148,7 @@ func TestWhackRejectsOutOfOrderTaps(t *testing.T) {
 	}
 }
 
-func TestBubblePopsClearAndCascade(t *testing.T) {
+func TestBubbleDealIsDeterministic(t *testing.T) {
 	cfg := BubbleConfig{}
 	a, err := NewBubbleGame(arcadeSeed, cfg)
 	if err != nil {
@@ -162,11 +162,66 @@ func TestBubblePopsClearAndCascade(t *testing.T) {
 			}
 		}
 	}
+	if a.Next() != b.Next() || a.After() != b.After() {
+		t.Fatal("the queued colours differ between two deals of one seed")
+	}
+}
 
-	// Firing into every column in turn must never panic and must stay scoreable.
+func TestBubbleShotsLandInEmptyCells(t *testing.T) {
+	cfg := BubbleConfig{}
+	g, err := NewBubbleGame(arcadeSeed, cfg)
+	if err != nil {
+		t.Fatalf("deal: %v", err)
+	}
+	// Sweep the whole range of aims. Every one has to come to rest somewhere
+	// empty — a shot landing on top of another bubble would overwrite it.
+	for dx := -bubbleMaxAim; dx <= bubbleMaxAim; dx += 137 {
+		row, col, ok := g.Trace(dx)
+		if !ok {
+			t.Fatalf("aim %d found nowhere to land on an open board", dx)
+		}
+		if g.At(row, col) >= 0 {
+			t.Fatalf("aim %d landed on an occupied cell %d,%d", dx, row, col)
+		}
+	}
+}
+
+func TestBubbleAimingReachesDifferentColumns(t *testing.T) {
+	// Aiming has to actually steer the shot. If every aim came to rest in the
+	// same column the game would be a tap in disguise, which is the whole
+	// complaint that angled shooting was meant to answer.
+	g, err := NewBubbleGame(arcadeSeed, BubbleConfig{})
+	if err != nil {
+		t.Fatalf("deal: %v", err)
+	}
+	landed := map[int]bool{}
+	for dx := -bubbleMaxAim; dx <= bubbleMaxAim; dx += 100 {
+		if _, col, ok := g.Trace(dx); ok {
+			landed[col] = true
+		}
+	}
+	if len(landed) < 3 {
+		t.Fatalf("aiming only ever reached %d column(s): %v", len(landed), landed)
+	}
+}
+
+func TestBubbleAimIsClampedNotRejected(t *testing.T) {
+	g, _ := NewBubbleGame(arcadeSeed, BubbleConfig{})
+	_, wild, okWild := g.Trace(bubbleMaxAim * 10)
+	_, edge, okEdge := g.Trace(bubbleMaxAim)
+	if !okWild || !okEdge || wild != edge {
+		t.Fatalf("an aim past the limit should fly like the limit: %d vs %d", wild, edge)
+	}
+}
+
+func TestBubblePlayIsScoreable(t *testing.T) {
+	cfg := BubbleConfig{}
+	// Spread the aims about so the wall is not simply stacked into one
+	// column, which would end the round before the log runs out.
+	aims := []int{0, 900, -900, 1800, -1800, 2700, -2700, 3600, -3600, 450}
 	moves := []string{}
 	for i := 0; i < 20; i++ {
-		moves = append(moves, strconv.Itoa(i%7))
+		moves = append(moves, strconv.Itoa(aims[i%len(aims)]))
 	}
 	result, err := ReplayBubble(arcadeSeed, cfg, moves)
 	if err != nil {
@@ -180,9 +235,64 @@ func TestBubblePopsClearAndCascade(t *testing.T) {
 	}
 }
 
-func TestBubbleRejectsOffBoardColumn(t *testing.T) {
-	if _, err := ReplayBubble(arcadeSeed, BubbleConfig{}, []string{"99"}); !errors.Is(err, ErrInvalidMove) {
-		t.Fatalf("want ErrInvalidMove off the board, got %v", err)
+func TestBubbleSwapExchangesTheQueue(t *testing.T) {
+	g, err := NewBubbleGame(arcadeSeed, BubbleConfig{})
+	if err != nil {
+		t.Fatalf("deal: %v", err)
+	}
+	first, second := g.Next(), g.After()
+	if err := g.Swap(); err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+	// A swap must only exchange the two — drawing a fresh colour here would
+	// let a player keep swapping until the seed handed them one they liked.
+	if g.Next() != second || g.After() != first {
+		t.Fatalf("swap gave %d,%d, want %d,%d", g.Next(), g.After(), second, first)
+	}
+}
+
+func TestBubbleSwapFiresTheOtherColour(t *testing.T) {
+	cfg := BubbleConfig{}
+	g, _ := NewBubbleGame(arcadeSeed, cfg)
+	second := g.After()
+	if err := g.Swap(); err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+	row, col, ok := g.Trace(0)
+	if !ok {
+		t.Fatal("nowhere to land on an open board")
+	}
+	if _, err := g.Shoot(0); err != nil {
+		t.Fatalf("shoot: %v", err)
+	}
+	if got := g.At(row, col); got != second {
+		t.Fatalf("fired colour %d, want the swapped-in %d", got, second)
+	}
+}
+
+func TestBubbleSwapReplaysFromTheLog(t *testing.T) {
+	cfg := BubbleConfig{}
+	withSwap, err := ReplayBubble(arcadeSeed, cfg, []string{BubbleSwapMove, "0"})
+	if err != nil {
+		t.Fatalf("replay with swap: %v", err)
+	}
+	plain, err := ReplayBubble(arcadeSeed, cfg, []string{"0"})
+	if err != nil {
+		t.Fatalf("replay without swap: %v", err)
+	}
+	// The swap is a move in its own right, so the counts differ even when
+	// the shot that follows it is the same.
+	if withSwap.MovesUsed != 2 || plain.MovesUsed != 1 {
+		t.Fatalf("moves used %d and %d, want 2 and 1", withSwap.MovesUsed, plain.MovesUsed)
+	}
+}
+
+func TestBubbleRejectsAnImpossibleAim(t *testing.T) {
+	if _, err := ReplayBubble(arcadeSeed, BubbleConfig{}, []string{"99999"}); !errors.Is(err, ErrInvalidMove) {
+		t.Fatalf("want ErrInvalidMove for an aim off the board, got %v", err)
+	}
+	if _, err := ReplayBubble(arcadeSeed, BubbleConfig{}, []string{"sideways"}); !errors.Is(err, ErrInvalidMove) {
+		t.Fatalf("want ErrInvalidMove for a nonsense move, got %v", err)
 	}
 }
 
