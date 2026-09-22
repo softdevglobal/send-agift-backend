@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -66,12 +67,18 @@ func nullIfBlank(s string) any {
 	return s
 }
 
-func (r *ProductRepository) Create(ctx context.Context, p *models.Product) error {
+func (r *ProductRepository) Create(ctx context.Context, p *models.Product, assets []models.MediaAsset) error {
 	if p.OccasionTags == nil {
 		p.OccasionTags = []string{}
 	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	pl, pw, ph, pdu, pwt, pmu := parcelArgs(p)
-	err := r.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		insert into seller.products (
 			shop_id, name, slug, description, product_type, price_amount, currency,
 			status, occasion_tags, customer_type_visibility, points_display_enabled, prep_minutes, image_url,
@@ -82,15 +89,58 @@ func (r *ProductRepository) Create(ctx context.Context, p *models.Product) error
 		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
 		pl, pw, ph, pdu, pwt, pmu,
 	).Scan(&p.ID, &p.Status, &p.CreatedAt, &p.UpdatedAt)
-	return mapProductWriteError(err)
+	if err != nil {
+		return mapProductWriteError(err)
+	}
+	if err := insertProductMediaTx(ctx, tx, p.ID, assets); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-func (r *ProductRepository) Update(ctx context.Context, p *models.Product) error {
+func (r *ProductRepository) Update(ctx context.Context, p *models.Product, assets []models.MediaAsset, replaceMedia bool) error {
 	if p.OccasionTags == nil {
 		p.OccasionTags = []string{}
 	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if replaceMedia {
+		var oldAssetIDs []uuid.UUID
+		rows, err := tx.Query(ctx,
+			`select media_asset_id from seller.product_media where product_id = $1`, p.ID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			oldAssetIDs = append(oldAssetIDs, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(oldAssetIDs) > 0 {
+			// Cascades to seller.product_media.
+			if _, err := tx.Exec(ctx,
+				`delete from media.media_assets where id = any($1)`, oldAssetIDs); err != nil {
+				return err
+			}
+		}
+		if err := insertProductMediaTx(ctx, tx, p.ID, assets); err != nil {
+			return err
+		}
+	}
+
 	pl, pw, ph, pdu, pwt, pmu := parcelArgs(p)
-	err := r.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		update seller.products
 		set name = $2,
 		    slug = $3,
@@ -120,7 +170,10 @@ func (r *ProductRepository) Update(ctx context.Context, p *models.Product) error
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrProductNotFound
 	}
-	return mapProductWriteError(err)
+	if err != nil {
+		return mapProductWriteError(err)
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *ProductRepository) Delete(ctx context.Context, productID string) error {
@@ -159,6 +212,9 @@ func (r *ProductRepository) GetByIDForSeller(ctx context.Context, sellerID, prod
 	if p.OccasionTags == nil {
 		p.OccasionTags = []string{}
 	}
+	if err := r.attachMedia(ctx, []*models.Product{p}); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -185,7 +241,17 @@ func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, s
 		}
 		items = append(items, p)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ptrs := make([]*models.Product, len(items))
+	for i := range items {
+		ptrs[i] = &items[i]
+	}
+	if err := r.attachMedia(ctx, ptrs); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // ListPublishedByShopForCustomerType returns only published products for a given shop,
@@ -221,7 +287,17 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 		}
 		items = append(items, p)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ptrs := make([]*models.Product, len(items))
+	for i := range items {
+		ptrs[i] = &items[i]
+	}
+	if err := r.attachMedia(ctx, ptrs); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // GetPublishedByIDForCustomerType returns one published product from an active shop,
@@ -261,6 +337,9 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 	out.Parcel = models.ProductParcelFromNullable(length, width, height, distanceUnit, weight, massUnit)
 	if out.OccasionTags == nil {
 		out.OccasionTags = []string{}
+	}
+	if err := r.attachMedia(ctx, []*models.Product{&out.Product}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -349,4 +428,67 @@ func mapProductWriteError(err error) error {
 		return ErrProductDuplicate
 	}
 	return err
+}
+
+// insertProductMediaTx creates media_assets rows and links them to the product in order.
+func insertProductMediaTx(ctx context.Context, tx pgx.Tx, productID uuid.UUID, assets []models.MediaAsset) error {
+	for i := range assets {
+		if err := insertMediaAssetTx(ctx, tx, &assets[i]); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into seller.product_media (product_id, media_asset_id, position)
+			values ($1,$2,$3)`, productID, assets[i].ID, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// attachMedia loads seller.product_media + media_assets onto each product (ordered by position).
+func (r *ProductRepository) attachMedia(ctx context.Context, products []*models.Product) error {
+	if len(products) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(products))
+	byID := make(map[uuid.UUID]*models.Product, len(products))
+	for _, p := range products {
+		if p == nil {
+			continue
+		}
+		p.Media = []models.ProductMediaItem{}
+		ids = append(ids, p.ID)
+		byID[p.ID] = p
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		select pm.product_id, pm.media_asset_id, pm.position,
+		       a.asset_type, a.bucket, a.object_path, a.cdn_url, a.mime_type, a.size_bytes, a.metadata
+		from seller.product_media pm
+		inner join media.media_assets a on a.id = pm.media_asset_id
+		where pm.product_id = any($1)
+		order by pm.product_id, pm.position`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var productID uuid.UUID
+		var item models.ProductMediaItem
+		if err := rows.Scan(
+			&productID, &item.MediaAssetID, &item.Position,
+			&item.AssetType, &item.Bucket, &item.ObjectPath, &item.CDNURL,
+			&item.MimeType, &item.SizeBytes, &item.Metadata,
+		); err != nil {
+			return err
+		}
+		if p, ok := byID[productID]; ok {
+			p.Media = append(p.Media, item)
+		}
+	}
+	return rows.Err()
 }

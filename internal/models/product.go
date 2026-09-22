@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -24,9 +25,25 @@ type Product struct {
 	PrepMinutes            int       `json:"prep_minutes"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
-	ImageURL               *string   `json:"image_url,omitempty"`
+	// ImageURL is the cover thumbnail (list cards, order lines). Prefer Media for galleries.
+	ImageURL *string `json:"image_url,omitempty"`
 	// Shipping parcel used for delivery quotes / rates (seller form dims).
 	Parcel *ProductParcel `json:"parcel,omitempty"`
+	// Media is the ordered gallery (images + videos) from seller.product_media.
+	Media []ProductMediaItem `json:"media,omitempty"`
+}
+
+// ProductMediaItem is one gallery file joined with media.media_assets.
+type ProductMediaItem struct {
+	MediaAssetID uuid.UUID       `json:"media_asset_id"`
+	Position     int             `json:"position"`
+	AssetType    string          `json:"asset_type"` // image | video
+	Bucket       string          `json:"bucket"`
+	ObjectPath   string          `json:"object_path"`
+	CDNURL       *string         `json:"cdn_url,omitempty"`
+	MimeType     string          `json:"mime_type"`
+	SizeBytes    int64           `json:"size_bytes"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
 // ProductParcel is the package size/weight stored on a product.
