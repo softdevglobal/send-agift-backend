@@ -413,12 +413,14 @@ func scaleConfigForLevel(slug string, base json.RawMessage, level int) (json.Raw
 		return nil, fmt.Errorf("parse memory config: %w", err)
 	}
 
-	// Half a column's worth of extra pairs a level, so the card count stays a
-	// multiple of the column count and the grid never leaves a ragged row —
-	// whatever the column count actually is.
-	cfg.Pairs += (cfg.Columns / 2) * (level - 1)
-	// The board gets bigger *and* stingier with turns: the ratio of turns to
-	// pairs shrinks a little each level, down to a floor.
+	// The board itself does not grow. An 8x8 grid is already as many cards as
+	// a phone can show at a readable size, and the client only has one look
+	// per pair to draw with — more pairs than looks would put two
+	// identical-looking cards on the board that are not a pair, which no
+	// amount of memory can beat.
+	//
+	// A level tightens the turn budget instead: the same grid, less room to
+	// guess, and a bigger payout for clearing it.
 	ratio := 10 - (level - 1)
 	if ratio < 5 {
 		ratio = 5

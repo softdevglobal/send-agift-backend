@@ -23,8 +23,9 @@ func TestScaleConfigForLevelMemory(t *testing.T) {
 		}
 	})
 
-	t.Run("higher levels deal more pairs in fewer turns per pair", func(t *testing.T) {
-		var prevPairs, prevRatio int
+	t.Run("higher levels tighten the turns without growing the board", func(t *testing.T) {
+		boardPairs := games.DefaultMemoryConfig().Pairs
+		var prevRatio int
 		for level := 1; level <= maxSessionLevel; level++ {
 			out, err := scaleConfigForLevel(games.MemorySlug, base, level)
 			if err != nil {
@@ -34,23 +35,28 @@ func TestScaleConfigForLevelMemory(t *testing.T) {
 			if err := json.Unmarshal(out, &cfg); err != nil {
 				t.Fatalf("level %d: unmarshal: %v", level, err)
 			}
-			if (cfg.Pairs*2)%cfg.Columns != 0 {
-				t.Fatalf("level %d: %d pairs (%d cards) does not fill %d columns evenly",
-					level, cfg.Pairs, cfg.Pairs*2, cfg.Columns)
+			// The grid must not grow. The client draws one look per pair and
+			// has a fixed palette, so extra pairs would put two cards that
+			// look identical, but are not a pair, on the same board.
+			if cfg.Pairs != boardPairs {
+				t.Fatalf("level %d: board changed to %d pairs, want %d",
+					level, cfg.Pairs, boardPairs)
 			}
-			if level > 1 {
-				if cfg.Pairs <= prevPairs {
-					t.Fatalf("level %d: pairs %d did not grow from level %d's %d",
-						level, cfg.Pairs, level-1, prevPairs)
-				}
-				ratio := cfg.MaxTurns / cfg.Pairs
-				if ratio > prevRatio {
-					t.Fatalf("level %d: turn ratio %d is looser than level %d's %d",
-						level, ratio, level-1, prevRatio)
-				}
+			// The deal has to fill its grid, give or take the single odd slot
+			// the client covers with an emblem. Any bigger shortfall would
+			// leave real holes in the board.
+			cards := cfg.Pairs * 2
+			rows := (cards + cfg.Columns - 1) / cfg.Columns
+			if spare := rows*cfg.Columns - cards; spare > 1 {
+				t.Fatalf("level %d: %d cards in %d columns leaves %d empty slots",
+					level, cards, cfg.Columns, spare)
 			}
-			prevPairs = cfg.Pairs
-			prevRatio = cfg.MaxTurns / cfg.Pairs
+			ratio := cfg.MaxTurns / cfg.Pairs
+			if level > 1 && ratio > prevRatio {
+				t.Fatalf("level %d: turn ratio %d is looser than level %d's %d",
+					level, ratio, level-1, prevRatio)
+			}
+			prevRatio = ratio
 		}
 	})
 
