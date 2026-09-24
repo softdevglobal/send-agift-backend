@@ -20,12 +20,17 @@ type SlideConfig struct {
 	SessionTTLSeconds int `json:"session_ttl_seconds"`
 }
 
-// DefaultSlideConfig mirrors the 1.0.0 version seeded by migration 000028.
+// DefaultSlideConfig mirrors the 1.0.0 version seeded by migration 000028,
+// grown to a 4x4 picture by migration 000038.
 func DefaultSlideConfig() SlideConfig {
 	return SlideConfig{
-		Size:              3,
-		ShuffleMoves:      80,
-		SolveBase:         5000,
+		Size:         4,
+		ShuffleMoves: 140,
+		// A 4x4 takes far more moves than a 3x3 — around 80 played perfectly,
+		// a few hundred played well — so the base and the floor are set to
+		// keep those apart instead of bottoming out halfway through a good
+		// solve. Every board is solvable in well under 600 moves.
+		SolveBase:         14000,
 		MovePenalty:       20,
 		SolvedMinScore:    1000,
 		MinMsPerMove:      80,
