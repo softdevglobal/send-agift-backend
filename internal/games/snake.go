@@ -12,11 +12,15 @@ const SnakeSlug = "snake"
 
 // SnakeConfig is the Snake rule set, versioned like every other game.
 type SnakeConfig struct {
-	GridSize          int `json:"grid_size"`
-	StartLength       int `json:"start_length"`
-	TickMs            int `json:"tick_ms"`
-	MinTickMs         int `json:"min_tick_ms"`
-	SpeedupMsPerFood  int `json:"speedup_ms_per_food"`
+	GridSize         int `json:"grid_size"`
+	StartLength      int `json:"start_length"`
+	TickMs           int `json:"tick_ms"`
+	MinTickMs        int `json:"min_tick_ms"`
+	SpeedupMsPerFood int `json:"speedup_ms_per_food"`
+	// SpeedupEveryTicks is how many ticks pass before the snake quickens by
+	// a millisecond on its own. Zero turns the drift off and leaves the pace
+	// to the gifts alone.
+	SpeedupEveryTicks int `json:"speedup_every_ticks"`
 	PointsPerFood     int `json:"points_per_food"`
 	MaxTicks          int `json:"max_ticks"`
 	SessionTTLSeconds int `json:"session_ttl_seconds"`
@@ -25,11 +29,16 @@ type SnakeConfig struct {
 // DefaultSnakeConfig mirrors the 1.0.0 version seeded by migration 000028.
 func DefaultSnakeConfig() SnakeConfig {
 	return SnakeConfig{
-		GridSize:          15,
-		StartLength:       3,
-		TickMs:            160,
-		MinTickMs:         80,
-		SpeedupMsPerFood:  3,
+		GridSize:    15,
+		StartLength: 3,
+		// A round opens at a stroll, slow enough to place the first few
+		// turns without hurrying. Scoring is what winds it up — every gift
+		// takes a good bite out of the tick — with a slight drift underneath
+		// so a long round still tightens when the player is not finding any.
+		TickMs:            300,
+		MinTickMs:         70,
+		SpeedupMsPerFood:  12,
+		SpeedupEveryTicks: 45,
 		PointsPerFood:     10,
 		MaxTicks:          20000,
 		SessionTTLSeconds: defaultSessionTTLSeconds,
@@ -56,6 +65,9 @@ func (c SnakeConfig) withDefaults() SnakeConfig {
 	}
 	if c.SpeedupMsPerFood < 0 {
 		c.SpeedupMsPerFood = 0
+	}
+	if c.SpeedupEveryTicks < 0 {
+		c.SpeedupEveryTicks = 0
 	}
 	if c.PointsPerFood <= 0 {
 		c.PointsPerFood = d.PointsPerFood
@@ -119,10 +131,17 @@ func (g *SnakeGame) Body() []int {
 	return out
 }
 
-// TickIntervalMs is how long the next tick lasts. The snake speeds up as it
-// eats, down to a floor.
+// TickIntervalMs is how long the next tick lasts.
+//
+// The snake starts at a walk and quickens two ways: every gift eaten takes a
+// few milliseconds off, and time itself takes one off every so often. Both
+// run down to the same floor, so a round that goes on long enough ends up at
+// full pelt whether or not the player is finding gifts.
 func (g *SnakeGame) TickIntervalMs() int {
 	ms := g.cfg.TickMs - g.cfg.SpeedupMsPerFood*g.foods
+	if g.cfg.SpeedupEveryTicks > 0 {
+		ms -= g.ticks / g.cfg.SpeedupEveryTicks
+	}
 	if ms < g.cfg.MinTickMs {
 		ms = g.cfg.MinTickMs
 	}
