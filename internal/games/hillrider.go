@@ -20,6 +20,8 @@ type HillConfig struct {
 	TickMs            int `json:"tick_ms"`
 	KnotSpacing       int `json:"knot_spacing"`
 	Knots             int `json:"knots"`
+	HillAmp           int `json:"hill_amp"`
+	HillRamp          int `json:"hill_ramp"`
 	StartFuel         int `json:"start_fuel"`
 	FuelCanEvery      int `json:"fuel_can_every"`
 	Engine            int `json:"engine"`
@@ -34,22 +36,29 @@ type HillConfig struct {
 	SessionTTLSeconds int `json:"session_ttl_seconds"`
 }
 
-// DefaultHillConfig mirrors the 1.0.0 version seeded by migration 000031.
+// DefaultHillConfig mirrors the 1.0.0 version seeded by migration 000031,
+// made steeper and less forgiving by migration 000041.
 func DefaultHillConfig() HillConfig {
 	return HillConfig{
-		TickMs:            20,
-		KnotSpacing:       200,
-		Knots:             600,
-		StartFuel:         900,
-		FuelCanEvery:      12,
-		Engine:            3,
+		TickMs:      20,
+		KnotSpacing: 200,
+		Knots:       600,
+		// The biggest rise or fall between two knots, and how fast the
+		// course grows to it from the flat start. Past 200 a climb is
+		// steeper than the engine alone can pull, so the tallest hills need
+		// a run-up.
+		HillAmp:           220,
+		HillRamp:          7,
+		StartFuel:         800,
+		FuelCanEvery:      16,
+		Engine:            4,
 		Brake:             4,
 		SlopeGravity:      4,
 		AirGravity:        3,
 		Friction:          1,
 		MaxSpeed:          150,
-		LaunchK:           1200000,
-		CrashSlope:        150,
+		LaunchK:           1000000,
+		CrashSlope:        130,
 		MaxTicks:          30000,
 		SessionTTLSeconds: defaultSessionTTLSeconds,
 	}
@@ -64,6 +73,8 @@ func (c HillConfig) withDefaults() HillConfig {
 	}
 	fill(&c.TickMs, d.TickMs)
 	fill(&c.KnotSpacing, d.KnotSpacing)
+	fill(&c.HillAmp, d.HillAmp)
+	fill(&c.HillRamp, d.HillRamp)
 	fill(&c.StartFuel, d.StartFuel)
 	fill(&c.FuelCanEvery, d.FuelCanEvery)
 	fill(&c.Engine, d.Engine)
@@ -122,9 +133,9 @@ func NewHillGame(seed string, cfg HillConfig) (*HillGame, error) {
 	g := &HillGame{cfg: cfg, input: HillNeutral, fuel: cfg.StartFuel}
 	g.heights = make([]int, cfg.Knots)
 	for i := 3; i < cfg.Knots; i++ {
-		amp := 24 + i*3
-		if amp > 150 {
-			amp = 150
+		amp := 24 + i*cfg.HillRamp
+		if amp > cfg.HillAmp {
+			amp = cfg.HillAmp
 		}
 		delta := rng.NextInt(2*amp+1) - amp
 		if absInt(g.heights[i-1]+delta) > 1200 {
