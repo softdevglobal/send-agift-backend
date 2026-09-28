@@ -29,6 +29,8 @@ type countryCapabilityRequest struct {
 	PointsEarningEnabled         bool `json:"points_earning_enabled"`
 	PointsUsageEnabled           bool `json:"points_usage_enabled"`
 	SkillCompetitionsEnabled     bool `json:"skill_competitions_enabled"`
+	ProgressivePrizesEnabled     bool `json:"progressive_prizes_enabled"`
+	ChanceGamesEnabled           bool `json:"chance_games_enabled"`
 	AppStoreAvailable            bool `json:"app_store_available"`
 }
 
@@ -43,6 +45,8 @@ func (h *CountryCapabilityHandler) toInput(req countryCapabilityRequest) service
 		PointsEarningEnabled:         req.PointsEarningEnabled,
 		PointsUsageEnabled:           req.PointsUsageEnabled,
 		SkillCompetitionsEnabled:     req.SkillCompetitionsEnabled,
+		ProgressivePrizesEnabled:     req.ProgressivePrizesEnabled,
+		ChanceGamesEnabled:           req.ChanceGamesEnabled,
 		AppStoreAvailable:            req.AppStoreAvailable,
 	}
 }

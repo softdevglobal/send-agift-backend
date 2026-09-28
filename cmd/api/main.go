@@ -54,6 +54,7 @@ func main() {
 	messaging := repository.NewMessagingRepository(pool)
 	gameRepo := repository.NewGameRepository(pool)
 	competitionRepo := repository.NewCompetitionRepository(pool)
+	pointsRepo := repository.NewPointsRepository(pool)
 
 	// s3Service issues presigned URLs so clients upload straight to the bucket
 	s3Service, err := services.NewS3Service(cfg)
@@ -74,9 +75,15 @@ func main() {
 	productReviewService := services.NewProductReviewService(productReviews, orders, s3Service, cfg.S3Bucket)
 	messagingService := services.NewMessagingService(messaging, orders, customers, sellers, admins, s3Service, cfg.S3Bucket)
 	gameService := services.NewGameService(gameRepo)
-	// Points deduction stays off until the points ledger exists.
-	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, services.DisabledPoints{})
+	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, pointsRepo)
 	gameService.UseCompetitions(competitionService)
+	pointsService := services.NewPointsService(pointsRepo)
+	// Prize reconciliation (Progressive Prize spec §9): every round whose
+	// money can still move is re-derived from its ledger on a schedule.
+	go competitionService.RunReconciliation(context.Background(), 15*time.Minute)
+	// Points earning: delivered orders, refunds and sign-up bonuses, by each
+	// country's rule. Idempotent, so it simply runs on a timer.
+	go pointsService.RunEarningLoop(context.Background(), 5*time.Minute)
 	shippoClient := services.NewShippoClient(cfg.ShippoAPIKey)
 	shippingService := services.NewShippingService(shippoClient, shipments, idempotency, mediaAssets, orders, s3Service, cfg.ShippoLabelBucket)
 
@@ -97,6 +104,7 @@ func main() {
 	messagingHandler := handlers.NewMessagingHandler(messagingService)
 	gameHandler := handlers.NewGameHandler(gameService)
 	competitionHandler := handlers.NewCompetitionHandler(competitionService)
+	pointsHandler := handlers.NewPointsHandler(pointsService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
 	// placesService proxies Google Places so the API key stays on the server
@@ -104,7 +112,7 @@ func main() {
 	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
 	shippingHandler := handlers.NewShippingHandler(shippingService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, mediaHandler, placesHandler, shippingHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, mediaHandler, placesHandler, shippingHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name

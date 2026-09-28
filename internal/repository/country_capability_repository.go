@@ -29,7 +29,7 @@ const countryCapabilityColumns = `
 	customer_registration_enabled, seller_registration_enabled, seller_payouts_enabled,
 	domestic_delivery_enabled, international_delivery_enabled,
 	memberships_enabled, points_earning_enabled, points_usage_enabled,
-	skill_competitions_enabled, app_store_available,
+	skill_competitions_enabled, app_store_available, progressive_prizes_enabled, chance_games_enabled,
 	rule_version, created_at, updated_at`
 
 func scanCountryCapability(row pgx.Row) (*models.CountryCapability, error) {
@@ -39,7 +39,7 @@ func scanCountryCapability(row pgx.Row) (*models.CountryCapability, error) {
 		&c.CustomerRegistrationEnabled, &c.SellerRegistrationEnabled, &c.SellerPayoutsEnabled,
 		&c.DomesticDeliveryEnabled, &c.InternationalDeliveryEnabled,
 		&c.MembershipsEnabled, &c.PointsEarningEnabled, &c.PointsUsageEnabled,
-		&c.SkillCompetitionsEnabled, &c.AppStoreAvailable,
+		&c.SkillCompetitionsEnabled, &c.AppStoreAvailable, &c.ProgressivePrizesEnabled, &c.ChanceGamesEnabled,
 		&c.RuleVersion, &c.CreatedAt, &c.UpdatedAt,
 	)
 	return c, err
@@ -77,7 +77,7 @@ func (r *CountryCapabilityRepository) ListWithCountries(ctx context.Context) ([]
 			cc.customer_registration_enabled, cc.seller_registration_enabled, cc.seller_payouts_enabled,
 			cc.domestic_delivery_enabled, cc.international_delivery_enabled,
 			cc.memberships_enabled, cc.points_earning_enabled, cc.points_usage_enabled,
-			cc.skill_competitions_enabled, cc.app_store_available,
+			cc.skill_competitions_enabled, cc.app_store_available, cc.progressive_prizes_enabled, cc.chance_games_enabled,
 			cc.rule_version, cc.created_at, cc.updated_at
 		from core.country_capabilities cc
 		inner join core.countries co on co.id = cc.country_id
@@ -100,6 +100,7 @@ func (r *CountryCapabilityRepository) ListWithCountries(ctx context.Context) ([]
 			&item.Capability.InternationalDeliveryEnabled, &item.Capability.MembershipsEnabled,
 			&item.Capability.PointsEarningEnabled, &item.Capability.PointsUsageEnabled,
 			&item.Capability.SkillCompetitionsEnabled, &item.Capability.AppStoreAvailable,
+			&item.Capability.ProgressivePrizesEnabled, &item.Capability.ChanceGamesEnabled,
 			&item.Capability.RuleVersion, &item.Capability.CreatedAt, &item.Capability.UpdatedAt,
 		)
 		if err != nil {
@@ -121,7 +122,7 @@ func (r *CountryCapabilityRepository) GetDetailsByCountryID(ctx context.Context,
 			cc.customer_registration_enabled, cc.seller_registration_enabled, cc.seller_payouts_enabled,
 			cc.domestic_delivery_enabled, cc.international_delivery_enabled,
 			cc.memberships_enabled, cc.points_earning_enabled, cc.points_usage_enabled,
-			cc.skill_competitions_enabled, cc.app_store_available,
+			cc.skill_competitions_enabled, cc.app_store_available, cc.progressive_prizes_enabled, cc.chance_games_enabled,
 			cc.rule_version, cc.created_at, cc.updated_at
 		from core.country_capabilities cc
 		inner join core.countries co on co.id = cc.country_id
@@ -138,6 +139,7 @@ func (r *CountryCapabilityRepository) GetDetailsByCountryID(ctx context.Context,
 		&item.Capability.InternationalDeliveryEnabled, &item.Capability.MembershipsEnabled,
 		&item.Capability.PointsEarningEnabled, &item.Capability.PointsUsageEnabled,
 		&item.Capability.SkillCompetitionsEnabled, &item.Capability.AppStoreAvailable,
+		&item.Capability.ProgressivePrizesEnabled, &item.Capability.ChanceGamesEnabled,
 		&item.Capability.RuleVersion, &item.Capability.CreatedAt, &item.Capability.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -178,15 +180,15 @@ func (r *CountryCapabilityRepository) Create(ctx context.Context, c *models.Coun
 			domestic_delivery_enabled, international_delivery_enabled,
 			memberships_enabled, points_earning_enabled, points_usage_enabled,
 			skill_competitions_enabled, app_store_available,
-			rule_version
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			rule_version, progressive_prizes_enabled, chance_games_enabled
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		returning id, created_at, updated_at`,
 		c.CountryID,
 		c.CustomerRegistrationEnabled, c.SellerRegistrationEnabled, c.SellerPayoutsEnabled,
 		c.DomesticDeliveryEnabled, c.InternationalDeliveryEnabled,
 		c.MembershipsEnabled, c.PointsEarningEnabled, c.PointsUsageEnabled,
 		c.SkillCompetitionsEnabled, c.AppStoreAvailable,
-		c.RuleVersion,
+		c.RuleVersion, c.ProgressivePrizesEnabled, c.ChanceGamesEnabled,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
 	return mapCountryCapabilityWriteError(err)
 }
@@ -205,6 +207,8 @@ func (r *CountryCapabilityRepository) Update(ctx context.Context, c *models.Coun
 		    skill_competitions_enabled = $10,
 		    app_store_available = $11,
 		    rule_version = $12,
+		    progressive_prizes_enabled = $13,
+		    chance_games_enabled = $14,
 		    updated_at = now()
 		where id = $1
 		returning updated_at`,
@@ -213,7 +217,7 @@ func (r *CountryCapabilityRepository) Update(ctx context.Context, c *models.Coun
 		c.DomesticDeliveryEnabled, c.InternationalDeliveryEnabled,
 		c.MembershipsEnabled, c.PointsEarningEnabled, c.PointsUsageEnabled,
 		c.SkillCompetitionsEnabled, c.AppStoreAvailable,
-		c.RuleVersion,
+		c.RuleVersion, c.ProgressivePrizesEnabled, c.ChanceGamesEnabled,
 	).Scan(&c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrCountryCapabilityNotFound

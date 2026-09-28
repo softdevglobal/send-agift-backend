@@ -27,7 +27,11 @@ func (s *GameService) AdminGames(ctx context.Context) ([]models.AdminGameSummary
 		return nil, err
 	}
 	for i := range list {
-		_, list[i].Playable = games.EngineFor(list[i].Slug)
+		// Skill games need a replay engine; chance mechanics are run by the
+		// server itself and are playable in competitions only.
+		_, engine := games.EngineFor(list[i].Slug)
+		_, chance := games.ChanceMechanic(list[i].Slug)
+		list[i].Playable = engine || chance || list[i].Slug == games.QuizSlug
 	}
 	return list, nil
 }

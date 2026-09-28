@@ -49,6 +49,8 @@ func New(
 	games *handlers.GameHandler,
 	// Handler instance that manages skill competitions, leaderboards and winners
 	competitions *handlers.CompetitionHandler,
+	// Handler instance that manages customers' points wallets
+	points *handlers.PointsHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
 	// Handler instance that proxies Google Places address lookups
@@ -70,7 +72,7 @@ func New(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Bootstrap-Secret", "X-Guest-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Bootstrap-Secret", "X-Guest-Token", "Idempotency-Key", "X-App-Platform", "X-Device-Id", "X-Reauth-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -117,7 +119,7 @@ func New(
 
 		// Register authentication routes (login, register, refresh token, etc)
 		// Example: POST /api/v1/login, POST /api/v1/register
-		RegisterAuthRoutes(r, auth)
+		RegisterAuthRoutes(r, auth, jwtSecret)
 
 		// Register admin-only routes (requires valid JWT token)
 		// Example: GET /api/v1/admin/dashboard, DELETE /api/v1/admin/users/:id
@@ -154,7 +156,7 @@ func New(
 
 		// Skill competitions: live leaderboards, official attempts, winners, prize claims
 		// Example: GET /api/v1/competitions/{id}/leaderboard
-		RegisterCompetitionRoutes(r, competitions, jwtSecret)
+		RegisterCompetitionRoutes(r, competitions, points, jwtSecret)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload

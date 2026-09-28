@@ -37,6 +37,12 @@ var (
 	ErrInvalidReview       = errors.New("invalid review")
 	ErrReserveLocked       = errors.New("prize reserve can no longer change")
 	ErrInvalidReserve      = errors.New("invalid prize reserve")
+	ErrConfigConflict      = errors.New("this round was changed by someone else; reload it and try again")
+	ErrInvalidAdjustment   = errors.New("invalid prize adjustment")
+	ErrPrizeOutOfRange     = errors.New("that would take the prize below zero or above its maximum")
+	ErrPlayNotFound        = errors.New("play not found")
+	ErrPlayState           = errors.New("play is not in the right state for this action")
+	ErrWinnerSettled       = errors.New("this winner has already been paid")
 )
 
 const (
@@ -63,23 +69,33 @@ var cancelReasons = map[string]bool{
 	"fairness_failure":            true,
 }
 
-// PointsDebiter takes the published points for an official attempt.
-//
-// There is no points ledger yet, so the wired implementation is DisabledPoints:
-// attempts cost nothing and points_spent is recorded as 0. The competition
-// still publishes its points_per_attempt so the rule is fixed before start.
-type PointsDebiter interface {
-	Enabled() bool
-	Debit(ctx context.Context, customerID, competitionID uuid.UUID, points int, idempotencyKey string) (*uuid.UUID, error)
+// Machine codes for a refused play (Progressive Prize spec §5.3). The
+// handler maps each to its HTTP status; every one means nothing was charged.
+const (
+	PlayGameNotActive       = "GAME_NOT_ACTIVE"
+	PlayOutsideWindow       = "OUTSIDE_GAME_WINDOW"
+	PlayLimitReached        = "PLAY_LIMIT_REACHED"
+	PlayIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
+	PlayInsufficientPoints  = "INSUFFICIENT_POINTS"
+	PlayPrizeCapReached     = "PRIZE_CAP_REACHED"
+	PlayNotEligible         = "NOT_ELIGIBLE"
+	PlayBusy                = "PLAY_BUSY"
+	PlayTransactionFailed   = "PLAY_TRANSACTION_FAILED"
+)
+
+// PlayRefusal is a play the server turned away before anything was charged,
+// with the reason's machine code and whatever the player needs to act on it
+// (points required, when the limit resets).
+type PlayRefusal struct {
+	Code    string
+	Message string
+	Details map[string]any
 }
 
-// DisabledPoints is the PointsDebiter used until the points ledger exists.
-type DisabledPoints struct{}
+func (e *PlayRefusal) Error() string { return e.Message }
 
-func (DisabledPoints) Enabled() bool { return false }
-
-func (DisabledPoints) Debit(context.Context, uuid.UUID, uuid.UUID, int, string) (*uuid.UUID, error) {
-	return nil, nil
+func refuse(code, message string, details map[string]any) *PlayRefusal {
+	return &PlayRefusal{Code: code, Message: message, Details: details}
 }
 
 // AdminActor is who performed an admin action, for the audit log.
@@ -87,6 +103,11 @@ type AdminActor struct {
 	ID        uuid.UUID
 	IP        string
 	UserAgent string
+}
+
+func (a AdminActor) ledgerActor() repository.Actor {
+	id := a.ID
+	return repository.Actor{Type: "admin", ID: &id}
 }
 
 func (a AdminActor) audit(action string, entityID uuid.UUID, reason *string) models.AuditEntry {
@@ -116,7 +137,7 @@ type CompetitionService struct {
 	games        *repository.GameRepository
 	customers    *repository.CustomerRepository
 	capabilities *repository.CountryCapabilityRepository
-	points       PointsDebiter
+	points       *repository.PointsRepository
 	now          func() time.Time
 }
 
@@ -125,11 +146,8 @@ func NewCompetitionService(
 	gameRepo *repository.GameRepository,
 	customers *repository.CustomerRepository,
 	capabilities *repository.CountryCapabilityRepository,
-	points PointsDebiter,
+	points *repository.PointsRepository,
 ) *CompetitionService {
-	if points == nil {
-		points = DisabledPoints{}
-	}
 	return &CompetitionService{
 		repo:         repo,
 		games:        gameRepo,
@@ -174,23 +192,28 @@ func parseCustomer(actor SocialActor) (*uuid.UUID, error) {
 // ─── Eligibility ──────────────────────────────────────────────────────────
 
 // capabilityCache avoids reading the same country's capabilities repeatedly
-// within one request.
-type capabilityCache map[uuid.UUID]bool
+// within one request. A nil entry means the country has none set.
+type capabilityCache map[uuid.UUID]*models.CountryCapability
 
-func (s *CompetitionService) competitionsEnabled(ctx context.Context, countryID uuid.UUID, cache capabilityCache) (bool, error) {
-	if enabled, ok := cache[countryID]; ok {
-		return enabled, nil
+func (s *CompetitionService) capability(ctx context.Context, countryID uuid.UUID, cache capabilityCache) (*models.CountryCapability, error) {
+	if cc, ok := cache[countryID]; ok {
+		return cc, nil
 	}
 	cc, err := s.capabilities.GetByCountryID(ctx, countryID.String())
 	if errors.Is(err, repository.ErrCountryCapabilityNotFound) {
-		cache[countryID] = false
-		return false, nil
+		cache[countryID] = nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	cache[countryID] = cc.SkillCompetitionsEnabled
-	return cc.SkillCompetitionsEnabled, nil
+	cache[countryID] = cc
+	return cc, nil
+}
+
+func (s *CompetitionService) competitionsEnabled(ctx context.Context, countryID uuid.UUID, cache capabilityCache) (bool, error) {
+	cc, err := s.capability(ctx, countryID, cache)
+	return cc != nil && cc.SkillCompetitionsEnabled, err
 }
 
 // eligibility checks a customer against a competition's published rules:
@@ -204,12 +227,21 @@ func (s *CompetitionService) eligibility(ctx context.Context, c *models.Competit
 	if cust.CountryID != c.CountryID {
 		return false, fmt.Sprintf("This competition is only open to players in %s.", c.CountryName), nil
 	}
-	enabled, err := s.competitionsEnabled(ctx, c.CountryID, cache)
+	cc, err := s.capability(ctx, c.CountryID, cache)
 	if err != nil {
 		return false, "", err
 	}
-	if !enabled {
+	if cc == nil || !cc.SkillCompetitionsEnabled {
 		return false, "Skill competitions are not available in your country yet.", nil
+	}
+	if c.PrizeGrowthEnabled && !cc.ProgressivePrizesEnabled {
+		return false, "Growing-prize rounds are not available in your country yet.", nil
+	}
+	if c.GameType == "chance" && !cc.ChanceGamesEnabled {
+		return false, "Prize games of chance are not available in your country.", nil
+	}
+	if c.PointsPerAttempt > 0 && !cc.PointsUsageEnabled {
+		return false, "Points cannot be spent in your country yet.", nil
 	}
 	if cust.DateOfBirth == nil {
 		return false, "Add your date of birth to your profile to enter.", nil
@@ -243,13 +275,16 @@ func (s *CompetitionService) toView(c *models.Competition) models.CompetitionVie
 		Status:                       s.status(c),
 		GameSlug:                     c.GameSlug,
 		GameName:                     c.GameName,
+		GameType:                     c.GameType,
+		WinnerMethod:                 c.WinnerMethod,
+		WinOdds:                      c.WinOdds,
 		CountryCode:                  c.CountryCode,
 		CountryName:                  c.CountryName,
 		StartsAt:                     c.StartsAt,
 		EndsAt:                       c.EndsAt,
 		Timezone:                     c.Timezone,
 		PointsPerAttempt:             c.PointsPerAttempt,
-		PointsDeductionEnabled:       s.points.Enabled(),
+		PointsDeductionEnabled:       true,
 		MaxAttemptsPerCustomer:       c.MaxAttemptsPerCustomer,
 		MinAge:                       c.MinAge,
 		RequiresIdentityVerification: c.RequiresIdentityVerification,
@@ -260,6 +295,20 @@ func (s *CompetitionService) toView(c *models.Competition) models.CompetitionVie
 		OfficialRules:                c.OfficialRules,
 		CancelReason:                 c.CancelReason,
 		CancelNote:                   c.CancelNote,
+		PrizeGrowthEnabled:           c.PrizeGrowthEnabled,
+		PrizeType:                    c.PrizeType,
+		StartPrizeCents:              c.StartPrizeCents,
+		CurrentPrizeCents:            c.CurrentPrizeCents,
+		IncrementPerPlayCents:        c.IncrementPerPlayCents,
+		MaxPrizeCents:                c.MaxPrizeCents,
+		PrizeCapReached:              capReached(c),
+		ContinueAtCap:                c.ContinueAtCap,
+		FinalPrizeCents:              c.FinalPrizeCents,
+		EligiblePlayCount:            c.EligiblePlayCount,
+		UniquePlayerCount:            c.UniquePlayerCount,
+		DailyPlayLimit:               c.DailyPlayLimit,
+		PrizeVersion:                 c.PrizeVersion,
+		RoundNo:                      c.RoundNo,
 	}
 }
 
@@ -272,13 +321,34 @@ func (s *CompetitionService) me(ctx context.Context, c *models.Competition, cust
 	if remaining < 0 {
 		remaining = 0
 	}
-	return &models.CompetitionMe{
+	balance, err := s.points.Balance(ctx, cust.ID)
+	if err != nil {
+		return nil, err
+	}
+	me := &models.CompetitionMe{
 		AttemptsUsed:      stat.AttemptsUsed,
 		AttemptsRemaining: remaining,
 		BestScore:         stat.BestScore,
 		Eligible:          eligible,
 		IneligibleReason:  reason,
-	}, nil
+		PointsBalance:     balance,
+	}
+	if c.DailyPlayLimit != nil {
+		start, next := repository.DayWindow(s.now(), c.Timezone)
+		today, err := s.repo.DailyPlays(ctx, c.ID, cust.ID, start)
+		if err != nil {
+			return nil, err
+		}
+		left := *c.DailyPlayLimit - today
+		if left < 0 {
+			left = 0
+		}
+		me.PlaysLeftToday = &left
+		if next.Before(c.EndsAt) {
+			me.DailyResetAt = &next
+		}
+	}
+	return me, nil
 }
 
 // ListCompetitions returns competitions for the app. Signed-in customers see
@@ -361,6 +431,7 @@ func (s *CompetitionService) GetCompetition(ctx context.Context, id uuid.UUID, a
 		if view.Me, err = s.me(ctx, c, cust, stats[c.ID], capabilityCache{}); err != nil {
 			return nil, err
 		}
+		s.repo.RecordView(ctx, c.ID, cust.ID)
 		_, mine, _, err := s.repo.CompetitionLeaderboard(ctx, c.ID, 0, customerID)
 		if err != nil {
 			return nil, err
@@ -479,9 +550,23 @@ func publicEntry(row repository.LeaderRow, status string, isMe bool) models.Lead
 
 // ─── Official attempts ────────────────────────────────────────────────────
 
-// StartAttempt opens one official attempt. Every entrant is given the
-// competition's single seed, so everyone plays the identical game (§14.1).
-func (s *CompetitionService) StartAttempt(ctx context.Context, id uuid.UUID, actor SocialActor) (*models.AttemptStartView, error) {
+// PlayRequest is one intended play. ClientRequestID is the idempotency key:
+// the same key from the same customer always means the same play (spec §4.2).
+type PlayRequest struct {
+	ClientRequestID string
+	RiskMetadata    map[string]any
+}
+
+const maxClientRequestID = 128
+
+// Play is the spec's POST /games/{id}/plays: it checks the customer can
+// enter, then runs the atomic play transaction — points debit, the play, the
+// prize increment and the cached prize, together or not at all. Every entrant
+// gets the round's single seed, so everyone plays the identical game (§14.1).
+//
+// A refusal is a *PlayRefusal carrying the spec's machine code; nothing is
+// charged for any refusal.
+func (s *CompetitionService) Play(ctx context.Context, id uuid.UUID, actor SocialActor, req PlayRequest) (*models.AttemptStartView, error) {
 	customerID, err := parseCustomer(actor)
 	if err != nil {
 		return nil, err
@@ -489,103 +574,143 @@ func (s *CompetitionService) StartAttempt(ctx context.Context, id uuid.UUID, act
 	if customerID == nil {
 		return nil, ErrCustomerRequired
 	}
+	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+	if req.ClientRequestID == "" || len(req.ClientRequestID) > maxClientRequestID {
+		return nil, refuse(PlayIdempotencyConflict,
+			"an Idempotency-Key of 1 to 128 characters is required for every play", nil)
+	}
 
 	c, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	switch s.status(c) {
-	case "live":
-	case "draft":
+	if c.Status == "draft" {
 		return nil, ErrCompetitionNotFound
-	case "scheduled":
-		return nil, ErrCompetitionNotLive
-	default:
-		return nil, ErrCompetitionClosed
 	}
 	if _, ok := games.EngineFor(c.GameSlug); !ok {
-		return nil, ErrGameNotFound
+		if _, chance := games.ChanceMechanic(c.GameSlug); !chance && c.GameSlug != games.QuizSlug {
+			return nil, ErrGameNotFound
+		}
 	}
-
 	cust, err := s.customer(ctx, *customerID)
 	if err != nil {
 		return nil, err
+	}
+
+	reject := func(r *PlayRefusal) (*models.AttemptStartView, error) {
+		s.repo.RecordRejection(ctx, c.ID, customerID, r.Code)
+		return nil, r
 	}
 	eligible, reason, err := s.eligibility(ctx, c, cust, capabilityCache{})
 	if err != nil {
 		return nil, err
 	}
 	if !eligible {
-		return nil, fmt.Errorf("%w: %s", ErrNotEligible, reason)
+		return reject(refuse(PlayNotEligible, reason, nil))
 	}
 
-	stats, err := s.repo.MyStats(ctx, cust.ID, []uuid.UUID{c.ID})
-	if err != nil {
-		return nil, err
-	}
-	if stats[c.ID].AttemptsUsed >= c.MaxAttemptsPerCustomer {
-		return nil, ErrAttemptLimit
-	}
-
-	// Points are taken only once the ledger exists (see PointsDebiter).
-	var ledgerID *uuid.UUID
-	spent := 0
-	if s.points.Enabled() && c.PointsPerAttempt > 0 {
-		key := fmt.Sprintf("competition:%s:%s:%d", c.ID, cust.ID, stats[c.ID].AttemptsUsed+1)
-		if ledgerID, err = s.points.Debit(ctx, cust.ID, c.ID, c.PointsPerAttempt, key); err != nil {
-			return nil, err
-		}
-		spent = c.PointsPerAttempt
-	}
-
-	// The score must be received before the competition closes (§13.6), so
-	// the session never outlives the competition.
-	now := s.now()
-	expires := now.Add(time.Duration(games.SessionTTLSeconds(c.GameConfig)) * time.Second)
-	if expires.After(c.EndsAt) {
-		expires = c.EndsAt
-	}
-
-	attempt, session, err := s.repo.CreateAttempt(ctx, repository.CreateAttemptInput{
-		CompetitionID:  c.ID,
-		CustomerID:     cust.ID,
-		GameVersionID:  c.GameVersionID,
-		Seed:           c.ServerSeed,
-		Config:         c.GameConfig,
-		ExpiresAt:      expires,
-		MaxAttempts:    c.MaxAttemptsPerCustomer,
-		PointsSpent:    spent,
-		PointsLedgerID: ledgerID,
+	outcome, err := s.repo.StartPlay(ctx, repository.PlayInput{
+		CompetitionID:   c.ID,
+		CustomerID:      cust.ID,
+		ClientRequestID: req.ClientRequestID,
+		SessionTTL:      time.Duration(games.SessionTTLSeconds(c.GameConfig)) * time.Second,
+		RiskMetadata:    req.RiskMetadata,
 	})
+	var limit *repository.PlayLimitError
+	var broke *repository.InsufficientPointsError
 	switch {
-	case errors.Is(err, repository.ErrAttemptLimitReached):
-		return nil, ErrAttemptLimit
+	case err == nil:
+	case errors.Is(err, repository.ErrCompetitionNotFound):
+		return nil, ErrCompetitionNotFound
+	case errors.Is(err, repository.ErrRoundPaused):
+		return reject(refuse(PlayGameNotActive, "This round is paused. Check back soon.", map[string]any{"status": "paused"}))
+	case errors.Is(err, repository.ErrRoundNotStarted):
+		return reject(refuse(PlayGameNotActive, "This round has not opened yet.",
+			map[string]any{"status": "scheduled", "starts_at": c.StartsAt}))
+	case errors.Is(err, repository.ErrRoundNotLive):
+		return reject(refuse(PlayGameNotActive, "This round is no longer taking plays.",
+			map[string]any{"status": s.status(c)}))
+	case errors.Is(err, repository.ErrRoundOutsideWindow):
+		return reject(refuse(PlayOutsideWindow, "This round has closed.", map[string]any{"ends_at": c.EndsAt}))
+	case errors.As(err, &limit):
+		details := map[string]any{"limit": limit.Limit, "kind": limit.Kind}
+		msg := "You have used every play in this round."
+		if limit.Kind == "daily" {
+			msg = "You have used today's plays."
+			if limit.NextEligibleAt != nil {
+				details["next_eligible_at"] = *limit.NextEligibleAt
+			}
+		}
+		return reject(refuse(PlayLimitReached, msg, details))
+	case errors.As(err, &broke):
+		return reject(refuse(PlayInsufficientPoints, "You do not have enough points to play.",
+			map[string]any{"points_required": broke.Required, "points_balance": broke.Balance}))
+	case errors.Is(err, repository.ErrPrizeCapReached):
+		return reject(refuse(PlayPrizeCapReached,
+			"The prize has reached its maximum and this round has stopped taking plays.", nil))
+	case errors.Is(err, repository.ErrPlayKeyConflict):
+		return reject(refuse(PlayIdempotencyConflict,
+			"This Idempotency-Key was already used for a different play.", nil))
 	case errors.Is(err, repository.ErrAttemptConflict):
-		return nil, ErrAttemptBusy
-	case err != nil:
+		return reject(refuse(PlayBusy, "Another play is starting. Try again.", nil))
+	default:
 		return nil, err
 	}
 
-	remaining := c.MaxAttemptsPerCustomer - (stats[c.ID].AttemptsUsed + 1)
+	a := outcome.Attempt
+	remaining := c.MaxAttemptsPerCustomer - outcome.AttemptsUsed
 	if remaining < 0 {
 		remaining = 0
 	}
-	return &models.AttemptStartView{
-		AttemptID:         attempt.ID,
-		AttemptNumber:     attempt.AttemptNumber,
-		AttemptsRemaining: remaining,
-		PointsSpent:       attempt.PointsSpent,
+	status := "COMPLETED"
+	if a.Status == "voided" {
+		status = "VOIDED"
+		if a.RefundedAt != nil {
+			status = "REFUNDED"
+		}
+	}
+	view := &models.AttemptStartView{
+		AttemptID:             a.ID,
+		AttemptNumber:         a.AttemptNumber,
+		AttemptsRemaining:     remaining,
+		PointsSpent:           a.PointsSpent,
+		PlayID:                a.ID,
+		Status:                status,
+		WalletPointsRemaining: outcome.PointsBalance,
+		PrizeIncrementCents:   a.PrizeIncrementCents,
+		PrizeCapReached:       outcome.CapReached,
+		PlayedAt:              a.StartedAt,
+		Replayed:              outcome.Replayed,
+		Result:                a.ResultPayload,
 		Session: models.GameSessionView{
-			SessionID: session.ID,
+			SessionID: outcome.Session.ID,
 			GameSlug:  c.GameSlug,
 			Version:   c.GameVersion,
-			Mode:      session.Mode,
-			Seed:      session.ServerSeed,
-			Config:    session.Config,
-			StartedAt: session.StartedAt,
-			ExpiresAt: session.ExpiresAt,
+			Mode:      outcome.Session.Mode,
+			Seed:      outcome.Session.ServerSeed,
+			Config:    outcome.Session.Config,
+			StartedAt: outcome.Session.StartedAt,
+			ExpiresAt: outcome.Session.ExpiresAt,
 		},
-	}, nil
+	}
+	if a.PrizeBeforeCents != nil {
+		view.PrizeBeforeCents = *a.PrizeBeforeCents
+	}
+	if a.PrizeAfterCents != nil {
+		view.PrizeAfterCents = *a.PrizeAfterCents
+	}
+	return view, nil
+}
+
+// StartAttempt is the older POST /competitions/{id}/attempts. Builds of the
+// app that predate idempotency keys get a fresh key per request, which is
+// what they always had: no retry protection, but no double charge either,
+// because each request is a distinct intended play.
+func (s *CompetitionService) StartAttempt(ctx context.Context, id uuid.UUID, actor SocialActor, clientRequestID string) (*models.AttemptStartView, error) {
+	if strings.TrimSpace(clientRequestID) == "" {
+		clientRequestID = "legacy:" + uuid.NewString()
+	}
+	return s.Play(ctx, id, actor, PlayRequest{ClientRequestID: clientRequestID})
 }
 
 // SubmitOfficial scores an official attempt. GameService hands official
@@ -626,8 +751,10 @@ func (s *CompetitionService) SubmitOfficial(ctx context.Context, session *models
 
 	// The server clock decides: a score received at or after the close does
 	// not count, however the game went (§13.6).
+	// A play that was accepted before a pause may still be finished and
+	// scored; the pause only stops new plays.
 	now := s.now()
-	if s.status(c) != "live" {
+	if st := s.status(c); st != "live" && st != "paused" {
 		if err := s.games.ExpireSession(ctx, session.ID); err != nil {
 			return nil, err
 		}
@@ -640,9 +767,9 @@ func (s *CompetitionService) SubmitOfficial(ctx context.Context, session *models
 		return nil, ErrGameSessionExpired
 	}
 
-	engine, ok := games.EngineFor(session.GameSlug)
-	if !ok {
-		return nil, ErrGameNotFound
+	scorer, err := s.scorer(ctx, c.ID, session.GameSlug)
+	if err != nil {
+		return nil, err
 	}
 	durationMs := now.Sub(session.StartedAt).Milliseconds()
 	base := repository.OfficialScoreInput{
@@ -656,7 +783,7 @@ func (s *CompetitionService) SubmitOfficial(ctx context.Context, session *models
 		EventLogHash:  hashMoves(in.Moves),
 	}
 
-	result, replayErr := engine.Replay(session.ServerSeed, session.Config, in.Moves)
+	result, replayErr := scorer(session.ServerSeed, session.Config, in.Moves)
 	if replayErr != nil {
 		reason := replayErr.Error()
 		base.MovesCount = len(in.Moves)
@@ -699,6 +826,26 @@ func (s *CompetitionService) SubmitOfficial(ctx context.Context, session *models
 		return nil, err
 	}
 	return s.officialView(ctx, saved, result, true)
+}
+
+// scorer is how a round's plays are scored: a skill game's replay engine,
+// or — for a quiz — the round's own questions, answers included, which never
+// leave the server.
+func (s *CompetitionService) scorer(ctx context.Context, competitionID uuid.UUID, slug string) (func(seed string, config json.RawMessage, moves []string) (*games.Result, error), error) {
+	if slug == games.QuizSlug {
+		questions, err := s.repo.QuizQuestions(ctx, competitionID)
+		if err != nil {
+			return nil, err
+		}
+		return func(_ string, _ json.RawMessage, moves []string) (*games.Result, error) {
+			return games.ScoreQuiz(questions, moves)
+		}, nil
+	}
+	engine, ok := games.EngineFor(slug)
+	if !ok {
+		return nil, ErrGameNotFound
+	}
+	return engine.Replay, nil
 }
 
 // officialView builds the result screen for an official attempt: the server
@@ -838,7 +985,28 @@ type CompetitionInput struct {
 	PrizeValueAmount             *int64    `json:"prize_value_amount"`
 	PrizeCurrency                *string   `json:"prize_currency"`
 	OfficialRules                *string   `json:"official_rules"`
+
+	// Progressive prize economics (spec §2). start_prize_cents falls back to
+	// prize_value_amount, which older admin screens still send.
+	PrizeGrowthEnabled    bool   `json:"prize_growth_enabled"`
+	PrizeType             string `json:"prize_type"`
+	WinnerMethod          string `json:"winner_method"`
+	StartPrizeCents       *int64 `json:"start_prize_cents"`
+	IncrementPerPlayCents int64  `json:"increment_per_play_cents"`
+	MaxPrizeCents         *int64 `json:"max_prize_cents"`
+	ContinueAtCap         *bool  `json:"continue_at_cap"`
+	DailyPlayLimit        *int   `json:"daily_play_limit"`
+	MinPlaysToWin         *int   `json:"min_plays_to_win"`
+	// Instant-win chance rounds: each play wins with probability 1 in
+	// win_odds. Ignored for skill games and prize draws.
+	WinOdds *int `json:"win_odds"`
+	// Quiz rounds: the questions, answers and time limits.
+	QuizQuestions []games.QuizQuestion `json:"quiz_questions"`
+	// The config_version the admin was editing; a stale edit is refused.
+	ConfigVersion *int `json:"config_version"`
 }
+
+var prizeTypes = map[string]bool{"cash": true, "product": true, "voucher": true, "gift": true, "other": true}
 
 func invalid(msg string) error { return fmt.Errorf("%w: %s", ErrInvalidCompetition, msg) }
 
@@ -867,8 +1035,8 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	if in.MaxAttemptsPerCustomer == 0 {
 		in.MaxAttemptsPerCustomer = 3
 	}
-	if in.MaxAttemptsPerCustomer < 1 || in.MaxAttemptsPerCustomer > 100 {
-		return invalid("max_attempts_per_customer must be 1 to 100")
+	if in.MaxAttemptsPerCustomer < 1 || in.MaxAttemptsPerCustomer > 10000 {
+		return invalid("max_attempts_per_customer must be 1 to 10000")
 	}
 	if in.MinAge == 0 {
 		in.MinAge = 18
@@ -886,8 +1054,77 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	if prize == "" {
 		return invalid("prize_description is required")
 	}
-	if in.PrizeValueAmount != nil && *in.PrizeValueAmount < 0 {
-		return invalid("prize_value_amount cannot be negative")
+	start := in.StartPrizeCents
+	if start == nil {
+		start = in.PrizeValueAmount
+	}
+	if start != nil && *start < 0 {
+		return invalid("start_prize_cents cannot be negative")
+	}
+	if in.PrizeType == "" {
+		in.PrizeType = "cash"
+	}
+	if !prizeTypes[in.PrizeType] {
+		return invalid("prize_type must be cash, product, voucher, gift or other")
+	}
+	// The game decides how winners are found: a skill game by the best
+	// verified score, a prize draw by drawing entries at close, any other
+	// chance game instantly, at the play that wins.
+	mechanic, chance := games.ChanceMechanic(in.GameSlug)
+	wantMethod := "score"
+	switch {
+	case chance && mechanic == games.MechanicDraw:
+		wantMethod = "draw"
+	case chance:
+		wantMethod = "instant"
+	}
+	if in.WinnerMethod == "" {
+		in.WinnerMethod = wantMethod
+	}
+	if in.WinnerMethod != wantMethod {
+		return invalid("winner_method must be " + wantMethod + " for this game")
+	}
+	var winOdds *int
+	if wantMethod == "instant" {
+		if in.WinOdds == nil || *in.WinOdds < 2 || *in.WinOdds > 100000000 {
+			return invalid("win_odds (1 in N) must be 2 to 100000000 for an instant-win game")
+		}
+		// An instant win closes the round, so there is exactly one winner.
+		if in.NumberOfWinners > 1 {
+			return invalid("an instant-win round has one winner: the play that wins closes it")
+		}
+		odds := *in.WinOdds
+		winOdds = &odds
+	}
+	if in.PrizeGrowthEnabled {
+		if in.IncrementPerPlayCents <= 0 {
+			return invalid("increment_per_play_cents must be positive when the prize grows")
+		}
+	} else {
+		in.IncrementPerPlayCents = 0
+		in.MaxPrizeCents = nil
+	}
+	if in.IncrementPerPlayCents < 0 {
+		return invalid("increment_per_play_cents cannot be negative")
+	}
+	if in.MaxPrizeCents != nil {
+		startValue := int64(0)
+		if start != nil {
+			startValue = *start
+		}
+		if *in.MaxPrizeCents <= 0 || *in.MaxPrizeCents < startValue {
+			return invalid("max_prize_cents must be positive and at least the start prize")
+		}
+	}
+	if in.DailyPlayLimit != nil && (*in.DailyPlayLimit < 1 || *in.DailyPlayLimit > 10000) {
+		return invalid("daily_play_limit must be 1 to 10000")
+	}
+	if in.MinPlaysToWin != nil && (*in.MinPlaysToWin < 1 || *in.MinPlaysToWin > in.MaxAttemptsPerCustomer) {
+		return invalid("min_plays_to_win must be 1 to max_attempts_per_customer")
+	}
+	continueAtCap := true
+	if in.ContinueAtCap != nil {
+		continueAtCap = *in.ContinueAtCap
 	}
 	var currency *string
 	if in.PrizeCurrency != nil && strings.TrimSpace(*in.PrizeCurrency) != "" {
@@ -903,9 +1140,28 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 		rules = &r
 	}
 
-	// Competitions lock an approved game version that has a replay engine.
-	if _, ok := games.EngineFor(in.GameSlug); !ok {
+	// Competitions lock an approved game version that has a replay engine,
+	// or one of the chance mechanics.
+	quiz := in.GameSlug == games.QuizSlug
+	if _, ok := games.EngineFor(in.GameSlug); !ok && !chance && !quiz {
 		return invalid("game_slug is not a playable game")
+	}
+	var questions []games.QuizQuestion
+	if quiz {
+		for i := range in.QuizQuestions {
+			q := &in.QuizQuestions[i]
+			q.Prompt = strings.TrimSpace(q.Prompt)
+			for j := range q.Options {
+				q.Options[j] = strings.TrimSpace(q.Options[j])
+			}
+			if q.TimeLimitSeconds == 0 {
+				q.TimeLimitSeconds = 20
+			}
+		}
+		if err := games.ValidateQuiz(in.QuizQuestions); err != nil {
+			return invalid(err.Error())
+		}
+		questions = in.QuizQuestions
 	}
 	pg, err := s.games.GetPlayableBySlug(ctx, in.GameSlug)
 	if errors.Is(err, repository.ErrGameNotFound) {
@@ -932,9 +1188,24 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	c.RequiresIdentityVerification = requiresID
 	c.NumberOfWinners = in.NumberOfWinners
 	c.PrizeDescription = prize
-	c.PrizeValueAmount = in.PrizeValueAmount
+	c.PrizeValueAmount = start
 	c.PrizeCurrency = currency
 	c.OfficialRules = rules
+	c.PrizeGrowthEnabled = in.PrizeGrowthEnabled
+	c.PrizeType = in.PrizeType
+	c.WinnerMethod = in.WinnerMethod
+	c.StartPrizeCents = 0
+	if start != nil {
+		c.StartPrizeCents = *start
+	}
+	c.IncrementPerPlayCents = in.IncrementPerPlayCents
+	c.MaxPrizeCents = in.MaxPrizeCents
+	c.ContinueAtCap = continueAtCap
+	c.DailyPlayLimit = in.DailyPlayLimit
+	c.MinPlaysToWin = in.MinPlaysToWin
+	c.WinOdds = winOdds
+	c.QuizQuestions = questions
+	c.GameSlug = in.GameSlug
 	return nil
 }
 
@@ -951,6 +1222,7 @@ func (s *CompetitionService) CreateCompetition(ctx context.Context, admin AdminA
 	c.ServerSeed = seed
 	adminID := admin.ID
 	c.CreatedByAdminID = &adminID
+	c.UpdatedByAdminID = &adminID
 
 	audit := admin.audit("competition.created", uuid.Nil, nil)
 	if err := s.repo.Create(ctx, c, audit); err != nil {
@@ -977,12 +1249,16 @@ func (s *CompetitionService) UpdateCompetition(ctx context.Context, admin AdminA
 	if err := s.apply(ctx, c, in); err != nil {
 		return nil, err
 	}
+	adminID := admin.ID
+	c.UpdatedByAdminID = &adminID
 	audit := admin.audit("competition.updated", c.ID, nil)
 	audit.Before = before
-	if err := s.repo.Update(ctx, c, audit); err != nil {
+	if err := s.repo.Update(ctx, c, in.ConfigVersion, audit); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrCompetitionStateChanged):
 			return nil, ErrCompetitionLocked
+		case errors.Is(err, repository.ErrConfigVersionConflict):
+			return nil, ErrConfigConflict
 		case isForeignKeyViolation(err):
 			return nil, invalid("country_id does not exist")
 		}
@@ -1071,7 +1347,33 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	if c.PrizeValueAmount == nil || c.PrizeCurrency == nil {
 		blockers = append(blockers, "prize value and currency are required")
 	}
+	cc, err := s.capability(ctx, c.CountryID, capabilityCache{})
+	if err != nil {
+		return nil, err
+	}
+	if c.PrizeGrowthEnabled {
+		if cc == nil || !cc.ProgressivePrizesEnabled {
+			blockers = append(blockers, "progressive prizes are not approved for "+c.CountryName+
+				" (needs legal sign-off, then the country's progressive_prizes_enabled gate)")
+		}
+		if c.MaxPrizeCents == nil {
+			blockers = append(blockers, "a growing prize needs a maximum prize, so the funded reserve can cover it")
+		}
+	}
+	if c.PointsPerAttempt > 0 && (cc == nil || !cc.PointsUsageEnabled) {
+		blockers = append(blockers, "points usage is not enabled for "+c.CountryName)
+	}
+	if c.GameType == "chance" && (cc == nil || !cc.ChanceGamesEnabled) {
+		blockers = append(blockers, "games of chance are not approved for "+c.CountryName+
+			" (needs legal sign-off, then the country's chance_games_enabled gate)")
+	}
+	if c.WinnerMethod == "instant" && c.WinOdds == nil {
+		blockers = append(blockers, "an instant-win round needs its win odds")
+	}
 
+	// The reserve must hold the most the prize can ever reach: the fixed
+	// prize, or the cap of a growing one.
+	liability := maxLiability(c)
 	reserve, err := s.repo.GetReserve(ctx, c.ID)
 	if err != nil {
 		return nil, err
@@ -1081,9 +1383,9 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 		blockers = append(blockers, "a prize reserve is required")
 	case reserve.Status != "funded":
 		blockers = append(blockers, "the prize reserve must be funded, with evidence")
-	case c.PrizeValueAmount != nil && c.PrizeCurrency != nil &&
-		(reserve.Currency != *c.PrizeCurrency || reserve.ReserveAmount < *c.PrizeValueAmount):
-		blockers = append(blockers, "the funded reserve must cover the prize value in the prize currency")
+	case c.PrizeCurrency != nil && liability != nil &&
+		(reserve.Currency != *c.PrizeCurrency || reserve.ReserveAmount < *liability):
+		blockers = append(blockers, "the funded reserve must cover the maximum prize in the prize currency")
 	}
 	return blockers, nil
 }
@@ -1102,7 +1404,7 @@ func (s *CompetitionService) ScheduleCompetition(ctx context.Context, admin Admi
 	if len(blockers) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrScheduleBlocked, strings.Join(blockers, "; "))
 	}
-	if err := s.repo.Schedule(ctx, c.ID, admin.audit("competition.scheduled", c.ID, nil)); err != nil {
+	if err := s.repo.Schedule(ctx, c.ID, admin.ledgerActor(), admin.audit("competition.scheduled", c.ID, nil)); err != nil {
 		if errors.Is(err, repository.ErrCompetitionStateChanged) {
 			return nil, ErrCompetitionState
 		}
@@ -1129,7 +1431,7 @@ func (s *CompetitionService) CancelCompetition(ctx context.Context, admin AdminA
 		return nil, err
 	}
 	reason := in.Reason
-	if err := s.repo.Cancel(ctx, c.ID, in.Reason, in.Note, admin.audit("competition.cancelled", c.ID, &reason)); err != nil {
+	if err := s.repo.Cancel(ctx, c.ID, in.Reason, in.Note, admin.ledgerActor(), admin.audit("competition.cancelled", c.ID, &reason)); err != nil {
 		if errors.Is(err, repository.ErrCompetitionStateChanged) {
 			return nil, ErrCompetitionState
 		}
@@ -1232,6 +1534,20 @@ func (s *CompetitionService) FinaliseCompetition(ctx context.Context, admin Admi
 	if err != nil {
 		return nil, err
 	}
+	switch c.WinnerMethod {
+	case "instant":
+		// The winner, if a play won, was recorded at the moment it won.
+		err := s.repo.FinaliseInstant(ctx, c.ID, admin.audit("competition.finalised", c.ID, nil))
+		if errors.Is(err, repository.ErrCompetitionStateChanged) {
+			return nil, ErrCompetitionState
+		}
+		if err != nil {
+			return nil, err
+		}
+		return s.AdminGet(ctx, c.ID)
+	case "draw":
+		return nil, fmt.Errorf("%w: a prize draw is finalised by running the draw", ErrCompetitionState)
+	}
 	if c.Status != "frozen" {
 		return nil, ErrCompetitionState
 	}
@@ -1242,9 +1558,9 @@ func (s *CompetitionService) FinaliseCompetition(ctx context.Context, admin Admi
 	if unresolved > 0 {
 		return nil, fmt.Errorf("%w: %d left", ErrUnresolvedScores, unresolved)
 	}
-	engine, ok := games.EngineFor(c.GameSlug)
-	if !ok {
-		return nil, ErrGameNotFound
+	scorer, err := s.scorer(ctx, c.ID, c.GameSlug)
+	if err != nil {
+		return nil, err
 	}
 	adminID := admin.ID
 
@@ -1257,7 +1573,7 @@ func (s *CompetitionService) FinaliseCompetition(ctx context.Context, admin Admi
 		}
 		var bad []uuid.UUID
 		for _, sub := range ranked {
-			res, err := engine.Replay(c.ServerSeed, c.GameConfig, sub.EventLog)
+			res, err := scorer(c.ServerSeed, c.GameConfig, sub.EventLog)
 			if err != nil || res.Score != sub.Score {
 				bad = append(bad, sub.SubmissionID)
 			}
@@ -1287,6 +1603,14 @@ func (s *CompetitionService) FinaliseCompetition(ctx context.Context, admin Admi
 	if err != nil {
 		return nil, err
 	}
+	values := winnerPrizeValues(c)
+	pricePlans(plans, func(position int) *int64 {
+		if position < 1 || position > len(values) {
+			return nil
+		}
+		v := values[position-1]
+		return &v
+	})
 
 	snapshot, err := s.snapshot(ctx, c.ID)
 	if err != nil {
@@ -1308,6 +1632,17 @@ func (s *CompetitionService) FinaliseCompetition(ctx context.Context, admin Admi
 func (s *CompetitionService) candidates(ctx context.Context, c *models.Competition, ranked []repository.RankedSubmission, exclude map[uuid.UUID]bool) ([]winnerCandidate, error) {
 	cache := capabilityCache{}
 	out := make([]winnerCandidate, 0, len(ranked))
+	var plays map[uuid.UUID]int
+	if c.MinPlaysToWin != nil {
+		ids := make([]uuid.UUID, 0, len(ranked))
+		for _, sub := range ranked {
+			ids = append(ids, sub.CustomerID)
+		}
+		var err error
+		if plays, err = s.repo.PlayCounts(ctx, c.ID, ids); err != nil {
+			return nil, err
+		}
+	}
 	for _, sub := range ranked {
 		if exclude[sub.CustomerID] {
 			continue
@@ -1323,6 +1658,10 @@ func (s *CompetitionService) candidates(ctx context.Context, c *models.Competiti
 			ok, reason, err := s.eligibility(ctx, c, cust, cache)
 			if err != nil {
 				return nil, err
+			}
+			if ok && c.MinPlaysToWin != nil && plays[sub.CustomerID] < *c.MinPlaysToWin {
+				ok, reason = false, fmt.Sprintf("played %d of the %d plays needed to win",
+					plays[sub.CustomerID], *c.MinPlaysToWin)
 			}
 			cand.Eligible, cand.Reason = ok, reason
 		}
@@ -1392,6 +1731,9 @@ func (s *CompetitionService) DisqualifyWinner(ctx context.Context, admin AdminAc
 	if w.Status != "pending_validation" && w.Status != "validated" {
 		return ErrWinnerState
 	}
+	if w.SettlementStatus == "settled" {
+		return ErrWinnerSettled
+	}
 	return s.replace(ctx, admin, c, w, "disqualified", reason, "rejected",
 		[]string{"pending_validation", "validated"}, "competition.winner_disqualified")
 }
@@ -1405,6 +1747,9 @@ func (s *CompetitionService) MarkUnclaimed(ctx context.Context, admin AdminActor
 	}
 	if w.Status != "validated" || w.Claim == nil || w.Claim.Status != "pending" {
 		return ErrWinnerState
+	}
+	if w.SettlementStatus == "settled" {
+		return ErrWinnerSettled
 	}
 	if s.now().Before(w.Claim.ClaimDeadlineAt) {
 		return fmt.Errorf("%w: the claim window is still open", ErrWinnerState)
@@ -1437,6 +1782,7 @@ func (s *CompetitionService) replace(ctx context.Context, admin AdminActor, c *m
 	for i := range plans {
 		plans[i].PrizePosition = w.PrizePosition
 	}
+	pricePlans(plans, func(int) *int64 { return w.PrizeValueCents })
 
 	audit := admin.audit(action, c.ID, &reason)
 	audit.Before = map[string]any{"winner_id": w.ID, "status": w.Status}
@@ -1501,13 +1847,28 @@ func (s *CompetitionService) AdminGet(ctx context.Context, id uuid.UUID) (*model
 	if err != nil {
 		return nil, err
 	}
+	if c.GameSlug == games.QuizSlug {
+		if c.QuizQuestions, err = s.repo.QuizQuestions(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	blockers := []string{}
+	if c.Status == "draft" {
+		if blockers, err = s.scheduleBlockers(ctx, c); err != nil {
+			return nil, err
+		}
+		if blockers == nil {
+			blockers = []string{}
+		}
+	}
 	return &models.AdminCompetitionView{
-		Competition:     *c,
-		EffectiveStatus: s.status(c),
-		Reserve:         reserve,
-		Attempts:        attempts,
-		Submissions:     submissions,
-		UnderReview:     review,
+		Competition:      *c,
+		EffectiveStatus:  s.status(c),
+		Reserve:          reserve,
+		Attempts:         attempts,
+		Submissions:      submissions,
+		UnderReview:      review,
+		ScheduleBlockers: blockers,
 	}, nil
 }
 

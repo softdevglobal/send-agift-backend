@@ -146,3 +146,42 @@ func (s *AuthService) token(id, email, role string) (*LoginResult, error) {
 	}
 	return &LoginResult{Token: token, Role: role}, nil // return the token and role
 }
+
+// ReauthTTL is how long a password confirmation lasts for high-risk admin
+// actions (Progressive Prize spec §7, Admin RBAC).
+const ReauthTTL = 5 * time.Minute
+
+// ReauthRole marks a re-authentication token. No route accepts it as a
+// login: it is only ever checked alongside the admin's own session.
+const ReauthRole = "reauth"
+
+// ReauthResult is a short-lived proof that the admin just re-entered their
+// password.
+type ReauthResult struct {
+	ReauthToken string    `json:"reauth_token"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// AdminReauth checks the signed-in admin's password again and issues a
+// token that unlocks money-moving actions for a few minutes.
+func (s *AuthService) AdminReauth(ctx context.Context, adminID, password string) (*ReauthResult, error) {
+	if password == "" {
+		return nil, ErrInvalidCredentials
+	}
+	admin, err := s.admins.GetByID(ctx, adminID)
+	if err != nil {
+		if errors.Is(err, repository.ErrAdminNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, err
+	}
+	if !utils.CheckPassword(password, admin.PasswordHash) {
+		return nil, ErrInvalidCredentials
+	}
+	token, err := utils.GenerateJWT(admin.ID.String(), admin.Email, ReauthRole, s.jwtSecret, ReauthTTL)
+	if err != nil {
+		return nil, err
+	}
+	return &ReauthResult{ReauthToken: token, ExpiresAt: time.Now().Add(ReauthTTL)}, nil
+}
+

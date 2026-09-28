@@ -43,6 +43,8 @@ type CountryCapabilityInput struct {
 	PointsEarningEnabled         bool
 	PointsUsageEnabled           bool
 	SkillCompetitionsEnabled     bool
+	ProgressivePrizesEnabled     bool
+	ChanceGamesEnabled           bool
 	AppStoreAvailable            bool
 }
 
@@ -81,6 +83,8 @@ func (s *CountryCapabilityService) Create(ctx context.Context, countryID string,
 		PointsEarningEnabled:         in.PointsEarningEnabled,
 		PointsUsageEnabled:           in.PointsUsageEnabled,
 		SkillCompetitionsEnabled:     in.SkillCompetitionsEnabled,
+		ProgressivePrizesEnabled:     in.ProgressivePrizesEnabled,
+		ChanceGamesEnabled:           in.ChanceGamesEnabled,
 		AppStoreAvailable:            in.AppStoreAvailable,
 		RuleVersion:                  1,
 	}
@@ -119,6 +123,8 @@ func (s *CountryCapabilityService) Update(ctx context.Context, countryID string,
 	existing.PointsEarningEnabled = in.PointsEarningEnabled
 	existing.PointsUsageEnabled = in.PointsUsageEnabled
 	existing.SkillCompetitionsEnabled = in.SkillCompetitionsEnabled
+	existing.ProgressivePrizesEnabled = in.ProgressivePrizesEnabled
+	existing.ChanceGamesEnabled = in.ChanceGamesEnabled
 	existing.AppStoreAvailable = in.AppStoreAvailable
 	existing.RuleVersion++
 

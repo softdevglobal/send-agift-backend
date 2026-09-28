@@ -27,12 +27,49 @@ func effectiveCompetitionStatus(stored string, startsAt, endsAt, now time.Time) 
 		if !now.Before(startsAt) {
 			return "live"
 		}
-	case "live":
+	case "live", "paused":
 		if !now.Before(endsAt) {
 			return "closed"
 		}
 	}
 	return stored
+}
+
+// maxLiability is the most a round's prize can ever reach: the start prize
+// when it is fixed, the cap when it grows. Nil means it can grow without
+// limit, which a round is never allowed to open with.
+func maxLiability(c *models.Competition) *int64 {
+	if !c.PrizeGrowthEnabled {
+		start := c.StartPrizeCents
+		return &start
+	}
+	return c.MaxPrizeCents
+}
+
+// pricePlans sets what each winning row pays. Rows recording a skipped,
+// ineligible player hold no prize.
+func pricePlans(plans []repository.WinnerPlan, value func(position int) *int64) {
+	for i := range plans {
+		if plans[i].Status == "disqualified" {
+			continue
+		}
+		plans[i].PrizeValueCents = value(plans[i].PrizePosition)
+	}
+}
+
+// capReached reports whether a growing prize has hit its cap.
+func capReached(c *models.Competition) bool {
+	return c.PrizeGrowthEnabled && c.MaxPrizeCents != nil && c.CurrentPrizeCents >= *c.MaxPrizeCents
+}
+
+// winnerPrizeValues assigns each prize position its share of the prize the
+// round closed on.
+func winnerPrizeValues(c *models.Competition) []int64 {
+	total := c.CurrentPrizeCents
+	if c.FinalPrizeCents != nil {
+		total = *c.FinalPrizeCents
+	}
+	return repository.SplitPrize(total, c.NumberOfWinners)
 }
 
 // competitionEditable reports whether the rules may still change. Once a
@@ -135,9 +172,10 @@ func planWinners(candidates []winnerCandidate, winners int, playoff map[uuid.UUI
 		if position > winners {
 			break
 		}
+		submission := c.SubmissionID
 		plan := repository.WinnerPlan{
 			CustomerID:    c.CustomerID,
-			SubmissionID:  c.SubmissionID,
+			SubmissionID:  &submission,
 			PrizePosition: position,
 			Rank:          c.Rank,
 		}

@@ -21,6 +21,9 @@ func TestEffectiveCompetitionStatus(t *testing.T) {
 		{"scheduled", end.Add(-time.Second), "live"},
 		{"scheduled", end, "closed"},
 		{"live", end, "closed"},
+		// A pause holds the round until its end, then it closes like any other.
+		{"paused", start.Add(time.Hour), "paused"},
+		{"paused", end, "closed"},
 		{"draft", end.Add(time.Hour), "draft"},
 		{"frozen", end.Add(time.Hour), "frozen"},
 		{"cancelled", start.Add(time.Hour), "cancelled"},
