@@ -469,7 +469,12 @@ See also **§10.1** for the full place-order → shipment write path.
 | **Auth** | Seller JWT |
 | **Handler** | `SellerOrderHandler.ListItems` / `GetItem` / `AcceptItem` |
 
-**How data is retrieved:** order items where `seller_id = JWT subject`, joined to order/recipient/product.
+**How data is retrieved:** order items where `seller_id = JWT subject`, joined to order/recipient/product/shop.
+Each line has `shop_name`; the detail also has `shop_delivery` (this shop's checkout delivery, or `null`).
+
+**Group by order + shop.** A shop's products on one order are one parcel. A seller with two
+shops on the same order has two parcels, each with its own rates, label and price; another
+seller's products on that order are never returned.
 
 **DB change on accept:**
 
@@ -477,7 +482,8 @@ See also **§10.1** for the full place-order → shipment write path.
 |-------|--------|
 | `marketplace.order_items` | **UPDATE** `fulfilment_status = 'accepted'` |
 
-Rates/labels require status in `accepted` | `preparing` | `ready`.
+Rates/labels require every open product in that shop's parcel to be `accepted` | `preparing` | `ready`.
+A still-`pending` product blocks only its own shop's parcel, not the seller's other shops.
 
 ---
 
@@ -485,7 +491,7 @@ Rates/labels require status in `accepted` | `preparing` | `ready`.
 
 | | |
 |--|--|
-| **URL** | `POST /sellers/me/order-items/{orderItemID}/shipping/rates` |
+| **URL** | `POST /sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates` |
 | **Auth** | Seller JWT |
 | **Handler** | `ShippingHandler.GetRates` |
 | **Service** | `ShippingService.GetRates` |
@@ -585,7 +591,7 @@ Rates/labels require status in `accepted` | `preparing` | `ready`.
 
 | | |
 |--|--|
-| **URL** | `POST /sellers/me/order-items/{orderItemID}/shipping/labels` |
+| **URL** | `POST /sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels` |
 | **Auth** | Seller JWT |
 | **Handler** | `ShippingHandler.BuyLabel` |
 | **Service** | `ShippingService.BuyLabel` → `buyLabelAfterAcquire` |
@@ -653,7 +659,7 @@ Rates/labels require status in `accepted` | `preparing` | `ready`.
 
 | | |
 |--|--|
-| **URL** | `GET /sellers/me/order-items/{orderItemID}/shipping/label` |
+| **URL** | `GET /sellers/me/orders/{orderID}/shops/{shopID}/shipping/label` |
 | **Auth** | Seller JWT |
 | **Handler** | `ShippingHandler.LabelURL` |
 | **Service** | `ShippingService.LabelURL` |
@@ -980,7 +986,7 @@ Tables touched by browse → quote → place order → accept → rates → labe
 | `delivery_date` | date | from body |
 | `status` | text | starts `pending_payment` |
 | `subtotal_amount` | int | sum of line totals |
-| `delivery_amount` | int | sum of `shipping_quotes[].amount` |
+| `delivery_amount` | int | sum of the per-shop quotes (server-computed; seller delivery re-priced from zones). Client `delivery_amount` ignored when any quote is sent |
 | `total_amount` | int | subtotal + delivery |
 | `currency` | text | from products |
 | `gift_message` | text | optional |
@@ -1003,6 +1009,33 @@ Tables touched by browse → quote → place order → accept → rates → labe
 | `total_amount` | int | unit Ã— qty |
 | `fulfilment_status` | text | starts `pending` → later `accepted` / `dispatched` / `delivered` |
 | `created_at`, `updated_at` | timestamptz | |
+
+---
+
+### 9.10b `marketplace.order_shop_deliveries` (delivery paid per shop)
+
+Migration `000046`. One row per shop that was priced at checkout. An order with three
+shops has up to three rows; `orders.delivery_amount` is their sum. A shop with no row was
+not priced, and its seller arranges delivery after the order.
+
+| Column | Type | Written on place-order |
+|--------|------|------------------------|
+| `id` | uuid PK | generated |
+| `order_id` | uuid FK | parent order (cascade delete) |
+| `shop_id` | uuid FK | quoted shop; unique per order |
+| `seller_id` | uuid FK | shop's seller |
+| `mode` | text | `courier` or `seller_delivery` |
+| `provider`, `service_name` | text | courier chosen, or `Seller delivery` / `Within N km` |
+| `amount` | int | what the customer paid for this shop's parcel |
+| `currency` | text | always the order currency |
+| `estimated_days`, `distance_km` | int, numeric | seller delivery only |
+
+Read by: `GET /customers/me/orders/{id}` (`shop_deliveries[]`), `GET /sellers/me/order-items/{id}`
+(`shop_delivery`), and seller rates (`customer_delivery_amount`, `shop_delivery`).
+
+The migration backfills rows from existing checkout choices on pending shipments. Orders
+placed while checkout dropped every quote (because one shop could not be priced) have no
+rows and `delivery_amount = 0`.
 
 ---
 
@@ -1103,10 +1136,11 @@ OrderHandler.Create
 | 5 | Reject if product not `published` or shop not `active` | same | |
 | 6 | Reject mixed currencies / wrong visibility | same | |
 | 7 | Build in-memory `OrderItem`s | — | `unit_amount` = price snapshot; `fulfilment_status=pending` |
-| 8 | Sum `subtotal`; sum quote amounts → `delivery_amount` | — | quotes keyed by `shop_id` |
-| 9 | **INSERT** order | `marketplace.orders` | all header columns; `status=pending_payment` |
-| 10 | **INSERT** each item | `marketplace.order_items` | returns new `id` per line |
-| 11 | For each item with matching `shipping_quotes[shop_id]` | `marketplace.shipments` | **UPSERT** pending courier plan |
+| 8 | Drop quotes for shops not on the order; courier quotes need provider + service; re-price `seller_delivery` from zones | `seller.shop_delivery_zones` | quotes keyed by `shop_id` |
+| 9 | Build one delivery row per quoted shop; reject a quote not in the order currency | — | `shopDeliveriesFromQuotes` |
+| 10 | Sum `subtotal`; sum the shop rows → `delivery_amount` | — | client `delivery_amount` only used when no quote is sent |
+| 11 | **INSERT** order, items and shop deliveries in one transaction | `marketplace.orders`, `marketplace.order_items`, `marketplace.order_shop_deliveries` | returns new `id` per line |
+| 12 | For each item with matching `shipping_quotes[shop_id]` | `marketplace.shipments` | **UPSERT** pending courier or seller-delivery plan |
 
 ### Exact columns written on place-order
 
@@ -1124,6 +1158,13 @@ gift_message, media_greeting_id
 ```text
 order_id, seller_id, shop_id, product_id, quantity,
 unit_amount, total_amount, fulfilment_status='pending'
+```
+
+**`marketplace.order_shop_deliveries` INSERT (per quoted shop)**
+
+```text
+order_id, shop_id, seller_id, mode, provider, service_name,
+amount, currency, estimated_days, distance_km
 ```
 
 **`marketplace.shipments` UPSERT (per quoted shop line)** — via `persistCheckoutQuotes` → `UpsertQuote`
@@ -1335,8 +1376,8 @@ Our **app** URLs that trigger those Shippo calls:
 | App URL | Shippo calls |
 |---------|----------------|
 | `POST /api/v1/customers/me/shipping/quote` | `POST /shipments/` (no customs in quote path today) |
-| `POST /api/v1/sellers/me/order-items/{id}/shipping/rates` | optional `POST /customs/declarations/` then `POST /shipments/` |
-| `POST /api/v1/sellers/me/order-items/{id}/shipping/labels` | `POST /transactions/` then GET `label_url` |
+| `POST /api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates` | optional `POST /customs/declarations/` then `POST /shipments/` |
+| `POST /api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels` | `POST /transactions/` then GET `label_url` |
 | `POST /api/v1/webhooks/shippo/tracking` | inbound from Shippo (no outbound) |
 
 ```mermaid

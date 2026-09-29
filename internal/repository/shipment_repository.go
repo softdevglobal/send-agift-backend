@@ -41,32 +41,32 @@ func NewShipmentRepository(db *pgxpool.Pool) *ShipmentRepository {
 // fulfilment status, seller ship-from, recipient ship-to, and any pending
 // parcel/customs already stored on marketplace.shipments.
 type ShippingContext struct {
-	OrderID          uuid.UUID
-	OrderItemID      uuid.UUID
-	SellerID         uuid.UUID
-	FulfilmentStatus string
-	DeliveryAmount   int    // marketplace.orders.delivery_amount (customer-facing shipping total)
-	Currency         string // marketplace.orders.currency
-	FromName         string
-	FromEmail        string
-	FromPhone        string
-	FromStreet1      string
-	FromStreet2      string
-	FromCity         string
-	FromRegion       string
-	FromPostalCode   string
-	FromCountryISO   string
-	ToName           string
-	ToEmail          string
-	ToPhone          string
-	ToStreet1        string
-	ToStreet2        string
-	ToCity           string
-	ToRegion         string
-	ToPostalCode     string
-	ToCountryISO     string
-	StoredCustoms  json.RawMessage // marketplace.shipments.customs_declaration (pending)
-	StoredMetadata json.RawMessage // marketplace.shipments.provider_metadata (pending; may hold checkout_quote)
+	OrderID                   uuid.UUID
+	OrderItemID               uuid.UUID
+	SellerID                  uuid.UUID
+	FulfilmentStatus          string
+	DeliveryAmount            int    // marketplace.orders.delivery_amount (customer-facing shipping total)
+	Currency                  string // marketplace.orders.currency
+	FromName                  string
+	FromEmail                 string
+	FromPhone                 string
+	FromStreet1               string
+	FromStreet2               string
+	FromCity                  string
+	FromRegion                string
+	FromPostalCode            string
+	FromCountryISO            string
+	ToName                    string
+	ToEmail                   string
+	ToPhone                   string
+	ToStreet1                 string
+	ToStreet2                 string
+	ToCity                    string
+	ToRegion                  string
+	ToPostalCode              string
+	ToCountryISO              string
+	StoredCustoms             json.RawMessage // marketplace.shipments.customs_declaration (pending)
+	StoredMetadata            json.RawMessage // marketplace.shipments.provider_metadata (pending; may hold checkout_quote)
 	ProductParcelLength       *string
 	ProductParcelWidth        *string
 	ProductParcelHeight       *string
@@ -81,11 +81,11 @@ type ShippingContext struct {
 	ToLat   *float64
 	ToLng   *float64
 	// Pending shipment's mode + seller delivery snapshot chosen at checkout (if any).
-	PendingDeliveryMode   *string
-	PendingPriceAmount    *int
-	PendingCurrency       *string
-	PendingEstimatedDays  *int
-	ItemQuantity          int
+	PendingDeliveryMode  *string
+	PendingPriceAmount   *int
+	PendingCurrency      *string
+	PendingEstimatedDays *int
+	ItemQuantity         int
 }
 
 // GetShippingContext loads ship-from (shop address), ship-to (recipient address),
@@ -146,6 +146,56 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		return nil, ErrOrderNotFound
 	}
 	return sc, err
+}
+
+// ShopOrderLine is one product on an order from the same shop. Seller shipping
+// quotes these together so the parcel matches the customer's checkout price.
+type ShopOrderLine struct {
+	OrderItemID        uuid.UUID
+	FulfilmentStatus   string
+	Quantity           int
+	ParcelLength       *string
+	ParcelWidth        *string
+	ParcelHeight       *string
+	ParcelDistanceUnit *string
+	ParcelWeight       *string
+	ParcelMassUnit     *string
+}
+
+// ListShopOrderLines returns every line this seller has on the order for one shop.
+func (r *ShipmentRepository) ListShopOrderLines(ctx context.Context, sellerID string, orderID, shopID uuid.UUID) ([]ShopOrderLine, error) {
+	sellerUUID, err := uuid.Parse(sellerID)
+	if err != nil {
+		return nil, ErrOrderNotFound
+	}
+	rows, err := r.db.Query(ctx, `
+		select oi.id, oi.fulfilment_status, oi.quantity,
+		       p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
+		       p.parcel_weight, p.parcel_mass_unit
+		from marketplace.order_items oi
+		inner join seller.products p on p.id = oi.product_id
+		where oi.order_id = $1 and oi.seller_id = $2 and oi.shop_id = $3
+		order by oi.created_at asc`,
+		orderID, sellerUUID, shopID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	lines := []ShopOrderLine{}
+	for rows.Next() {
+		var line ShopOrderLine
+		if err := rows.Scan(
+			&line.OrderItemID, &line.FulfilmentStatus, &line.Quantity,
+			&line.ParcelLength, &line.ParcelWidth, &line.ParcelHeight, &line.ParcelDistanceUnit,
+			&line.ParcelWeight, &line.ParcelMassUnit,
+		); err != nil {
+			return nil, err
+		}
+		lines = append(lines, line)
+	}
+	return lines, rows.Err()
 }
 
 // UpsertQuote inserts or updates the pending shipment row created at /shipping/rates.
@@ -223,6 +273,83 @@ func (r *ShipmentRepository) CompleteLabel(ctx context.Context, orderItemID uuid
 	return err
 }
 
+// AttachBoughtLabel writes one bought Shippo label onto every item in the shop
+// parcel and marks those items dispatched. One label, one tracking number.
+func (r *ShipmentRepository) AttachBoughtLabel(ctx context.Context, orderID, sellerID uuid.UUID, itemIDs []uuid.UUID, s *models.Shipment) error {
+	if len(itemIDs) == 0 {
+		return ErrShipmentNotFound
+	}
+	meta := s.ProviderMetadata
+	if len(meta) == 0 {
+		meta = json.RawMessage(`{}`)
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	for i, itemID := range itemIDs {
+		var id uuid.UUID
+		var createdAt, updatedAt time.Time
+		var isInternational bool
+		var customs json.RawMessage
+		err := tx.QueryRow(ctx, `
+			update marketplace.shipments
+			set courier_provider = $2,
+			    tracking_number = $3,
+			    label_media_id = $4,
+			    status = $5,
+			    provider_shipment_id = coalesce($6, provider_shipment_id),
+			    provider_tracking_url = $7,
+			    provider_metadata = $8,
+			    delivery_mode = 'courier',
+			    zone_max_km = null,
+			    price_amount = null,
+			    currency = null,
+			    estimated_days = null,
+			    estimated_delivery_date = null,
+			    updated_at = now()
+			where order_item_id = $1 and status = 'pending'
+			returning id, is_international, customs_declaration, created_at, updated_at`,
+			itemID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID, s.Status,
+			s.ProviderShipmentID, s.ProviderTrackingURL, meta,
+		).Scan(&id, &isInternational, &customs, &createdAt, &updatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			rowID := itemID
+			err = tx.QueryRow(ctx, `
+				insert into marketplace.shipments (
+					order_id, order_item_id, seller_id, courier_provider, tracking_number, label_media_id,
+					delivery_mode, status, provider_shipment_id, provider_tracking_url, provider_metadata
+				) values ($1,$2,$3,$4,$5,$6,'courier',$7,$8,$9,$10)
+				returning id, is_international, customs_declaration, created_at, updated_at`,
+				orderID, &rowID, sellerID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID,
+				s.Status, s.ProviderShipmentID, s.ProviderTrackingURL, meta,
+			).Scan(&id, &isInternational, &customs, &createdAt, &updatedAt)
+		}
+		if err != nil {
+			return err
+		}
+		if i == 0 {
+			s.ID = id
+			s.OrderID = orderID
+			s.SellerID = sellerID
+			s.IsInternational = isInternational
+			s.CustomsDeclaration = customs
+			s.DeliveryMode = "courier"
+			s.CreatedAt = createdAt
+			s.UpdatedAt = updatedAt
+		}
+		if _, err := tx.Exec(ctx, `
+			update marketplace.order_items
+			set fulfilment_status = 'dispatched', updated_at = now()
+			where id = $1 and fulfilment_status <> 'cancelled'`, itemID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (r *ShipmentRepository) Create(ctx context.Context, s *models.Shipment) error {
 	meta := s.ProviderMetadata
 	if len(meta) == 0 {
@@ -249,6 +376,16 @@ func (r *ShipmentRepository) DispatchSellerManaged(ctx context.Context, s *model
 	if s.OrderItemID == nil {
 		return ErrShipmentNotFound
 	}
+	return r.DispatchSellerManagedItems(ctx, s, []uuid.UUID{*s.OrderItemID})
+}
+
+// DispatchSellerManagedItems records the same seller-handled shipment on every
+// item in the shop's parcel: one local delivery or manual courier covers the
+// whole order, not one product at a time.
+func (r *ShipmentRepository) DispatchSellerManagedItems(ctx context.Context, s *models.Shipment, itemIDs []uuid.UUID) error {
+	if len(itemIDs) == 0 {
+		return ErrShipmentNotFound
+	}
 	meta := s.ProviderMetadata
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
@@ -259,29 +396,39 @@ func (r *ShipmentRepository) DispatchSellerManaged(ctx context.Context, s *model
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `
-		delete from marketplace.shipments
-		where order_item_id = $1 and status = 'pending'`, *s.OrderItemID); err != nil {
-		return err
-	}
-	if err := tx.QueryRow(ctx, `
-		insert into marketplace.shipments (
-			order_id, order_item_id, seller_id, courier_provider, tracking_number,
-			delivery_mode, status, provider_tracking_url, provider_metadata,
-			distance_km, zone_max_km, price_amount, currency, estimated_days, estimated_delivery_date
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-		returning id, created_at, updated_at`,
-		s.OrderID, s.OrderItemID, s.SellerID, s.CourierProvider, s.TrackingNumber,
-		s.DeliveryMode, s.Status, s.ProviderTrackingURL, meta,
-		s.DistanceKm, s.ZoneMaxKm, s.PriceAmount, s.Currency, s.EstimatedDays, s.EstimatedDeliveryDate,
-	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		update marketplace.order_items
-		set fulfilment_status = 'dispatched', updated_at = now()
-		where id = $1`, *s.OrderItemID); err != nil {
-		return err
+	for i, itemID := range itemIDs {
+		if _, err := tx.Exec(ctx, `
+			delete from marketplace.shipments
+			where order_item_id = $1 and status = 'pending'`, itemID); err != nil {
+			return err
+		}
+		rowID := itemID
+		var id uuid.UUID
+		var createdAt, updatedAt time.Time
+		if err := tx.QueryRow(ctx, `
+			insert into marketplace.shipments (
+				order_id, order_item_id, seller_id, courier_provider, tracking_number,
+				delivery_mode, status, provider_tracking_url, provider_metadata,
+				distance_km, zone_max_km, price_amount, currency, estimated_days, estimated_delivery_date
+			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			returning id, created_at, updated_at`,
+			s.OrderID, &rowID, s.SellerID, s.CourierProvider, s.TrackingNumber,
+			s.DeliveryMode, s.Status, s.ProviderTrackingURL, meta,
+			s.DistanceKm, s.ZoneMaxKm, s.PriceAmount, s.Currency, s.EstimatedDays, s.EstimatedDeliveryDate,
+		).Scan(&id, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		if i == 0 {
+			s.ID = id
+			s.CreatedAt = createdAt
+			s.UpdatedAt = updatedAt
+		}
+		if _, err := tx.Exec(ctx, `
+			update marketplace.order_items
+			set fulfilment_status = 'dispatched', updated_at = now()
+			where id = $1`, itemID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -524,6 +671,66 @@ func (r *ShipmentRepository) MarkLocalDelivered(ctx context.Context, shipmentID,
 
 	return tx.Commit(ctx) // save all three changes together
 }
+
+// MarkShopLocalDelivered marks every in-progress local delivery for this shop
+// on the order as delivered, then the order header when nothing is still open.
+func (r *ShipmentRepository) MarkShopLocalDelivered(ctx context.Context, orderID, shopID, sellerID uuid.UUID, deliveredAt time.Time) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		update marketplace.shipments s
+		set status = 'delivered', delivered_at = $4, updated_at = now()
+		from marketplace.order_items oi
+		where s.order_item_id = oi.id
+		  and oi.order_id = $1
+		  and oi.shop_id = $2
+		  and oi.seller_id = $3
+		  and s.delivery_mode = 'seller_managed'
+		  and s.tracking_number is null
+		  and s.status = 'in_transit'`,
+		orderID, shopID, sellerID, deliveredAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		update marketplace.order_items oi
+		set fulfilment_status = 'delivered', updated_at = now()
+		where oi.order_id = $1 and oi.shop_id = $2 and oi.seller_id = $3
+		  and oi.fulfilment_status = 'dispatched'
+		  and exists (
+		        select 1 from marketplace.shipments s
+		        where s.order_item_id = oi.id
+		          and s.delivery_mode = 'seller_managed'
+		          and s.tracking_number is null
+		          and s.status = 'delivered'
+		          and s.delivered_at = $4
+		      )`,
+		orderID, shopID, sellerID, deliveredAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		update marketplace.orders o
+		set status = 'delivered', updated_at = now()
+		where o.id = $1
+		  and o.status <> 'delivered'
+		  and not exists (
+		        select 1 from marketplace.order_items oi
+		        where oi.order_id = o.id
+		          and oi.fulfilment_status not in ('delivered', 'cancelled')
+		      )
+		  and exists (
+		        select 1 from marketplace.order_items oi
+		        where oi.order_id = o.id
+		          and oi.fulfilment_status = 'delivered'
+		      )`, orderID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // CartShipFrom is one shop's dispatch address, for quoting delivery before an
 // order exists.
 type CartShipFrom struct {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,10 +18,10 @@ import (
 )
 
 var (
-	ErrOrderNotFound       = errors.New("order not found")
-	ErrInvalidOrder        = errors.New("invalid order")
-	ErrOrderProduct        = errors.New("product not available")
-	ErrOrderCurrencyMix    = errors.New("items must share the same currency")
+	ErrOrderNotFound          = errors.New("order not found")
+	ErrInvalidOrder           = errors.New("invalid order")
+	ErrOrderProduct           = errors.New("product not available")
+	ErrOrderCurrencyMix       = errors.New("items must share the same currency")
 	ErrOrderProductVisibility = errors.New("product not visible for this customer type")
 	ErrOrderNotCancellable    = errors.New("order cannot be cancelled")
 	ErrOrderItemNotFound      = errors.New("order item not found")
@@ -153,7 +154,8 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	items := make([]models.OrderItem, 0, len(in.Items))
 	subtotal := 0
 	currency := ""
-	shopsInOrder := map[string]struct{}{}
+	// shop id → seller id, for every shop that has a product on this order.
+	shopsInOrder := map[string]uuid.UUID{}
 
 	for _, line := range in.Items {
 		if line.Quantity < 1 {
@@ -186,7 +188,7 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		shopID, _ := uuid.Parse(snap.ShopID)
 		lineTotal := snap.PriceAmount * line.Quantity
 		subtotal += lineTotal
-		shopsInOrder[shopID.String()] = struct{}{}
+		shopsInOrder[shopID.String()] = sellerID
 		items = append(items, models.OrderItem{
 			SellerID:         sellerID,
 			ShopID:           shopID,
@@ -198,23 +200,42 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		})
 	}
 
+	// A quote for a shop that has nothing on this order is ignored.
+	for shopKey := range quotesByShop {
+		if _, ok := shopsInOrder[shopKey]; !ok {
+			delete(quotesByShop, shopKey)
+		}
+	}
+	for shopKey, q := range quotesByShop {
+		mode := strings.ToLower(strings.TrimSpace(q.Mode))
+		if mode == "" || mode == "courier" {
+			if strings.TrimSpace(q.Provider) == "" || strings.TrimSpace(q.ServiceName) == "" {
+				return nil, fmt.Errorf("%w: courier quote for shop %s needs provider and service_name", ErrInvalidOrder, shopKey)
+			}
+		}
+	}
+
 	sellerDeliveries, err := s.priceSellerDeliveries(ctx, customerID, recipientID, quotesByShop)
 	if err != nil {
 		return nil, err
 	}
 
+	// Every shop's parcel is priced separately, so the order's delivery is the
+	// sum of the per-shop quotes. A client-sent delivery_amount is only used
+	// when no shop was quoted at all.
+	deliveries, err := shopDeliveriesFromQuotes(quotesByShop, sellerDeliveries, shopsInOrder, currency)
+	if err != nil {
+		return nil, err
+	}
 	deliveryAmount := 0
-	if in.DeliveryAmount != nil {
+	for _, d := range deliveries {
+		deliveryAmount += d.Amount
+	}
+	if len(deliveries) == 0 && in.DeliveryAmount != nil {
 		if *in.DeliveryAmount < 0 {
 			return nil, ErrInvalidOrder
 		}
 		deliveryAmount = *in.DeliveryAmount
-	} else if len(quotesByShop) > 0 {
-		for shopID := range shopsInOrder {
-			if q, ok := quotesByShop[shopID]; ok {
-				deliveryAmount += q.Amount
-			}
-		}
 	}
 
 	order := &models.Order{
@@ -233,10 +254,10 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		MediaGreetingID: mediaGreetingID,
 	}
 
-	if err := s.orders.Create(ctx, order, items); err != nil {
+	if err := s.orders.Create(ctx, order, items, deliveries); err != nil {
 		if errors.Is(err, repository.ErrOrderDuplicate) {
 			order.OrderNumber = newOrderNumber()
-			if err := s.orders.Create(ctx, order, items); err != nil {
+			if err := s.orders.Create(ctx, order, items, deliveries); err != nil {
 				return nil, err
 			}
 		} else {
@@ -248,7 +269,67 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		return nil, err
 	}
 
-	return &models.OrderDetails{Order: *order, Items: items}, nil
+	shopDeliveries, err := s.orders.ListShopDeliveries(ctx, order.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &models.OrderDetails{Order: *order, Items: items, ShopDeliveries: shopDeliveries}, nil
+}
+
+// shopDeliveriesFromQuotes turns the per-shop checkout quotes into the rows
+// saved on marketplace.order_shop_deliveries. Delivery must be in the order
+// currency, so it can be added to the order total.
+func shopDeliveriesFromQuotes(
+	quotesByShop map[string]OrderShippingQuoteInput,
+	sellerDeliveries map[string]*SellerDeliveryOption,
+	shopsInOrder map[string]uuid.UUID,
+	currency string,
+) ([]models.OrderShopDelivery, error) {
+	keys := make([]string, 0, len(quotesByShop))
+	for k := range quotesByShop {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]models.OrderShopDelivery, 0, len(keys))
+	for _, shopKey := range keys {
+		q := quotesByShop[shopKey]
+		sellerID, ok := shopsInOrder[shopKey]
+		if !ok {
+			continue
+		}
+		shopID, err := uuid.Parse(shopKey)
+		if err != nil {
+			return nil, ErrInvalidOrder
+		}
+		qCurrency := strings.ToUpper(strings.TrimSpace(q.Currency))
+		if qCurrency == "" {
+			qCurrency = strings.ToUpper(currency)
+		}
+		if !strings.EqualFold(qCurrency, currency) {
+			return nil, fmt.Errorf("%w: delivery for shop %s is quoted in %s but the order is in %s", ErrInvalidOrder, shopKey, qCurrency, strings.ToUpper(currency))
+		}
+		d := models.OrderShopDelivery{
+			ShopID:      shopID,
+			SellerID:    sellerID,
+			Mode:        "courier",
+			Provider:    strings.TrimSpace(q.Provider),
+			ServiceName: strings.TrimSpace(q.ServiceName),
+			Amount:      q.Amount,
+			Currency:    currency,
+		}
+		if opt, isSeller := sellerDeliveries[shopKey]; isSeller {
+			days := opt.EstimatedDays
+			d.Mode = SellerDeliveryModeName
+			d.Provider = "Seller delivery"
+			d.ServiceName = fmt.Sprintf("Within %g km", opt.MaxKm)
+			d.Amount = opt.PriceAmount
+			d.EstimatedDays = &days
+			d.DistanceKm = opt.DistanceKm
+		}
+		out = append(out, d)
+	}
+	return out, nil
 }
 
 // priceSellerDeliveries re-prices every shop the customer chose seller delivery for,
@@ -400,7 +481,11 @@ func (s *OrderService) Get(ctx context.Context, customerID, orderID string) (*mo
 	if err != nil {
 		return nil, err
 	}
-	return &models.OrderDetails{Order: *order, Items: items}, nil
+	shopDeliveries, err := s.orders.ListShopDeliveries(ctx, order.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &models.OrderDetails{Order: *order, Items: items, ShopDeliveries: shopDeliveries}, nil
 }
 
 func (s *OrderService) Cancel(ctx context.Context, customerID, orderID string) (*models.OrderDetails, error) {
@@ -429,6 +514,11 @@ func (s *OrderService) GetItemForSeller(ctx context.Context, sellerID, itemID st
 		}
 		return nil, err
 	}
+	delivery, err := s.orders.GetShopDelivery(ctx, item.OrderID, item.ShopID)
+	if err != nil {
+		return nil, err
+	}
+	item.ShopDelivery = delivery
 	return item, nil
 }
 

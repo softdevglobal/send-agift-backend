@@ -38,8 +38,9 @@ As you go, copy IDs from responses into these placeholders:
 | `product_id` | Create product |
 | `customer_token` | Customer login |
 | `recipient_id` | Create recipient |
-| `order_id` | Place order → `id` |
-| `order_item_id` | Place order → `items[0].id` (or seller GET order-items) |
+| `order_id` | Place order → `id`. Used with `shop_id` for shipping |
+| `shop_id` | Create shop, or place order → `items[].shop_id` |
+| `order_item_id` | Place order → `items[0].id` (seller GET/accept only) |
 | `rate_object_id` | Get shipping rates → `rates[0].object_id` |
 
 ---
@@ -641,7 +642,7 @@ Only works when `fulfilment_status` is `pending`. After accept, you can call Shi
 
 ### C1. Get shipping rates
 
-**POST** `http://localhost:8081/api/v1/sellers/me/order-items/{{order_item_id}}/shipping/rates`
+**POST** `http://localhost:8081/api/v1/sellers/me/orders/{{order_id}}/shops/{{shop_id}}/shipping/rates`
 
 Headers: `Authorization: Bearer {{seller_token}}`
 
@@ -718,7 +719,7 @@ Save one `rates[].object_id` → `rate_object_id`
 
 ### C2. Buy shipping label
 
-**POST** `http://localhost:8081/api/v1/sellers/me/order-items/{{order_item_id}}/shipping/labels`
+**POST** `http://localhost:8081/api/v1/sellers/me/orders/{{order_id}}/shops/{{shop_id}}/shipping/labels`
 
 Headers: `Authorization: Bearer {{seller_token}}`
 
@@ -813,8 +814,8 @@ Body (use `tracking_number` from C2):
 | B5 | GET | `/api/v1/sellers/me/order-items` | seller | none |
 | B5b | GET | `/api/v1/sellers/me/order-items/{order_item_id}` | seller | none |
 | B6 | PATCH | `/api/v1/sellers/me/order-items/{order_item_id}/accept` | seller | none |
-| C1 | POST | `/api/v1/sellers/me/order-items/{order_item_id}/shipping/rates` | seller | optional `{ parcel, customs_declaration }` (required intl) |
-| C2 | POST | `/api/v1/sellers/me/order-items/{order_item_id}/shipping/labels` | seller | rate + idempotency_key |
+| C1 | POST | `/api/v1/sellers/me/orders/{order_id}/shops/{shop_id}/shipping/rates` | seller | optional `{ parcel, customs_declaration }` (required intl) |
+| C2 | POST | `/api/v1/sellers/me/orders/{order_id}/shops/{shop_id}/shipping/labels` | seller | rate + idempotency_key |
 | C3 | POST | `/api/v1/webhooks/shippo/tracking` | none | track_updated JSON |
 
 Prefix every URL with `http://localhost:8081`.

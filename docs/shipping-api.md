@@ -166,11 +166,48 @@ UI: list `shops[].options` with **price** (`amount / 100`) and **`days_available
 
 Display: items **$324.00** + shipping **$79.51** = **$403.51**.
 
+### Orders with several shops
+
+Every shop on an order ships its own parcel and has its own delivery price.
+
+| Cart | `shipping_quotes` to send | `delivery_amount` on the order |
+|---|---|---|
+| 3 products, 1 shop | 1 entry for that shop | that shop's price |
+| 2 shops, different sellers | 1 entry per shop | sum of both |
+| 2 shops, same seller | 1 entry per shop | sum of both; the seller ships 2 parcels |
+| 3 shops, 1 could not be priced | entries for the 2 priced shops | sum of those 2; the third shop is arranged by its seller |
+
+Rules the server enforces:
+
+- The order's `delivery_amount` is always the sum of the quotes. Do not send
+  `delivery_amount`; it is ignored when any quote is present.
+- `seller_delivery` quotes are re-priced from the shop's zones.
+- A quote in another currency than the cart is rejected, so leave those shops out.
+- Quotes for shops that are not on the order are dropped.
+
+The response lists each priced shop in `shop_deliveries[]`:
+
+```json
+{
+  "subtotal_amount": 54900,
+  "delivery_amount": 9800,
+  "total_amount": 64700,
+  "shop_deliveries": [
+    { "shop_id": "...", "shop_name": "Bay Area Gifts", "mode": "courier", "provider": "DHL Express", "service_name": "Worldwide", "amount": 4230, "currency": "USD" },
+    { "shop_id": "...", "shop_name": "computer shop", "mode": "seller_delivery", "provider": "Seller delivery", "service_name": "Within 5 km", "amount": 5570, "currency": "USD", "estimated_days": 1 }
+  ]
+}
+```
+
+Sellers see the same split: `GET /sellers/me/order-items/{id}` returns `shop_name` and
+`shop_delivery` (this shop's paid delivery, or `null`), and every shipping route works on one
+shop's parcel at `/sellers/me/orders/{orderID}/shops/{shopID}/shipping/...`.
+
 ---
 
 ## 4. Seller get rates
 
-### `POST /sellers/me/order-items/{orderItemID}/shipping/rates`
+### `POST /sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates`
 
 **Body (international example):**
 ```json
@@ -231,10 +268,16 @@ Domestic: parcel optional (prefills from product). Customs required only when in
   },
   "recommended_rate_object_id": "shippo_rate_fresh_xxx",
   "customer_delivery_amount": 7951,
+  "shop_delivery": { "mode": "courier", "provider": "USPS", "service_name": "Priority Mail International", "amount": 7951, "currency": "USD" },
+  "combined_item_count": 1,
   "currency": "USD",
   "must_buy_customer_courier": true
 }
 ```
+
+`customer_delivery_amount` is what the customer paid for **this shop's parcel**, not the
+whole order. It is `0` and `shop_delivery` is `null` when the shop was not priced at
+checkout.
 
 Highlight `checkout_selected`. Copy **`recommended_rate_object_id`** for the next call.  
 Do **not** buy with `checkout_selected.rate_object_id` (expired).
@@ -243,7 +286,7 @@ Do **not** buy with `checkout_selected.rate_object_id` (expired).
 
 ## 5. Buy label — Option A (required path)
 
-### `POST /sellers/me/order-items/{orderItemID}/shipping/labels`
+### `POST /sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels`
 
 **Body:**
 ```json
@@ -293,7 +336,7 @@ API buys the customer courier from the latest stored rates automatically.
 
 ## 6. Label PDF
 
-### `GET /sellers/me/order-items/{orderItemID}/shipping/label`
+### `GET /sellers/me/orders/{orderID}/shops/{shopID}/shipping/label`
 
 **Response:**
 ```json
@@ -311,7 +354,10 @@ API buys the customer courier from the latest stored rates automatically.
 | `POST /sellers/me/shops/{shopID}/products` | + `parcel` | + `parcel` |
 | `PUT /sellers/me/products/{id}` | + `parcel` | + `parcel` |
 | `POST /customers/me/shipping/quote` | — | + `shops`, `days_available`, rate ids |
-| `POST /customers/me/orders` | + `shipping_quotes` | totals include delivery |
-| `POST .../shipping/rates` | — | + `checkout_selected`, `recommended_rate_object_id`, `customer_delivery_amount`, `must_buy_customer_courier` |
+| `POST /customers/me/orders` | + `shipping_quotes` (one per priced shop); `delivery_amount` no longer sent | totals include delivery; + `shop_deliveries` |
+| `GET /customers/me/orders/{id}` | — | + `shop_deliveries` |
+| `GET /sellers/me/order-items` | — | + `shop_name` (group rows by order + shop) |
+| `GET /sellers/me/order-items/{id}` | — | + `shop_name`, `shop_delivery` |
+| `POST .../shipping/rates` | — | + `checkout_selected`, `recommended_rate_object_id`, `customer_delivery_amount` (this shop), `shop_delivery`, `combined_item_count`, `must_buy_customer_courier` |
 | `POST .../shipping/labels` | + optional `use_customer_selected` | — |
 | `GET .../shipping/label` | — | — |

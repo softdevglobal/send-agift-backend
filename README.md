@@ -1876,8 +1876,8 @@ Seller JWT required. Uses [Shippo test mode](https://docs.goshippo.com/docs/guid
    - Admin: country (for Shippo test, create **US** — see below)
    - Seller: register → login → **ship-from address** → shop linked to that address → published product
    - Customer: register → login → recipient with **shipping address** → place order
-4. Copy `order-item-uuid` from the customer order response, or from `GET /sellers/me/order-items`.
-5. Accept the item: `PATCH /sellers/me/order-items/{id}/accept` (section 10).
+4. Copy `order-uuid` and `shop-uuid` from the customer order response (`id` and `items[].shop_id`), or from `GET /sellers/me/order-items`.
+5. Accept each item: `PATCH /sellers/me/order-items/{id}/accept` (section 10). Shipping then uses the order and shop, not one product id.
 
 Typical flow: customer places order → seller **lists** items → **accepts** item → **POST rates** (with parcel + customs for international) → **POST label**.
 
@@ -1960,9 +1960,9 @@ Link the seller address to the shop via `address_id` when creating the shop (sec
 
 ### Step 1 — Get shipping rates
 
-### POST `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates`
+### POST `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates`
 
-Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid/shipping/rates`
+Example URL: `http://localhost:8081/api/v1/sellers/me/orders/order-uuid/shops/shop-uuid/shipping/rates`
 
 - Auth: seller JWT
 - **POST body:** optional for domestic; **required** for international (parcel + customs)
@@ -2042,9 +2042,9 @@ Copy one `rates[].object_id` for the next step.
 
 ### Step 2 — Buy label
 
-### POST `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/labels`
+### POST `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels`
 
-Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uuid/shipping/labels`
+Example URL: `http://localhost:8081/api/v1/sellers/me/orders/order-uuid/shops/shop-uuid/shipping/labels`
 
 - Auth: seller JWT
 - **POST body:**
@@ -2229,8 +2229,8 @@ For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
 | GET | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | none (id in URL) | `ReelDetails` |
 | PUT | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | same as create (`media` optional) | `ReelDetails` |
 | DELETE | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | none (id in URL) | `{ "message": "reel deleted" }` |
-| POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/rates` | optional `{ parcel, customs_declaration }` (required international) | `{ shipment_object_id, rates[] }` |
-| POST | `http://localhost:8081/api/v1/sellers/me/order-items/{orderItemID}/shipping/labels` | `{ rate_object_id, provider, idempotency_key }` | `Shipment` |
+| POST | `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates` | optional `{ parcel, customs_declaration }` (required international) | `{ shipment_object_id, rates[] }` |
+| POST | `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels` | `{ rate_object_id, provider, idempotency_key }` | `Shipment` |
 | POST | `http://localhost:8081/api/v1/webhooks/shippo/tracking` | Shippo `track_updated` payload | `{ "status": "ok" }` |
 
 GET and DELETE never take a JSON body. IDs always go in the URL. See each section above for full JSON examples.

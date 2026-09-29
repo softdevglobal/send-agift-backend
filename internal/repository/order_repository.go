@@ -71,7 +71,7 @@ func (r *OrderRepository) GetCheckoutProduct(ctx context.Context, productID stri
 	return p, err
 }
 
-func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items []models.OrderItem) error {
+func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items []models.OrderItem, deliveries []models.OrderShopDelivery) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -112,7 +112,67 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 		}
 	}
 
+	for _, d := range deliveries {
+		if _, err := tx.Exec(ctx, `
+			insert into marketplace.order_shop_deliveries (
+				order_id, shop_id, seller_id, mode, provider, service_name,
+				amount, currency, estimated_days, distance_km
+			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			order.ID, d.ShopID, d.SellerID, d.Mode, d.Provider, d.ServiceName,
+			d.Amount, d.Currency, d.EstimatedDays, d.DistanceKm,
+		); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit(ctx)
+}
+
+const shopDeliverySelect = `
+	select d.shop_id, s.name, d.seller_id, d.mode, d.provider, d.service_name,
+	       d.amount, d.currency, d.estimated_days, d.distance_km::float8
+	from marketplace.order_shop_deliveries d
+	inner join seller.shops s on s.id = d.shop_id
+`
+
+func scanShopDelivery(row pgx.Row) (models.OrderShopDelivery, error) {
+	var d models.OrderShopDelivery
+	err := row.Scan(&d.ShopID, &d.ShopName, &d.SellerID, &d.Mode, &d.Provider, &d.ServiceName,
+		&d.Amount, &d.Currency, &d.EstimatedDays, &d.DistanceKm)
+	return d, err
+}
+
+// ListShopDeliveries returns the checkout delivery for every priced shop on an order.
+func (r *OrderRepository) ListShopDeliveries(ctx context.Context, orderID uuid.UUID) ([]models.OrderShopDelivery, error) {
+	rows, err := r.db.Query(ctx, shopDeliverySelect+`
+		where d.order_id = $1
+		order by d.created_at, s.name`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.OrderShopDelivery{}
+	for rows.Next() {
+		d, err := scanShopDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// GetShopDelivery returns the checkout delivery for one shop on an order, or nil.
+func (r *OrderRepository) GetShopDelivery(ctx context.Context, orderID, shopID uuid.UUID) (*models.OrderShopDelivery, error) {
+	d, err := scanShopDelivery(r.db.QueryRow(ctx, shopDeliverySelect+`
+		where d.order_id = $1 and d.shop_id = $2`, orderID, shopID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
 
 func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string) ([]models.Order, error) {
@@ -280,6 +340,7 @@ const sellerOrderItemFrom = `
 	from marketplace.order_items oi
 	inner join marketplace.orders o on o.id = oi.order_id
 	inner join seller.products p on p.id = oi.product_id
+	inner join seller.shops shp on shp.id = oi.shop_id
 	left join customer.recipients r on r.id = o.recipient_id
 	left join customer.recipient_addresses ra on ra.id = coalesce(
 		r.default_address_id,
@@ -292,7 +353,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
 		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
 		       o.order_number, o.status, o.delivery_date,
-		       p.name, p.slug, p.image_url,
+		       shp.name, p.name, p.slug, p.image_url,
 		       r.name
 		`+sellerOrderItemFrom+`
 		where oi.seller_id = $1
@@ -309,7 +370,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
 			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
 			&it.OrderNumber, &it.OrderStatus, &it.DeliveryDate,
-			&it.ProductName, &it.ProductSlug, &it.ProductImageURL,
+			&it.ShopName, &it.ProductName, &it.ProductSlug, &it.ProductImageURL,
 			&it.RecipientName,
 		); err != nil {
 			return nil, err
@@ -384,6 +445,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 		select
 			oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
 			oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+			shp.name,
 			o.id, o.order_number, o.customer_id, o.recipient_id, o.country_id, o.customer_type,
 			o.delivery_date, o.status, o.subtotal_amount, o.delivery_amount, o.total_amount,
 			o.currency, o.gift_message, o.media_greeting_id, o.created_at, o.updated_at,
@@ -402,6 +464,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 	).Scan(
 		&d.ID, &d.OrderID, &d.SellerID, &d.ShopID, &d.ProductID, &d.Quantity,
 		&d.UnitAmount, &d.TotalAmount, &d.FulfilmentStatus, &d.CreatedAt, &d.UpdatedAt,
+		&d.ShopName,
 		&d.Order.ID, &d.Order.OrderNumber, &d.Order.CustomerID, &d.Order.RecipientID, &d.Order.CountryID, &d.Order.CustomerType,
 		&d.Order.DeliveryDate, &d.Order.Status, &d.Order.SubtotalAmount, &d.Order.DeliveryAmount, &d.Order.TotalAmount,
 		&d.Order.Currency, &d.Order.GiftMessage, &d.Order.MediaGreetingID, &d.Order.CreatedAt, &d.Order.UpdatedAt,
