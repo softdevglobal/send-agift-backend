@@ -57,7 +57,7 @@ func adminPlayer(customerID *uuid.UUID, guest, name, email, country *string) mod
 func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.AdminGameSummary, error) {
 	rows, err := r.db.Query(ctx, `
 		with g as (
-			select g.id, g.slug, g.name, g.game_type, g.status, g.created_at,
+			select g.id, g.slug, g.name, g.game_type, g.status, g.created_at, g.play_cost_points,
 			       (select v.version from competition.game_versions v
 			         where v.game_id = g.id and v.status = 'approved'
 			         order by v.created_at desc limit 1) as version
@@ -94,7 +94,7 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 		       coalesce(p.plays, 0), coalesce(s.scores, 0), coalesce(s.players, 0),
 		       coalesce(s.review, 0), coalesce(s.rejected, 0), coalesce(cp.n, 0),
 		       p.last_played, t.score, t.customer_id, t.guest_token,
-		       c.display_name, c.email, co.name
+		       c.display_name, c.email, co.name, g.play_cost_points
 		from g
 		left join plays p on p.game_id = g.id
 		left join scores s on s.game_id = g.id
@@ -119,7 +119,8 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 		)
 		if err := rows.Scan(&s.Slug, &s.Name, &s.GameType, &s.Status, &s.Version,
 			&s.Plays, &s.Scores, &s.Players, &s.UnderReview, &s.Rejected, &s.Competitions,
-			&s.LastPlayedAt, &topScore, &topCustomer, &topGuest, &name, &email, &country); err != nil {
+			&s.LastPlayedAt, &topScore, &topCustomer, &topGuest, &name, &email, &country,
+			&s.PlayCostPoints); err != nil {
 			return nil, err
 		}
 		if topScore != nil {
@@ -271,6 +272,42 @@ func (r *GameRepository) ReviewScore(ctx context.Context, sessionID uuid.UUID, s
 	}
 	audit.Before = map[string]any{"validation_status": before}
 	audit.After = map[string]any{"validation_status": status, "reviewed_at": time.Now().UTC()}
+	if err := insertAudit(ctx, tx, audit); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// SetPlayCost sets what one practice play of a game costs, with its audit
+// row. The change applies to plays started from now on.
+func (r *GameRepository) SetPlayCost(ctx context.Context, slug string, points int64, audit models.AuditEntry) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var (
+		id     uuid.UUID
+		before int64
+	)
+	err = tx.QueryRow(ctx, `
+		select id, play_cost_points from competition.games where slug = $1 for update`, slug).
+		Scan(&id, &before)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrGameNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		update competition.games set play_cost_points = $2, updated_at = now() where id = $1`,
+		id, points); err != nil {
+		return err
+	}
+	audit.EntityType = "game"
+	audit.EntityID = &id
+	audit.Before = map[string]any{"slug": slug, "play_cost_points": before}
+	audit.After = map[string]any{"slug": slug, "play_cost_points": points}
 	if err := insertAudit(ctx, tx, audit); err != nil {
 		return err
 	}

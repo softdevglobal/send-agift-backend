@@ -43,8 +43,6 @@ type Config struct {
 	// "order" (as soon as the order is placed — the default while there is
 	// no payment step) or "delivery".
 	PointsRewardTiming string
-	// PointsPerGamePlay is what one practice game costs; 0 makes games free.
-	PointsPerGamePlay int
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -75,7 +73,6 @@ func Load() (*Config, error) {
 		PointsPaymentProvider: envOr("POINTS_PAYMENT_PROVIDER", "instant"),
 		PointsWebhookSecret:   os.Getenv("POINTS_WEBHOOK_SECRET"),
 		PointsRewardTiming:    envOr("POINTS_REWARD_TIMING", "order"),
-		PointsPerGamePlay:     intOrZero("POINTS_PER_GAME_PLAY", 50),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -111,19 +108,6 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// intOrZero is intOr that also accepts 0 (e.g. "games are free").
-func intOrZero(key string, fallback int) int {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return fallback
-	}
-	return n
 }
 
 // intOr reads a positive whole number from the environment, or the fallback.

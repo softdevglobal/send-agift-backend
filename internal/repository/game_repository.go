@@ -40,7 +40,7 @@ func NewGameRepository(db *pgxpool.Pool) *GameRepository {
 // with that version. Anything still in draft stays invisible to the app.
 func (r *GameRepository) ListPlayable(ctx context.Context) ([]models.GameView, error) {
 	rows, err := r.db.Query(ctx, `
-		select g.slug, g.name, g.description, g.game_type, v.version, v.config
+		select g.slug, g.name, g.description, g.game_type, v.version, v.config, g.play_cost_points
 		from competition.games g
 		inner join competition.game_versions v
 		        on v.game_id = g.id and v.status = 'approved'
@@ -55,7 +55,8 @@ func (r *GameRepository) ListPlayable(ctx context.Context) ([]models.GameView, e
 	for rows.Next() {
 		var gv models.GameView
 		var rawConfig []byte
-		if err := rows.Scan(&gv.Slug, &gv.Name, &gv.Description, &gv.GameType, &gv.Version, &rawConfig); err != nil {
+		if err := rows.Scan(&gv.Slug, &gv.Name, &gv.Description, &gv.GameType, &gv.Version, &rawConfig,
+			&gv.PlayCostPoints); err != nil {
 			return nil, err
 		}
 		gv.Config = json.RawMessage(rawConfig)
@@ -77,7 +78,8 @@ func (r *GameRepository) GetPlayableBySlug(ctx context.Context, slug string) (*P
 
 	err := r.db.QueryRow(ctx, `
 		select g.id, g.slug, g.name, g.description, g.game_type, g.status, g.created_at, g.updated_at,
-		       v.id, v.game_id, v.version, v.config, v.status, v.approved_at, v.created_at
+		       v.id, v.game_id, v.version, v.config, v.status, v.approved_at, v.created_at,
+		       g.play_cost_points
 		from competition.games g
 		inner join competition.game_versions v
 		        on v.game_id = g.id and v.status = 'approved'
@@ -87,6 +89,7 @@ func (r *GameRepository) GetPlayableBySlug(ctx context.Context, slug string) (*P
 			&pg.Game.GameType, &pg.Game.Status, &pg.Game.CreatedAt, &pg.Game.UpdatedAt,
 			&pg.Version.ID, &pg.Version.GameID, &pg.Version.Version, &rawConfig,
 			&pg.Version.Status, &pg.Version.ApprovedAt, &pg.Version.CreatedAt,
+			&pg.Game.PlayCostPoints,
 		)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrGameNotFound

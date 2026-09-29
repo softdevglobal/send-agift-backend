@@ -56,4 +56,13 @@ func RegisterGameRoutes(r chi.Router, games *handlers.GameHandler, jwtSecret str
 		r.Get("/admin/games/{slug}/scores", games.AdminGameScores)
 		r.Post("/admin/games/scores/{sessionID}/review", games.AdminReviewScore)
 	})
+
+	// What each game costs to play: any platform admin (superadmin counts as
+	// one), with a fresh password confirmation (X-Reauth-Token), audited.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth(jwtSecret))
+		r.Use(middleware.RequireRole("admin"))
+		r.Use(middleware.RequireReauth(jwtSecret))
+		r.Put("/admin/games/{slug}/play-cost", games.AdminSetPlayCost)
+	})
 }

@@ -15,8 +15,10 @@ type Game struct {
 	Description *string   `json:"description,omitempty"`
 	GameType    string    `json:"game_type"`
 	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// PlayCostPoints is what one practice play costs, set by a Super Admin.
+	PlayCostPoints int64     `json:"play_cost_points"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // GameVersion maps to competition.game_versions. Config carries the rules the
@@ -77,7 +79,8 @@ type GameView struct {
 	GameType    string          `json:"game_type"`
 	Version     string          `json:"version"`
 	Config      json.RawMessage `json:"config"`
-	// PlayCostPoints is what one play costs; 0 is free.
+	// PlayCostPoints is what one play costs, set per game by a Super
+	// Admin; 0 is free.
 	PlayCostPoints int64 `json:"play_cost_points"`
 }
 

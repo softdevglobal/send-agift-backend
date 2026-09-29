@@ -786,7 +786,7 @@ func TestPointsCancelTakesBackOrderTimeRewards(t *testing.T) {
 func TestPointsGamePlayCostsPoints(t *testing.T) {
 	f := newPointsFixture(t, "instant")
 	svc := NewGameService(repository.NewGameRepository(f.pool))
-	svc.ChargePerPlay(50, f.repo)
+	svc.ChargeForPlays(f.repo)
 	player := f.customer("")
 
 	// Not enough points: refused, and nothing recorded.
@@ -825,5 +825,67 @@ func TestPointsGamePlayCostsPoints(t *testing.T) {
 	}
 	if b := f.customerBalance(player); b != 20 {
 		t.Fatalf("balance %d, want 20", b)
+	}
+}
+
+func TestPointsEachGameHasItsOwnPrice(t *testing.T) {
+	f := newPointsFixture(t, "instant")
+	svc := NewGameService(repository.NewGameRepository(f.pool))
+	svc.ChargeForPlays(f.repo)
+	admin := AdminActor{ID: uuid.New()}
+	player := f.customer("")
+	f.grant(player, 100)
+	// Whatever other tests left behind, 2048 and snake get known prices.
+	t.Cleanup(func() {
+		_, _ = svc.SetPlayCost(context.Background(), admin, "2048", 50)
+		_, _ = svc.SetPlayCost(context.Background(), admin, "snake", 50)
+	})
+
+	if _, err := svc.SetPlayCost(f.ctx, admin, "2048", 30); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetPlayCost(f.ctx, admin, "snake", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []int64{-1, 1_000_001} {
+		if _, err := svc.SetPlayCost(f.ctx, admin, "2048", bad); !errors.Is(err, ErrInvalidPlayCost) {
+			t.Fatalf("%d: want ErrInvalidPlayCost, got %v", bad, err)
+		}
+	}
+	if _, err := svc.SetPlayCost(f.ctx, admin, "no-such-game", 10); !errors.Is(err, ErrGameNotFound) {
+		t.Fatalf("unknown game: %v", err)
+	}
+
+	list, err := svc.ListGames(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices := map[string]int64{}
+	for _, g := range list {
+		prices[g.Slug] = g.PlayCostPoints
+	}
+	if prices["2048"] != 30 || prices["snake"] != 0 {
+		t.Fatalf("catalog prices: %v", prices)
+	}
+
+	view, err := svc.StartSession(f.ctx, "2048", SocialActor{CustomerID: player.String()}, 1)
+	if err != nil || view.PointsCharged != 30 {
+		t.Fatalf("2048 play: %+v %v", view, err)
+	}
+	// A free game charges nothing, and a guest can play it.
+	if view, err := svc.StartSession(f.ctx, "snake", SocialActor{CustomerID: player.String()}, 1); err != nil || view.PointsCharged != 0 {
+		t.Fatalf("snake play: %+v %v", view, err)
+	}
+	if _, err := svc.StartSession(f.ctx, "snake", SocialActor{GuestToken: "guest-" + uuid.NewString()}, 1); err != nil {
+		t.Fatalf("guest on a free game: %v", err)
+	}
+	if b := f.customerBalance(player); b != 70 {
+		t.Fatalf("balance %d, want 70", b)
+	}
+	var audits int
+	if err := f.pool.QueryRow(f.ctx, `
+		select count(*) from admin.audit_log where action = 'game.play_cost_set' and actor_id = $1`,
+		admin.ID).Scan(&audits); err != nil || audits != 2 {
+		t.Fatalf("audit rows %d %v", audits, err)
 	}
 }

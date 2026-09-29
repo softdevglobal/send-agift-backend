@@ -2885,8 +2885,15 @@ none, or if the order is cancelled. Orders carry `gift_points` and `gift_points_
 points to each winner when a Super Admin validates them; nothing to claim or ship, and no
 money reserve is needed to schedule it.
 
-**Games.** Unchanged: a play's `points_per_attempt` is debited on the server inside the
-play transaction, refused with `INSUFFICIENT_POINTS` when the balance is short.
+**Games.** Every practice game has its own price, `play_cost_points` (0–1,000,000; new
+games start at 50, 0 makes a game free), set per game by a platform admin with
+`PUT /admin/games/{slug}/play-cost` `{"play_cost_points": 30}` (admin or superadmin +
+`X-Reauth-Token`, audited as `game.play_cost_set`). `GET /games` and `GET /admin/games`
+return each game's price. Starting a session debits that price inside the same transaction
+that opens it; a short balance is refused with `422 INSUFFICIENT_POINTS`
+(`points_required`, `points_balance`) and a guest with `401 SIGN_IN_REQUIRED`, with nothing
+charged. A free game can still be played as a guest. Competition plays are unchanged: their
+`points_per_attempt` is debited inside the play transaction.
 
 All of the above except gift sending, prize validation and play debits is applied by the
 points job, which runs every minute (and on `POST /admin/points/earning-runs`). Every

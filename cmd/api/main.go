@@ -80,9 +80,9 @@ func main() {
 	gameService := services.NewGameService(gameRepo)
 	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, pointsRepo)
 	gameService.UseCompetitions(competitionService)
-	// Every practice game costs points (POINTS_PER_GAME_PLAY, default 50),
-	// taken on the server when the game starts.
-	gameService.ChargePerPlay(int64(cfg.PointsPerGamePlay), pointsRepo)
+	// Every practice play costs the points a Super Admin set for that game
+	// (competition.games.play_cost_points), taken on the server when it starts.
+	gameService.ChargeForPlays(pointsRepo)
 	pointsService := services.NewPointsService(pointsRepo)
 	// Prize reconciliation (Progressive Prize spec §9): every round whose
 	// money can still move is re-derived from its ledger on a schedule.

@@ -1580,6 +1580,7 @@ Applied in filename order, tracked in `schema_migrations`. Numbering has gaps �
 | `000040_delivery_zone_estimated_days` | `shop_delivery_zones.estimated_days` (default 1, `0` = same day) |
 | `000041_shipment_seller_delivery` | `shipments.distance_km`, `zone_max_km`, `price_amount`, `currency`, `estimated_days`, `estimated_delivery_date` — the shop delivery snapshot |
 | `000047_points_system` | Points for everyone: `finance.points_ledger` gains `seller_id` (exactly one holder per row), `reference_type`/`reference_id`, `status`, generated `balance_before` and `direction`, and the new entry types; `finance.seller_points_accounts` (`balance`, `reserved` ≤ `balance`); `finance.points_purchases` (pending → completed/failed/cancelled, rate snapshot, UNIQUE `(seller_id, idempotency_key)` and `(provider, provider_reference)`); `seller.products.reward_points`; `order_items.reward_points_per_unit`/`reward_points`/`reward_status`; `orders.gift_points`/`gift_points_status`/`gift_points_recipient_id`; `competitions.prize_points` and prize type `points` |
+| `000048_game_play_cost` | `competition.games.play_cost_points` (default 50, 0–1,000,000): what one practice play of each game costs, set by a platform admin |
 
 Two files share each of the numbers `000027`–`000030`. Versions are the full file names,
 so both run, in alphabetical order.
