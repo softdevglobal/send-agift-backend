@@ -86,17 +86,19 @@ func TestSlingCrossLanguageGolden(t *testing.T) {
 	}
 }
 
-var hillGoldenLog = strings.Split("0:g,70:n,90:g,160:n,180:g,250:n,270:g,285:b,300:g,340:n,360:g,430:n,450:g,520:n,540:g,585:b,600:g,610:n,630:g,700:n,720:g,790:n,810:g,880:n,900:g,970:n,990:g,1060:n,1080:g,1150:n,1170:g,1183:end", ",")
+// Played on the harder road of migration 000041 by a bot that holds a
+// target speed, braking into the crests, until a landing goes wrong.
+var hillGoldenLog = strings.Split("0:g,20:b,30:g,50:b,60:g,70:b,80:g,110:b,120:g,140:b,150:g,170:b,180:g,210:b,220:g,230:n,240:g,250:b,260:g,270:b,280:g,290:n,300:g,310:b,320:g,330:n,340:g,450:n,460:b,470:g,510:b,570:n,580:g,590:b,600:g,610:b,620:n,630:g,640:b,650:g,660:n,670:g,680:b,690:g,700:n,710:b,720:n,730:g,810:n,820:g,830:b,840:g,880:n,890:g,920:n,930:g,940:n,950:g,980:b,990:n,1010:g,1020:n,1030:g,1040:b,1050:g,1070:b,1117:end", ",")
 
 func TestHillCrossLanguageGolden(t *testing.T) {
 	res, err := ReplayHill("cafebabe", DefaultHillConfig(), hillGoldenLog)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if res.Score != 927 || !res.GameOver || res.MinDurationMs != 18928 {
-		t.Errorf("score %d over %v min %d, want 927 / true / 18928", res.Score, res.GameOver, res.MinDurationMs)
+	if res.Score != 682 || !res.GameOver || res.MinDurationMs != 17872 {
+		t.Errorf("score %d over %v min %d, want 682 / true / 17872", res.Score, res.GameOver, res.MinDurationMs)
 	}
-	for stat, want := range map[string]int64{"distance": 892, "air_ticks": 177, "fuel_cans": 3} {
+	for stat, want := range map[string]int64{"distance": 651, "air_ticks": 157, "fuel_cans": 2} {
 		if res.Stats[stat] != want {
 			t.Errorf("%s = %d, want %d", stat, res.Stats[stat], want)
 		}

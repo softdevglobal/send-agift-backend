@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"myapp/internal/middleware"
 	"myapp/internal/services"
 	"myapp/internal/utils"
 )
@@ -85,4 +86,28 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.JSON(w, http.StatusOK, result)
+}
+
+// Reauth handles POST /admin/reauth: the signed-in admin re-enters their
+// password and gets a short-lived token for money-moving actions, sent back
+// in the X-Reauth-Token header.
+func (h *AuthHandler) Reauth(w http.ResponseWriter, r *http.Request) {
+	adminID, _ := r.Context().Value(middleware.AdminIDContextKey).(string)
+	var in struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	res, err := h.auth.AdminReauth(r.Context(), adminID, in.Password)
+	if err != nil {
+		if errors.Is(err, services.ErrInvalidCredentials) {
+			utils.Error(w, http.StatusUnprocessableEntity, "that password is not right")
+			return
+		}
+		utils.Error(w, http.StatusInternalServerError, "could not confirm your password")
+		return
+	}
+	utils.JSON(w, http.StatusOK, res)
 }

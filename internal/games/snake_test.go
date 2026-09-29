@@ -183,8 +183,10 @@ func TestSnakeCrossLanguageGolden(t *testing.T) {
 			t.Errorf("%s = %d, want %d", stat, res.Stats[stat], want)
 		}
 	}
-	if res.MinDurationMs != 24299 {
-		t.Errorf("min duration = %d, want 24299", res.MinDurationMs)
+	// Longer than the board alone would suggest: the round opens at a stroll
+	// and only winds up as gifts are eaten and the ticks go by.
+	if res.MinDurationMs != 34262 {
+		t.Errorf("min duration = %d, want 34262", res.MinDurationMs)
 	}
 
 	// The final position itself, not just the totals.
@@ -206,5 +208,71 @@ func TestSnakeCrossLanguageGolden(t *testing.T) {
 	}
 	if g.Food() != 215 {
 		t.Errorf("food = %d, want 215", g.Food())
+	}
+}
+
+func TestSnakeStartsSlowAndWindsUp(t *testing.T) {
+	cfg := DefaultSnakeConfig()
+	g, err := NewSnakeGame("cafebabe", cfg)
+	if err != nil {
+		t.Fatalf("deal: %v", err)
+	}
+
+	// It opens at a walk.
+	if got := g.TickIntervalMs(); got != cfg.TickMs {
+		t.Fatalf("opening tick = %dms, want %dms", got, cfg.TickMs)
+	}
+
+	// Time alone winds it up, so a round that goes on gets harder even
+	// without the player finding anything. Driven straight the snake would
+	// hit the wall long before that shows, so the pace is read off the clock
+	// rather than by surviving it.
+	early := &SnakeGame{cfg: cfg, ticks: 0}
+	later := &SnakeGame{cfg: cfg, ticks: cfg.SpeedupEveryTicks * 3}
+	if later.TickIntervalMs() >= early.TickIntervalMs() {
+		t.Fatalf("after %d ticks the pace is still %dms",
+			later.Ticks(), later.TickIntervalMs())
+	}
+
+	// And it never runs away past the floor.
+	fast := &SnakeGame{cfg: cfg, foods: 1000, ticks: 100000}
+	if got := fast.TickIntervalMs(); got != cfg.MinTickMs {
+		t.Fatalf("flat out = %dms, want the floor %dms", got, cfg.MinTickMs)
+	}
+}
+
+func TestSnakeEatingQuickensThePace(t *testing.T) {
+	cfg := DefaultSnakeConfig()
+	// The same number of ticks gone by, so the only difference is the gifts.
+	hungry := &SnakeGame{cfg: cfg, foods: 0, ticks: 50}
+	fed := &SnakeGame{cfg: cfg, foods: 5, ticks: 50}
+
+	if fed.TickIntervalMs() >= hungry.TickIntervalMs() {
+		t.Fatalf("five gifts left the pace at %dms against %dms",
+			fed.TickIntervalMs(), hungry.TickIntervalMs())
+	}
+}
+
+// The client runs its own clock off this same curve, and the server derives
+// the minimum a round can have taken from it. If the two drifted apart, a
+// player running the faster of the pair would have their score thrown out for
+// arriving too quickly. The Dart mirror pins these same numbers in
+// send-agift-mobile/test/snake_game_test.dart.
+func TestSnakePaceIsPinnedForTheClient(t *testing.T) {
+	cfg := DefaultSnakeConfig()
+	for _, c := range []struct {
+		foods, ticks, want int
+	}{
+		{0, 0, 300},
+		{2, 45, 275},
+		{5, 90, 238},
+		{10, 90, 178},  // five more gifts is worth far more than the drift
+		{50, 3000, 70}, // the floor
+	} {
+		g := &SnakeGame{cfg: cfg, foods: c.foods, ticks: c.ticks}
+		if got := g.TickIntervalMs(); got != c.want {
+			t.Errorf("%d gifts and %d ticks = %dms, want %dms",
+				c.foods, c.ticks, got, c.want)
+		}
 	}
 }

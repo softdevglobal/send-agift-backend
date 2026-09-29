@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"myapp/internal/games"
 )
 
 // Competition maps to competition.competitions, joined with its country and
@@ -18,6 +20,7 @@ type Competition struct {
 	GameVersionStatus string          `json:"game_version_status"`
 	GameSlug          string          `json:"game_slug"`
 	GameName          string          `json:"game_name"`
+	GameType          string          `json:"game_type"`
 	GameVersion       string          `json:"game_version"`
 	GameConfig        json.RawMessage `json:"-"`
 	Title             string          `json:"title"`
@@ -46,6 +49,34 @@ type Competition struct {
 	CreatedByAdminID             *uuid.UUID `json:"created_by_admin_id,omitempty"`
 	CreatedAt                    time.Time  `json:"created_at"`
 	UpdatedAt                    time.Time  `json:"updated_at"`
+
+	// Progressive prize economics (Progressive Prize spec §2). All money is
+	// minor units of PrizeCurrency.
+	PrizeGrowthEnabled bool   `json:"prize_growth_enabled"`
+	PrizeType          string `json:"prize_type"`
+	WinnerMethod       string `json:"winner_method"`
+	// Instant-win rounds: each play wins with probability 1 in WinOdds.
+	WinOdds *int `json:"win_odds,omitempty"`
+	// Quiz rounds: the questions with their answers. Loaded only for admins;
+	// players get them without answers, one play at a time.
+	QuizQuestions         []games.QuizQuestion `json:"quiz_questions,omitempty"`
+	StartPrizeCents       int64                `json:"start_prize_cents"`
+	IncrementPerPlayCents int64                `json:"increment_per_play_cents"`
+	MaxPrizeCents         *int64               `json:"max_prize_cents,omitempty"`
+	ContinueAtCap         bool                 `json:"continue_at_cap"`
+	DailyPlayLimit        *int                 `json:"daily_play_limit,omitempty"`
+	MinPlaysToWin         *int                 `json:"min_plays_to_win,omitempty"`
+	CurrentPrizeCents     int64                `json:"current_prize_cents"`
+	EligiblePlayCount     int64                `json:"eligible_play_count"`
+	UniquePlayerCount     int64                `json:"unique_player_count"`
+	PrizeVersion          int64                `json:"prize_version"`
+	FinalPrizeCents       *int64               `json:"final_prize_cents,omitempty"`
+	RoundNo               int                  `json:"round_no"`
+	PreviousRoundID       *uuid.UUID           `json:"previous_round_id,omitempty"`
+	ConfigVersion         int                  `json:"config_version"`
+	PausedAt              *time.Time           `json:"paused_at,omitempty"`
+	ClosedAt              *time.Time           `json:"closed_at,omitempty"`
+	UpdatedByAdminID      *uuid.UUID           `json:"updated_by_admin_id,omitempty"`
 }
 
 // PrizeReserve maps to finance.prize_reserves.
@@ -75,6 +106,14 @@ type CompetitionAttempt struct {
 	VoidReason     *string    `json:"void_reason,omitempty"`
 	StartedAt      time.Time  `json:"started_at"`
 	SubmittedAt    *time.Time `json:"submitted_at,omitempty"`
+
+	ClientRequestID     *string    `json:"-"`
+	PrizeIncrementCents int64      `json:"prize_increment_cents"`
+	PrizeBeforeCents    *int64     `json:"prize_before_cents,omitempty"`
+	PrizeAfterCents     *int64     `json:"prize_after_cents,omitempty"`
+	RefundedAt          *time.Time `json:"refunded_at,omitempty"`
+	// A chance play's outcome and the draw behind it.
+	ResultPayload json.RawMessage `json:"result,omitempty"`
 }
 
 // ScoreSubmission maps to competition.score_submissions.
@@ -115,23 +154,30 @@ type PrizeClaim struct {
 // CompetitionWinner maps to competition.competition_winners, joined with the
 // winning score and the player's public details.
 type CompetitionWinner struct {
-	ID                uuid.UUID   `json:"id"`
-	CompetitionID     uuid.UUID   `json:"competition_id"`
-	CustomerID        uuid.UUID   `json:"customer_id"`
-	ScoreSubmissionID uuid.UUID   `json:"score_submission_id"`
-	PrizePosition     int         `json:"prize_position"`
-	Rank              int         `json:"rank"`
-	Status            string      `json:"status"`
-	StatusReason      *string     `json:"status_reason,omitempty"`
-	ValidatedAt       *time.Time  `json:"validated_at,omitempty"`
-	CreatedAt         time.Time   `json:"created_at"`
-	UpdatedAt         time.Time   `json:"updated_at"`
-	DisplayName       *string     `json:"display_name,omitempty"`
-	CountryName       string      `json:"country_name"`
-	Score             int64       `json:"score"`
-	DurationMs        int64       `json:"duration_ms"`
-	AchievedAt        time.Time   `json:"achieved_at"`
-	Claim             *PrizeClaim `json:"claim,omitempty"`
+	ID                uuid.UUID  `json:"id"`
+	CompetitionID     uuid.UUID  `json:"competition_id"`
+	CustomerID        uuid.UUID  `json:"customer_id"`
+	ScoreSubmissionID *uuid.UUID `json:"score_submission_id,omitempty"`
+	// Set for a chance round's winner: the play that won.
+	AttemptID     *uuid.UUID  `json:"attempt_id,omitempty"`
+	PrizePosition int         `json:"prize_position"`
+	Rank          int         `json:"rank"`
+	Status        string      `json:"status"`
+	StatusReason  *string     `json:"status_reason,omitempty"`
+	ValidatedAt   *time.Time  `json:"validated_at,omitempty"`
+	CreatedAt     time.Time   `json:"created_at"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	DisplayName   *string     `json:"display_name,omitempty"`
+	CountryName   string      `json:"country_name"`
+	Score         int64       `json:"score"`
+	DurationMs    int64       `json:"duration_ms"`
+	AchievedAt    time.Time   `json:"achieved_at"`
+	Claim         *PrizeClaim `json:"claim,omitempty"`
+
+	PrizeValueCents     *int64     `json:"prize_value_cents,omitempty"`
+	SettlementStatus    string     `json:"settlement_status"`
+	SettlementReference *string    `json:"settlement_reference,omitempty"`
+	SettledAt           *time.Time `json:"settled_at,omitempty"`
 }
 
 // AuditEntry is one row for admin.audit_log.
@@ -158,6 +204,9 @@ type CompetitionView struct {
 	Status                       string         `json:"status"`
 	GameSlug                     string         `json:"game_slug"`
 	GameName                     string         `json:"game_name"`
+	GameType                     string         `json:"game_type"`
+	WinnerMethod                 string         `json:"winner_method"`
+	WinOdds                      *int           `json:"win_odds,omitempty"`
 	CountryCode                  string         `json:"country_code"`
 	CountryName                  string         `json:"country_name"`
 	StartsAt                     time.Time      `json:"starts_at"`
@@ -177,17 +226,40 @@ type CompetitionView struct {
 	CancelNote                   *string        `json:"cancel_note,omitempty"`
 	Me                           *CompetitionMe `json:"me,omitempty"`
 	Winners                      []PublicWinner `json:"winners,omitempty"`
+
+	// The live prize (spec §6.1). For a fixed prize, current equals start
+	// and nothing grows.
+	PrizeGrowthEnabled    bool   `json:"prize_growth_enabled"`
+	PrizeType             string `json:"prize_type"`
+	StartPrizeCents       int64  `json:"start_prize_cents"`
+	CurrentPrizeCents     int64  `json:"current_prize_cents"`
+	IncrementPerPlayCents int64  `json:"increment_per_play_cents"`
+	MaxPrizeCents         *int64 `json:"max_prize_cents,omitempty"`
+	// True once the prize has reached its cap: plays add nothing more.
+	PrizeCapReached   bool   `json:"prize_cap_reached"`
+	ContinueAtCap     bool   `json:"continue_at_cap"`
+	FinalPrizeCents   *int64 `json:"final_prize_cents,omitempty"`
+	EligiblePlayCount int64  `json:"eligible_play_count"`
+	UniquePlayerCount int64  `json:"unique_player_count"`
+	DailyPlayLimit    *int   `json:"daily_play_limit,omitempty"`
+	PrizeVersion      int64  `json:"prize_version"`
+	RoundNo           int    `json:"round_no"`
 }
 
 // CompetitionMe is the signed-in customer's position in one competition.
 type CompetitionMe struct {
-	AttemptsUsed      int    `json:"attempts_used"`
-	AttemptsRemaining int    `json:"attempts_remaining"`
-	BestScore         *int64 `json:"best_score,omitempty"`
-	Rank              *int   `json:"rank,omitempty"`
-	Eligible          bool   `json:"eligible"`
-	IneligibleReason  string `json:"ineligible_reason,omitempty"`
-	Win               *MyWin `json:"win,omitempty"`
+	AttemptsUsed      int `json:"attempts_used"`
+	AttemptsRemaining int `json:"attempts_remaining"`
+	// Plays left today under the daily limit, when the round has one, and
+	// when the next day's plays open.
+	PlaysLeftToday   *int       `json:"plays_left_today,omitempty"`
+	DailyResetAt     *time.Time `json:"daily_reset_at,omitempty"`
+	PointsBalance    int64      `json:"points_balance"`
+	BestScore        *int64     `json:"best_score,omitempty"`
+	Rank             *int       `json:"rank,omitempty"`
+	Eligible         bool       `json:"eligible"`
+	IneligibleReason string     `json:"ineligible_reason,omitempty"`
+	Win              *MyWin     `json:"win,omitempty"`
 }
 
 // MyWin is shown only to the winner themselves.
@@ -229,6 +301,21 @@ type AttemptStartView struct {
 	AttemptsRemaining int             `json:"attempts_remaining"`
 	PointsSpent       int             `json:"points_spent"`
 	Session           GameSessionView `json:"session"`
+
+	// The play receipt (spec §5.2). A retried request with the same
+	// idempotency key returns the original receipt with Replayed set.
+	PlayID                uuid.UUID `json:"play_id"`
+	Status                string    `json:"status"`
+	WalletPointsRemaining int64     `json:"wallet_points_remaining"`
+	PrizeBeforeCents      int64     `json:"prize_before_cents"`
+	PrizeIncrementCents   int64     `json:"prize_increment_cents"`
+	PrizeAfterCents       int64     `json:"prize_after_cents"`
+	PrizeCapReached       bool      `json:"prize_cap_reached"`
+	PlayedAt              time.Time `json:"played_at"`
+	Replayed              bool      `json:"replayed"`
+	// The game-specific result (spec §5.2): a chance play's outcome. Skill
+	// plays have none until their score is submitted.
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // AdminCompetitionView adds the operational details admins need.
@@ -239,4 +326,6 @@ type AdminCompetitionView struct {
 	Attempts        int           `json:"attempts"`
 	Submissions     int           `json:"submissions"`
 	UnderReview     int           `json:"under_review"`
+	// Why the round cannot be scheduled yet, if anything; empty once it can.
+	ScheduleBlockers []string `json:"schedule_blockers"`
 }

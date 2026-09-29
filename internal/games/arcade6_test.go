@@ -322,58 +322,6 @@ func TestTowerBlocksRejectsASlabThatDoesNotFit(t *testing.T) {
 	}
 }
 
-func TestFruitBombEndsTheRound(t *testing.T) {
-	g, err := NewFruitGame(arcadeSeed, FruitConfig{})
-	if err != nil {
-		t.Fatalf("schedule: %v", err)
-	}
-	var bomb FruitThrow
-	found := false
-	for _, throw := range g.Throws() {
-		if throw.Bomb {
-			bomb, found = throw, true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("the schedule should contain at least one bomb")
-	}
-
-	moves := []string{strconv.Itoa(bomb.Enter) + ":" + strconv.Itoa(bomb.Lane)}
-	result, err := ReplayFruit(arcadeSeed, FruitConfig{}, moves)
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
-	if !result.GameOver {
-		t.Fatal("cutting a bomb must end the round")
-	}
-	if result.Stats["fruits"] != 0 {
-		t.Fatalf("a bomb is not a fruit: %d", result.Stats["fruits"])
-	}
-}
-
-func TestFruitStreakPaysMoreThanSingles(t *testing.T) {
-	g, _ := NewFruitGame(arcadeSeed, FruitConfig{})
-	run := []string{}
-	for _, throw := range g.Throws() {
-		if throw.Bomb {
-			break
-		}
-		run = append(run, strconv.Itoa(throw.Enter)+":"+strconv.Itoa(throw.Lane))
-	}
-	if len(run) < 3 {
-		t.Skip("schedule has too few fruits before the first bomb")
-	}
-	result, err := ReplayFruit(arcadeSeed, FruitConfig{}, run)
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
-	flat := int64(len(run)) * 12
-	if result.Score <= flat {
-		t.Fatalf("score %d should exceed a flat %d once the combo pays", result.Score, flat)
-	}
-}
-
 func TestDoodleClimbFollowsTheSeededTower(t *testing.T) {
 	g, err := NewDoodleGame(arcadeSeed, DoodleConfig{})
 	if err != nil {

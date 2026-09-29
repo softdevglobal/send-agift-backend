@@ -1,69 +1,130 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/handlers"
 	"myapp/internal/middleware"
 )
 
-// RegisterCompetitionRoutes mounts skill competitions.
+// RegisterCompetitionRoutes mounts skill competitions and the progressive
+// prize engine that runs every one of them.
 //
-// Public (optional customer JWT adds the caller's attempts, eligibility and rank):
+// Public (optional customer JWT adds the caller's plays, eligibility, points
+// and rank):
 //
-//	GET  /competitions                       — published competitions
+//	GET  /competitions                       — published rounds with their live prize
 //	GET  /competitions/{id}                  — rules, prize, disclosures, winners
 //	GET  /competitions/{id}/leaderboard      — live board (+ my row)
+//	GET  /competitions/{id}/events           — live prize stream (Server-Sent Events)
 //
 // Customer JWT:
 //
-//	POST /competitions/{id}/attempts         — start an official attempt (returns the session)
+//	POST /competitions/{id}/plays            — one idempotent play (Idempotency-Key header)
+//	POST /competitions/{id}/attempts         — the same, for older app builds
 //	POST /competitions/{id}/claim            — winner accepts terms and picks a delivery address
 //
 // Official scores are submitted through POST /games/sessions/{sessionID}/submit.
 //
-// Admin JWT: the lifecycle from draft to winners, every action audited.
-func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, jwtSecret string) {
+// Admin JWT (support, view only): lists, ledger, plays, analytics, boards,
+// the score review queue and the leaderboard freeze.
+//
+// Superadmin JWT: everything that changes prize economics or pays out —
+// rules, reserve, publishing, pause/resume/close/cancel, prize adjustments,
+// voids and refunds, finalising, draws, winners, claims, settlement and
+// points (spec §2, AC-13). Every one is audited, and the ones that move money
+// also need a fresh password confirmation (X-Reauth-Token).
+func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *handlers.PointsHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.OptionalCustomerOrGuest(jwtSecret, false))
 		r.Get("/competitions", c.List)
 		r.Get("/competitions/{id}", c.Get)
 		r.Get("/competitions/{id}/leaderboard", c.Leaderboard)
+		r.Get("/competitions/{id}/events", c.Events)
 	})
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("customer"))
-		r.Post("/competitions/{id}/attempts", c.StartAttempt)
+		r.Get("/customers/me/points", p.MyWallet)
+		r.Get("/customers/me/points/earning", p.MyEarningRule)
 		r.Post("/competitions/{id}/claim", c.ClaimPrize)
+
+		r.Group(func(r chi.Router) {
+			// A person tapping Play cannot manage these; a script can. Per
+			// account, per device, and — set high, so a shared network is
+			// not blocked for one account — per address (spec §7).
+			r.Use(middleware.RateLimitByUser(20, time.Minute))
+			r.Use(middleware.RateLimitByDevice(20, time.Minute))
+			r.Use(middleware.RateLimitPlaysByIP(120, time.Minute))
+			r.Post("/competitions/{id}/plays", c.Play)
+			r.Post("/competitions/{id}/attempts", c.StartAttempt)
+		})
 	})
 
+	// Support: view only.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
-		// Prizes, winners and money-shaped actions; every one is audited.
 		r.Use(middleware.RequireRole("admin"))
 
 		r.Get("/admin/competitions", c.AdminList)
-		r.Post("/admin/competitions", c.Create)
 		r.Get("/admin/competitions/{id}", c.AdminGet)
+		r.Get("/admin/competitions/{id}/ledger", c.Ledger)
+		r.Get("/admin/competitions/{id}/plays", c.Plays)
+		r.Get("/admin/competitions/{id}/analytics", c.Analytics)
+		r.Post("/admin/competitions/{id}/reconcile", c.Reconcile)
+		r.Get("/admin/competitions/{id}/leaderboard", c.AdminLeaderboard)
+		r.Get("/admin/competitions/{id}/review-queue", c.ReviewQueue)
+		r.Post("/admin/competitions/{id}/submissions/{submissionID}/review", c.Review)
+		r.Post("/admin/competitions/{id}/freeze", c.Freeze())
+		r.Get("/admin/competitions/{id}/winners", c.Winners)
+		r.Get("/admin/competitions/{id}/draw", c.Draw)
+		r.Get("/admin/points/earning-rules", p.EarningRules)
+		r.Get("/admin/customers", p.SearchCustomers)
+		r.Get("/admin/customers/{customerID}/points", p.CustomerWallet)
+	})
+
+	// Super Admin: prize economics and payouts.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth(jwtSecret))
+		r.Use(middleware.RequireRole("superadmin"))
+
+		r.Post("/admin/competitions", c.Create)
 		r.Put("/admin/competitions/{id}", c.Update)
+		r.Patch("/admin/competitions/{id}", c.Update)
+		r.Post("/admin/competitions/{id}/duplicate", c.Duplicate)
 
 		r.Put("/admin/competitions/{id}/prize-reserve", c.SetReserve)
 		r.Post("/admin/competitions/{id}/prize-reserve/fund", c.FundReserve)
 		r.Post("/admin/competitions/{id}/schedule", c.Schedule())
-		r.Post("/admin/competitions/{id}/cancel", c.Cancel)
-		r.Post("/admin/competitions/{id}/freeze", c.Freeze())
+		r.Post("/admin/competitions/{id}/activate", c.Schedule())
+		r.Post("/admin/competitions/{id}/pause", c.Pause())
+		r.Post("/admin/competitions/{id}/resume", c.Resume())
+		r.Post("/admin/competitions/{id}/close", c.Close())
+
 		r.Post("/admin/competitions/{id}/finalise", c.Finalise)
-
-		r.Get("/admin/competitions/{id}/leaderboard", c.AdminLeaderboard)
-		r.Get("/admin/competitions/{id}/review-queue", c.ReviewQueue)
-		r.Post("/admin/competitions/{id}/submissions/{submissionID}/review", c.Review)
-
-		r.Get("/admin/competitions/{id}/winners", c.Winners)
 		r.Post("/admin/competitions/{id}/winners/{winnerID}/validate", c.ValidateWinner)
 		r.Post("/admin/competitions/{id}/winners/{winnerID}/disqualify", c.DisqualifyWinner)
 		r.Post("/admin/competitions/{id}/winners/{winnerID}/unclaimed", c.MarkUnclaimed)
 		r.Post("/admin/competitions/{id}/claims/{claimID}/verify", c.AdvanceClaim("verified"))
 		r.Post("/admin/competitions/{id}/claims/{claimID}/fulfil", c.AdvanceClaim("fulfilled"))
+
+		r.Post("/admin/points/earning-runs", p.RunEarning)
+
+		// Anything that moves money or points, or picks winners by chance,
+		// also needs the admin's password confirmed in the last few minutes
+		// (POST /admin/reauth).
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireReauth(jwtSecret))
+			r.Post("/admin/competitions/{id}/cancel", c.Cancel)
+			r.Post("/admin/competitions/{id}/prize-adjustments", c.AdjustPrize)
+			r.Post("/admin/competitions/{id}/plays/{playID}/void", c.VoidPlay)
+			r.Post("/admin/competitions/{id}/settle", c.Settle)
+			r.Post("/admin/competitions/{id}/draw", c.RunDraw())
+			r.Post("/admin/customers/{customerID}/points/adjustments", p.Adjust)
+			r.Put("/admin/points/earning-rules/{countryID}", p.SetEarningRule)
+		})
 	})
 }

@@ -32,9 +32,18 @@ func TestSlideScrambleIsSeededAndValid(t *testing.T) {
 	}
 }
 
+// A board small enough to write out by hand. These two tests are about what a
+// direction means, not about how big the puzzle is, so they pin their own size
+// rather than riding on the default.
+func threeByThree() SlideConfig {
+	cfg := DefaultSlideConfig()
+	cfg.Size = 3
+	return cfg
+}
+
 // "up" means the tile below the gap slides up into it.
 func TestSlideMoveNamesTheTileDirection(t *testing.T) {
-	p, _ := NewSlidePuzzle("00000001", DefaultSlideConfig())
+	p, _ := NewSlidePuzzle("00000001", threeByThree())
 	p.board = []int{1, 2, 3, 4, 0, 5, 7, 8, 6}
 	p.blank = 4
 
@@ -48,7 +57,7 @@ func TestSlideMoveNamesTheTileDirection(t *testing.T) {
 }
 
 func TestSlideRejectsImpossibleMoves(t *testing.T) {
-	p, _ := NewSlidePuzzle("00000001", DefaultSlideConfig())
+	p, _ := NewSlidePuzzle("00000001", threeByThree())
 	// Unsolved, gap in the bottom-right corner: nothing is below or right of
 	// it, so "up" and "left" have no tile to move.
 	p.board = []int{1, 2, 3, 4, 5, 6, 8, 7, 0}
@@ -94,17 +103,22 @@ func TestReplaySlideLimits(t *testing.T) {
 // send-agift-mobile/test/slide_puzzle_test.dart.
 func TestSlideCrossLanguageGolden(t *testing.T) {
 	p, _ := NewSlidePuzzle("cafebabe", DefaultSlideConfig())
-	if want := []int{1, 3, 6, 5, 0, 7, 2, 4, 8}; !reflect.DeepEqual(p.Board(), want) {
+	want := []int{9, 14, 1, 11, 10, 0, 4, 3, 8, 6, 2, 7, 13, 5, 15, 12}
+	if !reflect.DeepEqual(p.Board(), want) {
 		t.Fatalf("scramble = %v, want %v", p.Board(), want)
 	}
 
-	// Breadth-first optimal solution for this scramble.
-	solution := strings.Split("left,down,right,right,up,up,left,down,right,down,left,up,right,up,left,left", ",")
+	// A* optimal solution for this scramble: no shorter one exists, so the
+	// score below is the most this board can ever pay.
+	solution := strings.Split(
+		"down,left,left,up,right,up,right,up,left,down,right,down,left,up,up,"+
+			"right,down,right,down,down,left,up,left,up,right,right,down,left,"+
+			"left,down,left,up,up,right,down,left,up,up", ",")
 	res, err := ReplaySlide("cafebabe", DefaultSlideConfig(), solution)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if !res.Won || res.Score != 4680 || res.MovesUsed != 16 {
-		t.Errorf("won %v score %d moves %d, want true / 4680 / 16", res.Won, res.Score, res.MovesUsed)
+	if !res.Won || res.Score != 13240 || res.MovesUsed != 38 {
+		t.Errorf("won %v score %d moves %d, want true / 13240 / 38", res.Won, res.Score, res.MovesUsed)
 	}
 }

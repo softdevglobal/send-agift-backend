@@ -117,12 +117,17 @@ func (h *CompetitionHandler) StartAttempt(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	view, err := h.competitions.StartAttempt(r.Context(), id, actorFromContext(r))
+	req := playRequest(r)
+	view, err := h.competitions.StartAttempt(r.Context(), id, actorFromContext(r), req.ClientRequestID)
 	if err != nil {
-		h.writeError(w, err, "could not start attempt")
+		h.writePlayError(w, err)
 		return
 	}
-	utils.JSON(w, http.StatusCreated, view)
+	status := http.StatusCreated
+	if view.Replayed {
+		status = http.StatusOK
+	}
+	utils.JSON(w, status, view)
 }
 
 // ClaimPrize handles POST /competitions/{id}/claim.
@@ -426,7 +431,19 @@ func (h *CompetitionHandler) AdvanceClaim(to string) http.HandlerFunc {
 
 // writeError maps service errors onto HTTP status codes.
 func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallback string) {
+	var refusal *services.PlayRefusal
 	switch {
+	case errors.As(err, &refusal):
+		h.writePlayError(w, err)
+	case errors.Is(err, services.ErrConfigConflict):
+		utils.JSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "CONFIG_VERSION_CONFLICT"})
+	case errors.Is(err, services.ErrPlayNotFound):
+		utils.Error(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, services.ErrInvalidAdjustment):
+		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrPrizeOutOfRange), errors.Is(err, services.ErrPlayState),
+		errors.Is(err, services.ErrWinnerSettled):
+		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrCompetitionNotFound):
 		utils.Error(w, http.StatusNotFound, "competition not found")
 	case errors.Is(err, services.ErrWinnerNotFound), errors.Is(err, services.ErrClaimNotFound),
