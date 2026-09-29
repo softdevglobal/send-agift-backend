@@ -38,10 +38,21 @@ Diagram entity names use underscores because Mermaid does not allow dots, so
 | `core` | platform reference data and cross-cutting infrastructure | `countries`, `country_capabilities`, `country_payment_providers`, `idempotency_keys` |
 | `admin` | platform staff accounts | `admin_users` |
 | `customer` | buyer identity, their address book, gift recipients, wishlist | `customers`, `customer_addresses`, `recipients`, `recipient_addresses`, `saved_gifts` |
-| `seller` | merchant identity, storefronts, catalogue, reels | `sellers`, `seller_addresses`, `shops`, `products`, `inventory`, `reels`, `reel_media` |
+| `seller` | merchant identity, storefronts, delivery bands, catalogue, reels | `sellers`, `seller_addresses`, `shops`, `shop_delivery_zones`, `products`, `product_media`, `inventory`, `reels`, `reel_media` |
 | `marketplace` | transactions + reviews | `orders`, `order_items`, `shipments`, `product_reviews`, `product_review_media`, `product_review_votes` |
 | `media` | one row per stored file, whatever owns it | `media_assets` |
+| `messaging` | customer ↔ seller and support chat | `conversations`, `conversation_participants`, `messages`, `message_attachments` |
+| `support` | support ticket metadata for admin chats | `cases` |
+| `social` | reel likes and comments | `reel_likes`, `reel_comments` |
+| `competition` | skill games and prize competitions | `games`, `game_versions`, `game_sessions`, `game_scores`, `competitions`, `competition_attempts`, `score_submissions`, `leaderboard_snapshots`, `competition_winners`, `prize_claims` |
+| `finance` | prize money held for competitions | `prize_reserves` |
 | `public` | migration bookkeeping only | `schema_migrations` |
+
+`admin.audit_log` (added by `000029`) also lives in the `admin` schema.
+
+The `messaging`, `support`, `social`, `competition`, and `finance` schemas are listed for completeness
+and summarised in [section 19](#19-migration-history); this document details the gifting
+tables.
 
 Three extensions are required and created by migration `000001`: `citext` (case-insensitive
 email), `pgcrypto` (`gen_random_uuid()`), and — implicitly used by `gin` indexes on arrays —
@@ -73,8 +84,7 @@ column, and no currency table — the ISO code is validated in Go.
 
 **JSON.** `jsonb NOT NULL DEFAULT '{}'::jsonb` for structured extras
 (`recipients.preferences`, `media_assets.metadata`, `shipments.provider_metadata`) and
-plain nullable `jsonb` where absence is meaningful (`shipments.parcel_details`,
-`shipments.customs_declaration`).
+plain nullable `jsonb` where absence is meaningful (`shipments.customs_declaration`).
 
 **Arrays.** `text[] NOT NULL DEFAULT '{}'` (`products.occasion_tags`, `reels.hashtags`)
 and `date[]` (`inventory.unavailable_dates`).
@@ -117,10 +127,13 @@ erDiagram
     seller_sellers ||--o{ seller_reels : seller_id
 
     seller_seller_addresses ||--o{ seller_shops : "address_id / return_address_id"
+    seller_shops ||--o{ seller_shop_delivery_zones : shop_id
     seller_shops ||--o{ seller_products : shop_id
     seller_shops ||--o{ marketplace_order_items : shop_id
     seller_shops ||--o{ seller_reels : shop_id
 
+    seller_products ||--o{ seller_product_media : product_id
+    media_media_assets ||--o{ seller_product_media : media_asset_id
     seller_products ||--o| seller_inventory : "product_id (unique)"
     seller_products ||--o{ customer_saved_gifts : product_id
     seller_products ||--o{ marketplace_order_items : product_id
@@ -458,6 +471,7 @@ erDiagram
     seller_sellers ||--o{ seller_shops : "seller_id CASCADE"
     seller_seller_addresses ||--o{ seller_shops : address_id
     seller_seller_addresses ||--o{ seller_shops : return_address_id
+    seller_shops ||--o{ seller_shop_delivery_zones : "shop_id CASCADE"
 
     seller_sellers {
         uuid id PK
@@ -498,6 +512,16 @@ erDiagram
         uuid address_id FK
         uuid return_address_id FK
         text image_url
+        numeric latitude
+        numeric longitude
+    }
+    seller_shop_delivery_zones {
+        uuid id PK
+        uuid shop_id FK
+        numeric max_km
+        int price_amount
+        text currency
+        int estimated_days
     }
 ```
 
@@ -539,10 +563,46 @@ Same shape as the customer address tables, except `address_type` is constrained:
 | `address_id` | uuid | **FK → `seller.seller_addresses(id)`**, nullable | ship-from |
 | `return_address_id` | uuid | **FK → `seller.seller_addresses(id)`**, nullable (added by `000011`) | overrides ship-from for returns |
 | `image_url` | text | nullable (added by `000008`) | |
+| `latitude`, `longitude` | numeric | nullable, CHECK `shops_lat_lng_pair` (added by `000039`) | shop pin for delivery-by-shop distance; both or neither, −90..90 / −180..180 |
 | `created_at`, `updated_at` | timestamptz | NOT NULL | |
 
 Shipping resolves ship-from as `COALESCE(return_address_id, address_id)`. A shop with
-neither set cannot get rates.
+neither set cannot get rates. The shop's point for delivery zones is
+`COALESCE(shops.latitude, ship_from_address.latitude)` (same for longitude), so a shop
+whose address was picked from Google Places works without its own pin.
+
+### `seller.shop_delivery_zones`
+
+Distance bands for delivery by the shop itself, e.g. 3 km free, 5 km $50, 10 km $80.
+Added by `000038`, with `estimated_days` from `000040`.
+
+| Column | Type | Key / constraint | Notes |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `shop_id` | uuid | **FK → `seller.shops(id)` ON DELETE CASCADE**, NOT NULL | |
+| `max_km` | numeric | NOT NULL CHECK > 0, **UNIQUE (shop_id, max_km)** | upper edge of the band |
+| `price_amount` | integer | NOT NULL CHECK ≥ 0 | minor units; `0` means free |
+| `currency` | text | NOT NULL | ISO code checked in Go against the known-currency list |
+| `estimated_days` | integer | NOT NULL DEFAULT 1 CHECK ≥ 0 | seller's delivery time; `0` is same day |
+| `created_at`, `updated_at` | timestamptz | NOT NULL | |
+
+Index `idx_shop_delivery_zones_shop_id (shop_id, max_km)` returns a shop's bands nearest
+first, which is the order the price lookup walks.
+
+`is_free` in API responses is derived (`price_amount = 0`), not stored. Writes always
+replace the whole set: `ReplaceDeliveryZones` deletes the shop's rows and inserts the new
+list in one transaction.
+
+**How a band is chosen.** Distance is the haversine straight line from the shop's point to
+the recipient's default address (`customer.recipient_addresses.latitude/longitude`),
+rounded to two decimals. The smallest `max_km` that is ≥ the distance wins. Past the
+largest band, shop delivery is unavailable for that recipient.
+
+```text
+bands: 3 km → 0, 5 km → 5000, 10 km → 8000
+distance 4.45 km → 5 km band → price_amount 5000 (USD 50.00), estimated_days 1
+distance 12.10 km → no band → available = false
+```
 
 ---
 
@@ -551,6 +611,8 @@ neither set cannot get rates.
 ```mermaid
 erDiagram
     seller_shops ||--o{ seller_products : "shop_id CASCADE"
+    seller_products ||--o{ seller_product_media : "product_id CASCADE"
+    media_media_assets ||--o{ seller_product_media : "media_asset_id CASCADE"
     seller_products ||--o| seller_inventory : "product_id UNIQUE CASCADE"
     seller_products ||--o{ customer_saved_gifts : "product_id CASCADE"
     customer_customers ||--o{ customer_saved_gifts : "customer_id CASCADE"
@@ -570,6 +632,18 @@ erDiagram
         bool points_display_enabled
         int prep_minutes
         text image_url
+        text parcel_length
+        text parcel_width
+        text parcel_height
+        text parcel_distance_unit
+        text parcel_weight
+        text parcel_mass_unit
+    }
+    seller_product_media {
+        uuid id PK
+        uuid product_id FK
+        uuid media_asset_id FK
+        int position
     }
     seller_inventory {
         uuid id PK
@@ -603,13 +677,40 @@ erDiagram
 | `customer_type_visibility` | text | DEFAULT `both`, CHECK | `personal`, `corporate`, `both` |
 | `points_display_enabled` | boolean | NOT NULL DEFAULT false | |
 | `prep_minutes` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | lead time |
-| `image_url` | text | nullable (added by `000008`) | |
+| `image_url` | text | nullable (added by `000008`) | cover for cards and orders; set from the first gallery image when omitted |
+| `parcel_length`, `parcel_width`, `parcel_height` | text | nullable (added by `000028`) | **one unit's** box, e.g. `"20"` |
+| `parcel_distance_unit` | text | nullable | `cm` or `in`; defaults to `cm` in Go |
+| `parcel_weight` | text | nullable | one unit's weight, e.g. `"1.2"` |
+| `parcel_mass_unit` | text | nullable | `kg` or `lb`; defaults to `kg` in Go |
 | `created_at`, `updated_at` | timestamptz | NOT NULL | |
 
-Migration `000021` **removed** the shipping columns that briefly lived here
-(`weight_grams`, `length_cm`, `width_cm`, `height_cm`, `hs_tariff_code`,
-`origin_country_iso`) — parcel and customs data now lives on the shipment, because it is a
-per-parcel fact, not a per-product one.
+Migration `000021` removed the first shipping columns (`weight_grams`, `length_cm`, …,
+`origin_country_iso`) and moved parcel data onto the shipment. Migration `000028` brought
+a parcel back to the product as the source of truth, and `000029` dropped the duplicate
+`shipments.parcel_details`.
+
+The product parcel is stored per unit and **scaled at quote time**: for a line of
+quantity *n*, weight × *n* and the smallest side × *n*. Several products from one shop are
+merged into one box (largest of each side, summed weight). The quote is never written
+back to the product. A product with no parcel is quoted with a default 20×15×10 cm,
+1.2 kg box.
+
+### `seller.product_media`
+
+Ordered gallery (images and videos) for one product. Added by `000030`.
+
+| Column | Type | Key / constraint | Notes |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `product_id` | uuid | **FK → `seller.products(id)` ON DELETE CASCADE**, NOT NULL | |
+| `media_asset_id` | uuid | **FK → `media.media_assets(id)` ON DELETE CASCADE**, NOT NULL | the file row (`asset_type` `image` or `video`) |
+| `position` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | display order, 0 first |
+| `created_at` | timestamptz | NOT NULL | |
+| — | — | **UNIQUE (product_id, position)**, **UNIQUE (product_id, media_asset_id)** | no gaps or duplicates |
+
+Index `idx_product_media_product_id (product_id, position)` reads a gallery in order.
+Files are uploaded under `public/products/images` or `public/products/videos` first; a
+product update with a new `media` list replaces the rows.
 
 ### `seller.inventory`
 
@@ -982,8 +1083,10 @@ PUT /reviews/{id}/vote
 
 ## 11. Section: shipping
 
-One row per parcel, created as a `pending` quote by `/shipping/rates` and completed in
-place by `/shipping/labels`.
+One row per parcel. A `pending` row is created when the customer places the order with
+`shipping_quotes[]`, or by the seller's `/shipping/rates`. It is completed in place by
+`/shipping/labels`, or replaced by a `seller_managed` row from `/shipping/local` or
+`/shipping/manual`.
 
 ```mermaid
 erDiagram
@@ -997,7 +1100,6 @@ erDiagram
         uuid order_item_id FK
         uuid seller_id FK
         bool is_international
-        jsonb parcel_details
         jsonb customs_declaration
         text courier_provider
         text tracking_number
@@ -1010,6 +1112,12 @@ erDiagram
         text provider_customs_declaration_id
         text provider_tracking_url
         jsonb provider_metadata
+        numeric distance_km
+        numeric zone_max_km
+        int price_amount
+        text currency
+        int estimated_days
+        date estimated_delivery_date
     }
 ```
 
@@ -1020,20 +1128,41 @@ erDiagram
 | `order_item_id` | uuid | **FK → `marketplace.order_items(id)` ON DELETE CASCADE**, nullable, indexed (added by `000021`) | which seller's line this parcel is for |
 | `seller_id` | uuid | **FK → `seller.sellers(id)`**, NOT NULL, indexed | |
 | `is_international` | boolean | NOT NULL DEFAULT false | derived by comparing ship-from/ship-to ISO2 |
-| `parcel_details` | jsonb | nullable | the seller's posted `parcel` object |
 | `customs_declaration` | jsonb | nullable | the seller's posted customs form; international only |
 | `courier_provider` | text | nullable | `USPS`, `DHL Express`, … |
 | `tracking_number` | text | nullable, indexed | the webhook's lookup key |
 | `label_media_id` | uuid | nullable, **no FK** | points at the `asset_type='label'` row in `media.media_assets` |
-| `delivery_mode` | text | NOT NULL CHECK `courier`/`seller_managed`/`pickup` | always `courier` today |
+| `delivery_mode` | text | NOT NULL CHECK `courier`/`seller_managed`/`pickup` | `courier` for a Shippo label; `seller_managed` for delivery by shop and the seller's own courier; `pickup` unused |
 | `status` | text | DEFAULT `pending`, CHECK, indexed | `pending`, `label_created`, `collected`, `in_transit`, `delivered`, `failed`, `returned` |
 | `proof_of_delivery_media_id` | uuid | nullable, **no FK** | never written today |
 | `delivered_at` | timestamptz | nullable | from the webhook's `status_date` |
 | `provider_shipment_id` | text | nullable, indexed | Shippo shipment, then transaction id |
 | `provider_customs_declaration_id` | text | nullable (added by `000021`) | Shippo customs declaration id |
 | `provider_tracking_url` | text | nullable | carrier tracking page |
-| `provider_metadata` | jsonb | NOT NULL DEFAULT `{}` | quoted rates, then the raw transaction |
+| `provider_metadata` | jsonb | NOT NULL DEFAULT `{}` | checkout courier lock (`checkout_quote`), quoted rates, `recommended_rate_object_id`, then the raw transaction; for shop delivery `{type, seller_delivery, note}` |
+| `distance_km` | numeric | nullable CHECK ≥ 0 (added by `000041`) | shop → recipient straight-line km at the time |
+| `zone_max_km` | numeric | nullable CHECK > 0 | the band that matched |
+| `price_amount` | integer | nullable CHECK ≥ 0 | agreed shop-delivery price, minor units |
+| `currency` | text | nullable | currency of `price_amount` |
+| `estimated_days` | integer | nullable CHECK ≥ 0 | promised days; `0` is same day |
+| `estimated_delivery_date` | date | nullable | `now + estimated_days` when the snapshot was taken |
 | `created_at`, `updated_at` | timestamptz | NOT NULL | |
+
+**Shop delivery snapshot.** The six columns from `000041` freeze the zone match for this
+parcel, so editing the shop's bands later does not change an agreed order. They are
+written when:
+
+| Moment | `delivery_mode` | `status` | Snapshot |
+| --- | --- | --- | --- |
+| customer places the order with `mode: seller_delivery` | `seller_managed` | `pending` | full band match |
+| seller starts `/shipping/local` | `seller_managed` | `in_transit` | kept from checkout if present, else re-matched |
+| seller records `/shipping/manual` | `seller_managed` | `in_transit` | distance recorded; band only if in range |
+| customer places the order with `mode: courier` | `courier` | `pending` | none; `provider_metadata` holds the courier lock |
+
+A `/shipping/rates` upsert keeps an existing snapshot and `delivery_mode` — each snapshot
+column is only overwritten when the new write carries a value. Buying a Shippo label sets
+`delivery_mode = 'courier'` and clears `zone_max_km`, `price_amount`, `currency`,
+`estimated_days`, and `estimated_delivery_date`, keeping only `distance_km`.
 
 Two indexes carry rules rather than just speed:
 
@@ -1236,6 +1365,12 @@ Every real FK in the database, child → parent.
 | 44 | `marketplace.product_review_media.media_asset_id` | `media.media_assets.id` | CASCADE |
 | 45 | `marketplace.product_review_votes.review_id` | `marketplace.product_reviews.id` | CASCADE |
 | 46 | `marketplace.product_review_votes.customer_id` | `customer.customers.id` | CASCADE |
+| 47 | `seller.shop_delivery_zones.shop_id` | `seller.shops.id` | CASCADE |
+| 48 | `seller.product_media.product_id` | `seller.products.id` | CASCADE |
+| 49 | `seller.product_media.media_asset_id` | `media.media_assets.id` | CASCADE |
+
+Rows 1–49 cover the gifting tables. The `messaging`, `support`, `social`, `competition`,
+and `finance` tables add their own keys; see their migrations.
 
 "restrict" means no `ON DELETE` clause was declared, so Postgres uses `NO ACTION` and the
 delete fails while children exist.
@@ -1267,12 +1402,12 @@ What actually disappears when a row goes.
 | `customer.customers` (hard) | `customer_addresses`, `recipients` → `recipient_addresses`, `saved_gifts`, `product_review_votes` | **fails** if the customer has orders or authored `product_reviews` (`customer_id` restrict) |
 | `customer.customers` (API soft delete) | nothing | everything, including their addresses and orders |
 | `customer.recipients` | `recipient_addresses` | orders keep the line, `recipient_id` becomes null |
-| `seller.sellers` (hard) | `seller_addresses`, `shops` → `products` → `inventory`, `reels` → `reel_media` | **fails** if the seller has order items, shipments, or `product_reviews` |
+| `seller.sellers` (hard) | `seller_addresses`, `shops` → `shop_delivery_zones`, `products` → `inventory` + `product_media`, `reels` → `reel_media` | **fails** if the seller has order items, shipments, or `product_reviews` |
 | `seller.sellers` (API soft delete) | nothing | everything, including `active` shops still shown publicly |
-| `seller.shops` | `products` → `inventory`, `reels` → `reel_media` | **fails** if any product is on an order item or `product_reviews` |
-| `seller.products` | `inventory`, `saved_gifts` rows; `reels.product_id` → null | **fails** if the product is on an order item or `product_reviews` |
+| `seller.shops` | `shop_delivery_zones`, `products` → `inventory` + `product_media`, `reels` → `reel_media` | **fails** if any product is on an order item or `product_reviews`; shipments keep their zone snapshot |
+| `seller.products` | `inventory`, `product_media`, `saved_gifts` rows; `reels.product_id` → null | **fails** if the product is on an order item or `product_reviews` |
 | `seller.reels` | `reel_media`; the S3 objects are deleted best-effort by the service | the `media_assets` rows are deleted explicitly by the repository |
-| `media.media_assets` | `reel_media` rows; `product_review_media` rows; `reels.thumbnail_media_id` → null | `shipments.label_media_id` and `orders.media_greeting_id` become dangling (no FK) |
+| `media.media_assets` | `reel_media` rows; `product_review_media` rows; `product_media` rows; `reels.thumbnail_media_id` → null | `shipments.label_media_id` and `orders.media_greeting_id` become dangling (no FK) |
 | `marketplace.orders` | `order_items` → `shipments`; `product_reviews` → media links + votes | — |
 | `marketplace.order_items` | `shipments` for that line; `product_reviews` for that line (CASCADE) | the order header |
 | `marketplace.product_reviews` | `product_review_media`, `product_review_votes`; service also deletes linked `media_assets` | — |
@@ -1299,7 +1434,10 @@ Every CHECK-constrained value in one place.
 | `marketplace.orders.status` | `draft`, `pending_payment`, `paid`, `accepted`, `preparing`, `dispatched`, `delivered`, `cancelled`, `refunded` | `draft` (the API always creates `pending_payment`) |
 | `marketplace.order_items.fulfilment_status` | `pending`, `accepted`, `preparing`, `ready`, `dispatched`, `delivered`, `cancelled` | `pending` |
 | `marketplace.product_reviews.status` | `pending`, `published`, `hidden`, `rejected` | `published` |
-| `marketplace.shipments.delivery_mode` | `courier`, `seller_managed`, `pickup` | none — NOT NULL, always `courier` today |
+| `marketplace.shipments.delivery_mode` | `courier`, `seller_managed`, `pickup` | none — NOT NULL; `courier` for labels, `seller_managed` for delivery by shop / own courier |
+| `seller.shops` lat/lng (`shops_lat_lng_pair`) | both null, or both set within −90..90 / −180..180 | null |
+| `seller.shop_delivery_zones.max_km` / `price_amount` / `estimated_days` | `> 0` / `≥ 0` / `≥ 0` | `estimated_days` 1 |
+| `seller.product_media.position` | `≥ 0` | 0 |
 | `marketplace.shipments.status` | `pending`, `label_created`, `collected`, `in_transit`, `delivered`, `failed`, `returned` | `pending` |
 | `media.media_assets.owner_type` | `customer`, `seller`, `admin`, `system` | none — NOT NULL |
 | `media.media_assets.asset_type` | `image`, `video`, `audio`, `document`, `label` | none — NOT NULL |
@@ -1337,7 +1475,9 @@ Beyond the implicit primary-key and unique-constraint indexes.
 | `saved_gifts_product_id_idx` | `customer.saved_gifts` | (`product_id`) | reverse lookup |
 | `idx_seller_addresses_seller_id` | `seller.seller_addresses` | (`seller_id`) | profile load |
 | `idx_shops_seller_id` | `seller.shops` | (`seller_id`) | `GET /sellers/me/shops` |
+| `idx_shop_delivery_zones_shop_id` | `seller.shop_delivery_zones` | (`shop_id`, `max_km`) | bands nearest first for price lookup |
 | `products_shop_status_idx` | `seller.products` | (`shop_id`, `status`) | published-per-shop listing |
+| `idx_product_media_product_id` | `seller.product_media` | (`product_id`, `position`) | ordered gallery |
 | `products_occasion_tags_gin` | `seller.products` | GIN (`occasion_tags`) | tag search (no endpoint yet) |
 | `inventory_product_id_idx` | `seller.inventory` | (`product_id`) | redundant with the UNIQUE |
 | `idx_orders_customer_id` | `marketplace.orders` | (`customer_id`) | order history |
@@ -1397,7 +1537,29 @@ Applied in filename order, tracked in `schema_migrations`. Numbering has gaps �
 | `000018_create_idempotency_keys` | re-creates `core.idempotency_keys` for databases that ran `000002` before it was merged in |
 | `000021_shipment_shipping_details` | drops the product-level shipping columns and order-item shipping JSON; adds `shipments.order_item_id`, `is_international`, `parcel_details`, `customs_declaration`, `provider_customs_declaration_id`, and the pending-quote unique index |
 | `000022_create_seller_reels` | `seller.reels`, `seller.reel_media`, and the partial feed index |
+| `000023_create_messaging` | `messaging` schema: `conversations` (product inquiry or order-item thread), `conversation_participants`, `messages`; one open inquiry per customer + product, one thread per order item |
+| `000024_create_support_messaging` | `support.cases`; conversations gain type `support` and admins as participants; one open case per customer or seller |
+| `000025_create_message_attachments` | `messaging.message_attachments` linking messages to `media.media_assets`; attachment-only messages allowed |
+| `000026_create_reel_social` | `social.reel_likes`, `social.reel_comments`; `reels.like_count`, `reels.comment_count` counters; one like per customer or guest token |
+| `000027_create_games` | `competition.games`, `game_versions` (one approved per game), `game_sessions` (server seed), `game_scores` (server-replayed) |
 | `000027_create_product_reviews` | `marketplace.product_reviews`, `product_review_media`, `product_review_votes` (AliExpress-style ratings + photos + helpful votes) |
+| `000028_add_snake_and_slide_puzzle` | seeds Snake and Slide Puzzle; `game_scores.stats jsonb` for per-game details |
+| `000028_product_shipping_parcel` | `products.parcel_length`, `parcel_width`, `parcel_height`, `parcel_distance_unit`, `parcel_weight`, `parcel_mass_unit` — one unit's box for quotes |
+| `000029_create_competitions` | `admin.audit_log`, `competition.competitions`, `competition_attempts`, `score_submissions`, `leaderboard_snapshots`, `competition_winners`, `prize_claims`, `finance.prize_reserves` |
+| `000029_drop_shipment_parcel_details` | drops `shipments.parcel_details`; the product parcel is the source of truth |
+| `000030_add_basketball_stack_archery` | seeds Basketball, Stack Tower, Archery |
+| `000030_create_product_media` | `seller.product_media` ordered gallery (images + videos) |
+| `000031_add_cricket_blockblast_sling_hill` | seeds Cricket, Block Blast, Sling Shot, Hill Rider |
+| `000032_add_six_arcade_games` | seeds Memory Match, Whack-a-Mole, Bubble Shooter, Tower Blocks, Fruit Slice, Doodle Jump |
+| `000033`–`000036` memory match grids | new Memory Match `game_versions` config: 6×6, 8×8, 7×6, then 7×7 with a centre emblem |
+| `000037_doodle_spring_lift` | Doodle Jump spring now lifts three ledges (new version config) |
+| `000038_shop_delivery_zones` | `seller.shop_delivery_zones` (`max_km`, `price_amount`, `currency`; UNIQUE per shop + km) |
+| `000039_shop_lat_lng` | `shops.latitude`, `shops.longitude` + `shops_lat_lng_pair` CHECK |
+| `000040_delivery_zone_estimated_days` | `shop_delivery_zones.estimated_days` (default 1, `0` = same day) |
+| `000041_shipment_seller_delivery` | `shipments.distance_km`, `zone_max_km`, `price_amount`, `currency`, `estimated_days`, `estimated_delivery_date` — the shop delivery snapshot |
+
+Two files share each of the numbers `000027`–`000030`. Versions are the full file names,
+so both run, in alphabetical order.
 
 Every file is written to be re-runnable (`IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`), so
 a partially migrated database can catch up. Down files exist for each version but are not
@@ -1419,19 +1581,21 @@ Which routes touch which tables — handy when you change a column.
 | `customer.customers` | login, `GET /customers/me`, order create | `POST /customers/register`, `PUT/DELETE /customers/me` |
 | `customer.customer_addresses` | `GET /customers/me` | `POST /customers/me/addresses`, `DELETE …/{id}` |
 | `customer.recipients` | `GET /customers/me/recipients`, order create, shipping ship-to | `POST/PUT/DELETE /customers/me/recipients` |
-| `customer.recipient_addresses` | `GET /customers/me/recipients/{id}`, `GET /sellers/me/order-items/{id}`, shipping | recipient address routes |
+| `customer.recipient_addresses` | `GET /customers/me/recipients/{id}`, `GET /sellers/me/order-items/{id}`, shipping, shop-delivery distance (lat/lng) | recipient address routes |
 | `customer.saved_gifts` | `GET /customers/me/saved-gifts` | `POST`/`DELETE /customers/me/saved-gifts` |
 | `seller.sellers` | login, `GET /sellers/me`, shipping ship-from name | `POST /sellers/register`, `PUT/DELETE /sellers/me` |
 | `seller.seller_addresses` | `GET /sellers/me`, shipping ship-from | `/sellers/me/addresses` routes |
-| `seller.shops` | `GET /shops`, `GET /shops/{shopId}`, `GET /sellers/me/shops`, reel feed join | `/sellers/me/shops` routes |
-| `seller.products` | `GET /shops/{shopId}/products`, `GET /products/{productId}`, seller product routes, order create | `/sellers/me/shops/{shopID}/products`, `/sellers/me/products/{id}` |
+| `seller.shops` | `GET /shops`, `GET /shops/{shopId}`, `GET /sellers/me/shops`, reel feed join, checkout quote (ship-from + shop point) | `/sellers/me/shops` routes |
+| `seller.shop_delivery_zones` | every `Shop` response, `POST /customers/me/shipping/quote`, order create (`seller_delivery`), `…/shipping/rates`, `…/shipping/local`, `…/shipping/manual` | `POST`/`PUT /sellers/me/shops` with `delivery_zones`, `PUT /sellers/me/shops/{shopID}/delivery-zones` |
+| `seller.products` | `GET /shops/{shopId}/products`, `GET /products/{productId}`, seller product routes, order create, checkout quote + seller rates (parcel) | `/sellers/me/shops/{shopID}/products`, `/sellers/me/products/{id}` |
+| `seller.product_media` | seller and public product reads | product create/update with `media` |
 | `seller.inventory` | `GET /sellers/me/products/{id}`, `…/inventory` | product create, `PUT …/inventory` |
 | `seller.reels` | `GET /reels`, `/reels/{id}`, `/shops/{shopId}/reels`, `/products/{productId}/reels`, seller reel lists | seller reel `POST`/`PUT`/`DELETE`; `view_count` by `GET /reels/{id}` |
 | `seller.reel_media` | every reel read | reel create/update/delete |
-| `media.media_assets` | reel reads, label reads | reel create/update (seller files), label purchase (`asset_type='label'`) |
+| `media.media_assets` | reel reads, product gallery reads, label reads | reel create/update (seller files), product create/update with `media`, label purchase (`asset_type='label'`) |
 | `marketplace.orders` | `GET /customers/me/orders`, `GET /sellers/me/order-items/{id}`, webhook completion | `POST /customers/me/orders`, cancel, webhook |
 | `marketplace.order_items` | `GET /sellers/me/order-items`, order detail | order create, accept, label purchase (`dispatched`), webhook (`delivered`) |
-| `marketplace.shipments` | shipping context lookup, webhook | `POST …/shipping/rates` (pending quote), `POST …/shipping/labels`, webhook status |
+| `marketplace.shipments` | shipping context lookup, `GET …/shipping/label`, webhook | order create with `shipping_quotes` (pending courier lock or shop-delivery snapshot), `POST …/shipping/rates` (pending quote), `POST …/shipping/labels`, `…/shipping/manual`, `…/shipping/local`, `…/local/delivered`, webhook status |
 | `marketplace.product_reviews` | `GET /products/{id}/reviews`, `GET /reviews/{id}`, customer/seller review routes | `POST /customers/me/order-items/{id}/reviews`, update/delete/reply |
 | `marketplace.product_review_media` | review reads | review create/update/delete |
 | `marketplace.product_review_votes` | review reads (`voted_helpful`) | `PUT/DELETE /reviews/{id}/vote` |

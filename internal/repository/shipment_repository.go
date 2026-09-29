@@ -73,6 +73,19 @@ type ShippingContext struct {
 	ProductParcelDistanceUnit *string
 	ProductParcelWeight       *string
 	ProductParcelMassUnit     *string
+	// Seller delivery zone inputs: shop point (shop lat/lng, else ship-from address)
+	// and recipient point, used to measure distance against delivery zones.
+	ShopID  uuid.UUID
+	FromLat *float64
+	FromLng *float64
+	ToLat   *float64
+	ToLng   *float64
+	// Pending shipment's mode + seller delivery snapshot chosen at checkout (if any).
+	PendingDeliveryMode   *string
+	PendingPriceAmount    *int
+	PendingCurrency       *string
+	PendingEstimatedDays  *int
+	ItemQuantity          int
 }
 
 // GetShippingContext loads ship-from (shop address), ship-to (recipient address),
@@ -91,7 +104,12 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 			coalesce(tc.iso_code, ''),
 			sh.customs_declaration, sh.provider_metadata,
 			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
-			p.parcel_weight, p.parcel_mass_unit
+			p.parcel_weight, p.parcel_mass_unit,
+			s.id,
+			coalesce(s.latitude, sa.latitude)::float8, coalesce(s.longitude, sa.longitude)::float8,
+			ra.latitude::float8, ra.longitude::float8,
+			sh.delivery_mode, sh.price_amount, sh.currency, sh.estimated_days,
+			oi.quantity
 		from marketplace.order_items oi
 		inner join marketplace.orders o on o.id = oi.order_id
 		inner join seller.sellers se on se.id = oi.seller_id
@@ -118,6 +136,11 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		&sc.StoredCustoms, &sc.StoredMetadata,
 		&sc.ProductParcelLength, &sc.ProductParcelWidth, &sc.ProductParcelHeight, &sc.ProductParcelDistanceUnit,
 		&sc.ProductParcelWeight, &sc.ProductParcelMassUnit,
+		&sc.ShopID,
+		&sc.FromLat, &sc.FromLng,
+		&sc.ToLat, &sc.ToLng,
+		&sc.PendingDeliveryMode, &sc.PendingPriceAmount, &sc.PendingCurrency, &sc.PendingEstimatedDays,
+		&sc.ItemQuantity,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound
@@ -136,23 +159,33 @@ func (r *ShipmentRepository) UpsertQuote(ctx context.Context, s *models.Shipment
 	if len(customs) == 0 {
 		customs = json.RawMessage(`null`)
 	}
+	// Seller delivery snapshot columns are only overwritten when this upsert carries
+	// them (checkout seller-delivery pick); a courier rates refresh keeps them.
 	return r.db.QueryRow(ctx, `
 		insert into marketplace.shipments (
 			order_id, order_item_id, seller_id, delivery_mode, status, is_international,
 			customs_declaration, provider_shipment_id, provider_customs_declaration_id,
-			provider_metadata
-		) values ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9)
+			provider_metadata,
+			distance_km, zone_max_km, price_amount, currency, estimated_days, estimated_delivery_date
+		) values ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		on conflict (order_item_id) where status = 'pending' do update set
 			is_international = excluded.is_international,
 			customs_declaration = excluded.customs_declaration,
 			provider_shipment_id = excluded.provider_shipment_id,
 			provider_customs_declaration_id = excluded.provider_customs_declaration_id,
 			provider_metadata = excluded.provider_metadata,
+			distance_km = coalesce(excluded.distance_km, marketplace.shipments.distance_km),
+			zone_max_km = coalesce(excluded.zone_max_km, marketplace.shipments.zone_max_km),
+			price_amount = coalesce(excluded.price_amount, marketplace.shipments.price_amount),
+			currency = coalesce(excluded.currency, marketplace.shipments.currency),
+			estimated_days = coalesce(excluded.estimated_days, marketplace.shipments.estimated_days),
+			estimated_delivery_date = coalesce(excluded.estimated_delivery_date, marketplace.shipments.estimated_delivery_date),
 			updated_at = now()
-		returning id, created_at, updated_at`,
+		returning id, delivery_mode, created_at, updated_at`,
 		s.OrderID, s.OrderItemID, s.SellerID, s.DeliveryMode, s.IsInternational,
 		customs, s.ProviderShipmentID, s.ProviderCustomsID, meta,
-	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
+		s.DistanceKm, s.ZoneMaxKm, s.PriceAmount, s.Currency, s.EstimatedDays, s.EstimatedDeliveryDate,
+	).Scan(&s.ID, &s.DeliveryMode, &s.CreatedAt, &s.UpdatedAt)
 }
 
 // CompleteLabel updates the pending shipment after a label is purchased
@@ -171,6 +204,12 @@ func (r *ShipmentRepository) CompleteLabel(ctx context.Context, orderItemID uuid
 		    provider_shipment_id = coalesce($6, provider_shipment_id),
 		    provider_tracking_url = $7,
 		    provider_metadata = $8,
+		    delivery_mode = 'courier',
+		    zone_max_km = null,
+		    price_amount = null,
+		    currency = null,
+		    estimated_days = null,
+		    estimated_delivery_date = null,
 		    updated_at = now()
 		where order_item_id = $1 and status = 'pending'
 		returning id, order_id, seller_id, is_international, customs_declaration,
@@ -192,12 +231,85 @@ func (r *ShipmentRepository) Create(ctx context.Context, s *models.Shipment) err
 	return r.db.QueryRow(ctx, `
 		insert into marketplace.shipments (
 			order_id, order_item_id, seller_id, courier_provider, tracking_number, label_media_id,
-			delivery_mode, status, provider_shipment_id, provider_tracking_url, provider_metadata
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			delivery_mode, status, provider_shipment_id, provider_tracking_url, provider_metadata,
+			distance_km, zone_max_km, price_amount, currency, estimated_days, estimated_delivery_date
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		returning id, created_at, updated_at`,
 		s.OrderID, s.OrderItemID, s.SellerID, s.CourierProvider, s.TrackingNumber, s.LabelMediaID,
 		s.DeliveryMode, s.Status, s.ProviderShipmentID, s.ProviderTrackingURL, meta,
+		s.DistanceKm, s.ZoneMaxKm, s.PriceAmount, s.Currency, s.EstimatedDays, s.EstimatedDeliveryDate,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
+}
+
+// DispatchSellerManaged records a seller-handled shipment (local delivery or the
+// seller's own courier) in one transaction: the pending courier quote for the
+// item is removed so it cannot be bought later, the new shipment is inserted,
+// and the order item moves to dispatched.
+func (r *ShipmentRepository) DispatchSellerManaged(ctx context.Context, s *models.Shipment) error {
+	if s.OrderItemID == nil {
+		return ErrShipmentNotFound
+	}
+	meta := s.ProviderMetadata
+	if len(meta) == 0 {
+		meta = json.RawMessage(`{}`)
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		delete from marketplace.shipments
+		where order_item_id = $1 and status = 'pending'`, *s.OrderItemID); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `
+		insert into marketplace.shipments (
+			order_id, order_item_id, seller_id, courier_provider, tracking_number,
+			delivery_mode, status, provider_tracking_url, provider_metadata,
+			distance_km, zone_max_km, price_amount, currency, estimated_days, estimated_delivery_date
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		returning id, created_at, updated_at`,
+		s.OrderID, s.OrderItemID, s.SellerID, s.CourierProvider, s.TrackingNumber,
+		s.DeliveryMode, s.Status, s.ProviderTrackingURL, meta,
+		s.DistanceKm, s.ZoneMaxKm, s.PriceAmount, s.Currency, s.EstimatedDays, s.EstimatedDeliveryDate,
+	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		update marketplace.order_items
+		set fulfilment_status = 'dispatched', updated_at = now()
+		where id = $1`, *s.OrderItemID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// DeliveryZonesForShops returns each shop's delivery zones, smallest max_km first.
+func (r *ShipmentRepository) DeliveryZonesForShops(ctx context.Context, shopIDs []uuid.UUID) (map[uuid.UUID][]models.ShopDeliveryZone, error) {
+	out := make(map[uuid.UUID][]models.ShopDeliveryZone, len(shopIDs))
+	if len(shopIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		select id, shop_id, max_km::float8, price_amount, currency, estimated_days, created_at, updated_at
+		from seller.shop_delivery_zones
+		where shop_id = any($1)
+		order by shop_id, max_km asc`, shopIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var z models.ShopDeliveryZone
+		if err := rows.Scan(&z.ID, &z.ShopID, &z.MaxKm, &z.PriceAmount, &z.Currency, &z.EstimatedDays, &z.CreatedAt, &z.UpdatedAt); err != nil {
+			return nil, err
+		}
+		z.IsFree = z.PriceAmount == 0
+		out[z.ShopID] = append(out[z.ShopID], z)
+	}
+	return out, rows.Err()
 }
 
 func (r *ShipmentRepository) GetByTrackingNumber(ctx context.Context, trackingNumber string) (*models.Shipment, error) {
@@ -337,7 +449,10 @@ func (r *ShipmentRepository) GetLatestForOrderItem(ctx context.Context, sellerID
 		       courier_provider, tracking_number, label_media_id, delivery_mode, status,
 		       proof_of_delivery_media_id, delivered_at, provider_shipment_id,
 		       provider_customs_declaration_id, provider_tracking_url, provider_metadata,
-		       customs_declaration, created_at, updated_at
+		       customs_declaration,
+		       distance_km::float8, zone_max_km::float8, price_amount, currency,
+		       estimated_days, estimated_delivery_date,
+		       created_at, updated_at
 		from marketplace.shipments
 		where order_item_id = $1 and seller_id = $2
 		order by created_at desc
@@ -347,7 +462,10 @@ func (r *ShipmentRepository) GetLatestForOrderItem(ctx context.Context, sellerID
 		&s.CourierProvider, &s.TrackingNumber, &s.LabelMediaID, &s.DeliveryMode, &s.Status,
 		&s.ProofOfDeliveryMediaID, &s.DeliveredAt, &s.ProviderShipmentID,
 		&s.ProviderCustomsID, &s.ProviderTrackingURL, &s.ProviderMetadata,
-		&s.CustomsDeclaration, &s.CreatedAt, &s.UpdatedAt,
+		&s.CustomsDeclaration,
+		&s.DistanceKm, &s.ZoneMaxKm, &s.PriceAmount, &s.Currency,
+		&s.EstimatedDays, &s.EstimatedDeliveryDate,
+		&s.CreatedAt, &s.UpdatedAt,
 	)
 
 	// No row found: return a clear "not found" error.
@@ -419,6 +537,8 @@ type CartShipFrom struct {
 	CountryISO string
 	Phone      string
 	Email      string
+	Latitude   *float64 // shop lat/lng, else dispatch address lat/lng
+	Longitude  *float64
 }
 
 // CartShipTo is the recipient's delivery address.
@@ -432,6 +552,8 @@ type CartShipTo struct {
 	CountryISO string
 	Phone      string
 	Email      string
+	Latitude   *float64
+	Longitude  *float64
 }
 
 // ShipFromForShops resolves each shop's dispatch address.
@@ -446,7 +568,8 @@ func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uui
 		       coalesce(se.trading_name, s.name, se.legal_name),
 		       coalesce(sa.line1, ''), coalesce(sa.line2, ''), coalesce(sa.city, ''),
 		       coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
-		       coalesce(fc.iso_code, ''), coalesce(se.phone, ''), se.email
+		       coalesce(fc.iso_code, ''), coalesce(se.phone, ''), se.email,
+		       coalesce(s.latitude, sa.latitude)::float8, coalesce(s.longitude, sa.longitude)::float8
 		from seller.shops s
 		inner join seller.sellers se on se.id = s.seller_id
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
@@ -463,6 +586,7 @@ func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uui
 		if err := rows.Scan(
 			&f.ShopID, &f.Name, &f.Street1, &f.Street2, &f.City,
 			&f.Region, &f.PostalCode, &f.CountryISO, &f.Phone, &f.Email,
+			&f.Latitude, &f.Longitude,
 		); err != nil {
 			return nil, err
 		}
@@ -488,7 +612,8 @@ func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID,
 	err = r.db.QueryRow(ctx, `
 		select coalesce(r.name, ''), coalesce(ra.line1, ''), coalesce(ra.line2, ''),
 		       coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
-		       coalesce(tc.iso_code, ''), coalesce(r.phone, ''), coalesce(r.email::text, '')
+		       coalesce(tc.iso_code, ''), coalesce(r.phone, ''), coalesce(r.email::text, ''),
+		       ra.latitude::float8, ra.longitude::float8
 		from customer.recipients r
 		left join customer.recipient_addresses ra on ra.id = coalesce(
 			r.default_address_id,
@@ -499,7 +624,8 @@ func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID,
 		where r.id = $1 and r.customer_id = $2`,
 		recipientUUID, customerUUID,
 	).Scan(&to.Name, &to.Street1, &to.Street2, &to.City, &to.Region,
-		&to.PostalCode, &to.CountryISO, &to.Phone, &to.Email)
+		&to.PostalCode, &to.CountryISO, &to.Phone, &to.Email,
+		&to.Latitude, &to.Longitude)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShipmentNotFound
 	}

@@ -17,6 +17,7 @@ import (
 //   POST .../shipping/labels — buy label for a chosen rate_object_id
 //   GET  .../shipping/label   — short-lived download link for the bought label PDF
 //   POST .../shipping/manual  — record a seller-arranged shipment when no carrier quotes the lane
+//   POST .../shipping/local   — start shop delivery; .../local/delivered completes it
 func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jwtSecret string) {
 	// Called by Shippo when tracking status changes (track_updated).
 	r.Post("/webhooks/shippo/tracking", shipping.ShippoWebhook)
@@ -45,9 +46,8 @@ func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jw
 		// Fallback when GetRates returns no rates for the lane at all.
 		r.Post("/sellers/me/order-items/{orderItemID}/shipping/manual", shipping.MarkShippedManually)
 
-	    // Start local delivery// Place these inside the seller-authenticated group so the JWT middleware
-	    // runs first and sets UserIDContextKey.
-		r.Post("/sellers/me/order-items/{orderItemID}/shipping/local", shipping.StartLocalDelivery)              
-		r.Post("/sellers/me/order-items/{orderItemID}/shipping/local/delivered", shipping.CompleteLocalDelivery) 
+		// Shop delivers the item itself; only allowed inside the shop's delivery zones.
+		r.Post("/sellers/me/order-items/{orderItemID}/shipping/local", shipping.StartLocalDelivery)
+		r.Post("/sellers/me/order-items/{orderItemID}/shipping/local/delivered", shipping.CompleteLocalDelivery)
 	})
 }

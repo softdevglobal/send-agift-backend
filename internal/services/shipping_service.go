@@ -127,6 +127,14 @@ type ShippingRatesResult struct {
 	// use recommended_rate_object_id (or matching provider+service). To use another
 	// rate, message the customer first — the API will reject a silent change.
 	MustBuyCustomerCourier bool `json:"must_buy_customer_courier"`
+	// SellerDelivery is the shop's own delivery for this recipient, priced from
+	// the shop's delivery zones (use .../shipping/local or .../shipping/manual).
+	SellerDelivery *SellerDeliveryOption `json:"seller_delivery"`
+	// CustomerSelectedMode is what the customer picked at checkout:
+	// "courier", "seller_delivery", or "" when nothing was saved.
+	CustomerSelectedMode string `json:"customer_selected_mode"`
+	// CarrierRatesError is set when Shippo could not quote but seller delivery is available.
+	CarrierRatesError string `json:"carrier_rates_error,omitempty"`
 }
 
 // BuyLabelInput is the body for purchasing a label from a previously quoted rate.
@@ -150,11 +158,6 @@ type BuyLabelInput struct {
 // and upserts a pending row on marketplace.shipments with customs_declaration / metadata.
 // Parcel size/weight comes from the request body or seller.products.parcel_* (not copied onto shipments).
 func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID string, posted ShippingShipmentInput) (*ShippingRatesResult, error) {
-	// Guard: without an API key we cannot call Shippo at all.
-	if !s.shippo.Enabled() {
-		return nil, ErrShippingNotConfigured
-	}
-
 	// One SQL join: order item + shop ship-from + recipient ship-to + pending
 	// shipment metadata (checkout courier) + product parcel columns.
 	sc, err := s.shipments.GetShippingContext(ctx, sellerID, orderItemID)
@@ -169,10 +172,36 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 		return nil, ErrShippingNotReady
 	}
 
+	sellerDelivery, err := s.sellerDeliveryFor(ctx, sc)
+	if err != nil {
+		return nil, err
+	}
+	selectedMode := customerSelectedMode(sc)
+	// When carriers cannot quote, still return the shop's own delivery if it reaches the recipient.
+	sellerOnly := func(cause error) (*ShippingRatesResult, error) {
+		if !sellerDelivery.Available {
+			return nil, cause
+		}
+		return &ShippingRatesResult{
+			Rates:                  []ShippoRate{},
+			CheckoutSelected:       parseCheckoutSelected(sc.StoredMetadata),
+			CustomerDeliveryAmount: sc.DeliveryAmount,
+			Currency:               sc.Currency,
+			SellerDelivery:         sellerDelivery,
+			CustomerSelectedMode:   selectedMode,
+			CarrierRatesError:      cause.Error(),
+		}, nil
+	}
+
+	// Guard: without an API key we cannot call Shippo at all.
+	if !s.shippo.Enabled() {
+		return sellerOnly(ErrShippingNotConfigured)
+	}
+
 	// Convert DB address fields into Shippo's address JSON shape.
 	from, to, err := s.toShippoAddresses(sc)
 	if err != nil {
-		return nil, fmt.Errorf("%w: seller ship-from and recipient ship-to addresses must include name, street, city, and country (ISO2)", ErrShippingAddress)
+		return sellerOnly(fmt.Errorf("%w: seller ship-from and recipient ship-to addresses must include name, street, city, and country (ISO2)", ErrShippingAddress))
 	}
 	// Different countries → customs form required by carriers/Shippo.
 	international := isInternationalShipment(from.Country, to.Country)
@@ -188,6 +217,15 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	parcel := defaultDomesticParcel()
 	if shippingIn.Parcel != nil {
 		parcel = *shippingIn.Parcel // seller override or product dims
+		// The form is filled with one unit. Scale it to the line quantity unless
+		// the seller already typed a different box.
+		if unit := unitParcelFromContext(sc); unit != nil && parcelsMatch(parcel, *unit) {
+			qty := sc.ItemQuantity
+			if qty < 1 {
+				qty = 1
+			}
+			parcel = scaleParcelForQuantity(parcel, qty)
+		}
 	}
 	if err := validateParcelInput(&parcel, international); err != nil {
 		if international {
@@ -217,7 +255,10 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 	// POST https://api.goshippo.com/shipments/ → returns rates[] with NEW object_ids.
 	shippoShipment, err := s.shippo.CreateShipment(ctx, from, to, parcelToShippo(parcel), customsDeclarationID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrShippingProvider, err)
+		return sellerOnly(fmt.Errorf("%w: %v", ErrShippingProvider, err))
+	}
+	if len(shippoShipment.Rates) == 0 && sellerDelivery.Available {
+		return sellerOnly(fmt.Errorf("%w: no carrier rates for this route", ErrShippingProvider))
 	}
 	if len(shippoShipment.Rates) == 0 {
 		// Shippo returns 200/SUCCESS with an empty rates array (not an error)
@@ -284,7 +325,32 @@ func (s *ShippingService) GetRates(ctx context.Context, sellerID, orderItemID st
 		CustomerDeliveryAmount:  sc.DeliveryAmount,  // order.delivery_amount
 		Currency:                sc.Currency,
 		MustBuyCustomerCourier:  checkoutSelected != nil, // UI + BuyLabel enforce lock
+		SellerDelivery:          sellerDelivery,
+		CustomerSelectedMode:    selectedMode,
 	}, nil
+}
+
+// sellerDeliveryFor prices the shop's own delivery for one order item's recipient.
+func (s *ShippingService) sellerDeliveryFor(ctx context.Context, sc *repository.ShippingContext) (*SellerDeliveryOption, error) {
+	zonesByShop, err := s.shipments.DeliveryZonesForShops(ctx, []uuid.UUID{sc.ShopID})
+	if err != nil {
+		return nil, err
+	}
+	return buildSellerDeliveryOption(sc.FromLat, sc.FromLng, sc.ToLat, sc.ToLng, zonesByShop[sc.ShopID], time.Now().UTC()), nil
+}
+
+// customerSelectedMode reports what the pending shipment says the customer chose at checkout.
+func customerSelectedMode(sc *repository.ShippingContext) string {
+	if sc.PendingDeliveryMode == nil {
+		return ""
+	}
+	if *sc.PendingDeliveryMode == "seller_managed" {
+		return SellerDeliveryModeName
+	}
+	if parseCheckoutSelected(sc.StoredMetadata) != nil {
+		return "courier"
+	}
+	return ""
 }
 
 // ── Courier lock helpers (match by NAME, not expired rate_object_id) ───────
@@ -537,6 +603,30 @@ func productParcelStoredJSON(sc *repository.ShippingContext) json.RawMessage {
 		return nil
 	}
 	return b
+}
+
+func unitParcelFromContext(sc *repository.ShippingContext) *ParcelInput {
+	raw := productParcelStoredJSON(sc)
+	if len(raw) == 0 {
+		return nil
+	}
+	var in ParcelInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil
+	}
+	return &in
+}
+
+func parcelsMatch(a, b ParcelInput) bool {
+	eq := func(x, y string) bool {
+		fx, ex := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		fy, ey := strconv.ParseFloat(strings.TrimSpace(y), 64)
+		if ex != nil || ey != nil {
+			return strings.TrimSpace(x) == strings.TrimSpace(y)
+		}
+		return math.Abs(fx-fy) < 0.001
+	}
+	return eq(a.Length, b.Length) && eq(a.Width, b.Width) && eq(a.Height, b.Height) && eq(a.Weight, b.Weight)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -888,6 +978,9 @@ type ManualShipmentInput struct {
 	TrackingNumber string `json:"tracking_number"`
 	// A tracking page URL, if the seller's courier has one. Optional.
 	TrackingURL string `json:"tracking_url"`
+	// Days until delivery for this courier. Optional; defaults to the matched
+	// delivery zone's estimated_days when the recipient is inside a zone.
+	EstimatedDays *int `json:"estimated_days"`
 }
 
 // MarkShippedManually records a seller-arranged shipment — no Shippo label,
@@ -912,6 +1005,13 @@ func (s *ShippingService) MarkShippedManually(ctx context.Context, sellerID, ord
 	if sc.FulfilmentStatus != "accepted" && sc.FulfilmentStatus != "preparing" && sc.FulfilmentStatus != "ready" {
 		return nil, ErrShippingNotReady
 	}
+	if in.EstimatedDays != nil && *in.EstimatedDays < 0 {
+		return nil, fmt.Errorf("%w: estimated_days must be >= 0", ErrInvalidInput)
+	}
+	option, err := s.sellerDeliveryFor(ctx, sc)
+	if err != nil {
+		return nil, err
+	}
 
 	shipment := &models.Shipment{
 		OrderID:         sc.OrderID,
@@ -930,14 +1030,44 @@ func (s *ShippingService) MarkShippedManually(ctx context.Context, sellerID, ord
 	if trackingURL != "" {
 		shipment.ProviderTrackingURL = &trackingURL
 	}
-
-	if err := s.shipments.Create(ctx, shipment); err != nil {
-		return nil, err
+	// A courier can go beyond the zones, so distance is recorded but not enforced.
+	option.applyToShipment(shipment)
+	applyAgreedSellerDelivery(shipment, sc)
+	if in.EstimatedDays != nil {
+		setEstimatedDays(shipment, *in.EstimatedDays)
 	}
-	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
+	meta, _ := json.Marshal(map[string]any{"type": "manual_courier", "seller_delivery": option})
+	shipment.ProviderMetadata = meta
+
+	if err := s.shipments.DispatchSellerManaged(ctx, shipment); err != nil {
 		return nil, err
 	}
 	return shipment, nil
+}
+
+// applyAgreedSellerDelivery keeps the price/days the customer accepted at checkout
+// when they chose seller delivery, so later zone edits don't change the order.
+func applyAgreedSellerDelivery(s *models.Shipment, sc *repository.ShippingContext) {
+	if sc.PendingDeliveryMode == nil || *sc.PendingDeliveryMode != "seller_managed" || sc.PendingPriceAmount == nil {
+		return
+	}
+	price := *sc.PendingPriceAmount
+	s.PriceAmount = &price
+	if sc.PendingCurrency != nil {
+		currency := *sc.PendingCurrency
+		s.Currency = &currency
+	}
+	if sc.PendingEstimatedDays != nil {
+		setEstimatedDays(s, *sc.PendingEstimatedDays)
+	}
+}
+
+func setEstimatedDays(s *models.Shipment, days int) {
+	d := days
+	date := time.Now().UTC().AddDate(0, 0, days)
+	date = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	s.EstimatedDays = &d
+	s.EstimatedDeliveryDate = &date
 }
 
 // LabelURL returns a temporary download link for the label PDF the seller
@@ -1000,6 +1130,16 @@ func (s *ShippingService) StartLocalDelivery(ctx context.Context, sellerID, orde
 		return nil, ErrShippingNotReady
 	}
 
+	// Price and days come from the shop's delivery zone for this recipient's distance.
+	option, err := s.sellerDeliveryFor(ctx, sc)
+	if err != nil {
+		return nil, err
+	}
+	// Hand delivery only within the zones, when both points and zones are known.
+	if option.hasZoneAndPoints() && !option.Available {
+		return nil, fmt.Errorf("%w: %s", ErrOutsideDeliveryZone, option.Reason)
+	}
+
 	// Label shown as the "courier" so the UI has something to display.
 	provider := "Local delivery"
 
@@ -1013,21 +1153,19 @@ func (s *ShippingService) StartLocalDelivery(ctx context.Context, sellerID, orde
 		Status:          "in_transit",    // on the way immediately; no label/pickup step
 		// TrackingNumber left nil on purpose: local delivery has no tracking.
 	}
+	option.applyToShipment(shipment)
+	applyAgreedSellerDelivery(shipment, sc)
 
-	// Optional note → provider_metadata JSON for customer-facing detail.
+	meta := map[string]any{"type": "local_delivery", "seller_delivery": option}
 	if note := strings.TrimSpace(in.Note); note != "" {
-		meta, _ := json.Marshal(map[string]string{"note": note})
-		shipment.ProviderMetadata = meta
+		meta["note"] = note
 	}
+	shipment.ProviderMetadata, _ = json.Marshal(meta)
 
-	// INSERT into marketplace.shipments (fills shipment.ID, CreatedAt, etc.).
-	if err := s.shipments.Create(ctx, shipment); err != nil {
-		return nil, err
-	}
-
-	// UPDATE order_items.fulfilment_status = 'dispatched'.
-	// Also stops a second "start" call: status check above will then fail.
-	if err := s.shipments.MarkOrderItemDispatched(ctx, sc.OrderItemID); err != nil {
+	// One transaction: drop the pending courier quote, insert this shipment,
+	// and set order_items.fulfilment_status = 'dispatched' (which also stops a
+	// second "start" call: the status check above will then fail).
+	if err := s.shipments.DispatchSellerManaged(ctx, shipment); err != nil {
 		return nil, err
 	}
 	return shipment, nil // handler returns this as JSON 201
@@ -1106,18 +1244,34 @@ type QuotedDeliveryOption struct {
 	ShipmentObjectID string `json:"shipment_object_id"`
 }
 
+// QuotedPostalAddress is a shop dispatch address shown at checkout.
+type QuotedPostalAddress struct {
+	Name       string `json:"name,omitempty"`
+	Line1      string `json:"line1"`
+	Line2      string `json:"line2,omitempty"`
+	City       string `json:"city,omitempty"`
+	Region     string `json:"region,omitempty"`
+	PostalCode string `json:"postal_code,omitempty"`
+	Country    string `json:"country,omitempty"`
+}
+
 // QuotedShopDelivery is all courier options for one shop's parcel.
 type QuotedShopDelivery struct {
 	ShopID           string                 `json:"shop_id"`
 	ShopName         string                 `json:"shop_name"`
 	ShipmentObjectID string                 `json:"shipment_object_id"`
 	Options          []QuotedDeliveryOption `json:"options"`
+	// From is the shop address the parcel leaves from.
+	From *QuotedPostalAddress `json:"from,omitempty"`
+	// SellerDelivery is the shop's own delivery priced by distance from its delivery zones.
+	SellerDelivery *SellerDeliveryOption `json:"seller_delivery"`
 }
 
 // QuotedShipment is the recommended service for one shop (compat + place-order echo).
 type QuotedShipment struct {
 	ShopID      string `json:"shop_id"`
 	ShopName    string `json:"shop_name"`
+	Mode        string `json:"mode"` // "courier" | "seller_delivery"
 	Provider    string `json:"provider"`
 	ServiceName string `json:"service_name"`
 	// Minor units, in Currency — matches how every other amount is carried.
@@ -1214,17 +1368,17 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		Shipments: []QuotedShipment{}, // recommended pick per shop (used as place-order default)
 		Complete:  true,               // flipped false if any shop cannot be priced
 	}
-	if !s.shippo.Enabled() {
-		quote.Complete = false
-		quote.Unquoted = append(quote.Unquoted, "shipping provider not configured")
-		return quote, nil // still 200 — client can show "arrange later"
-	}
 
-	// One ship-from address per shop (seller shop profile).
+	// One ship-from address per shop (seller shop profile) + each shop's delivery zones.
 	froms, err := s.shipments.ShipFromForShops(ctx, shopIDs)
 	if err != nil {
 		return nil, err
 	}
+	zonesByShop, err := s.shipments.DeliveryZonesForShops(ctx, shopIDs)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
 
 	deliverBy := parseDeliveryDate(in.DeliveryDate) // optional customer "need by" date
 	toAddr := ShippoAddressInput{
@@ -1234,10 +1388,35 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 	}
 
 	for _, shopID := range shopIDs {
-		from, ok := froms[shopID]
-		if !ok || from.Street1 == "" || from.City == "" || from.CountryISO == "" {
-			quote.Complete = false
-			quote.Unquoted = append(quote.Unquoted, "a shop has no dispatch address set")
+		from, hasFrom := froms[shopID]
+		sellerOpt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zonesByShop[shopID], now)
+		// Carriers can't quote this shop: fall back to the shop's own delivery when it reaches the recipient.
+		sellerOnly := func(reason string) {
+			quote.Shops = append(quote.Shops, QuotedShopDelivery{
+				ShopID:         shopID.String(),
+				ShopName:       from.Name,
+				Options:        []QuotedDeliveryOption{},
+				From:           quotedFromAddress(from),
+				SellerDelivery: sellerOpt,
+			})
+			if !sellerOpt.Available {
+				quote.Complete = false
+				quote.Unquoted = append(quote.Unquoted, reason)
+				return
+			}
+			quote.Shipments = append(quote.Shipments, sellerDeliveryQuotedShipment(shopID.String(), from.Name, sellerOpt))
+			quote.Amount += sellerOpt.PriceAmount
+			if quote.Currency == "" {
+				quote.Currency = sellerOpt.Currency
+			}
+		}
+
+		if !s.shippo.Enabled() {
+			sellerOnly(fmt.Sprintf("%s: shipping provider not configured", from.Name))
+			continue
+		}
+		if !hasFrom || from.Street1 == "" || from.City == "" || from.CountryISO == "" {
+			sellerOnly("a shop has no dispatch address set")
 			continue
 		}
 		fromAddr := ShippoAddressInput{
@@ -1251,16 +1430,14 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		// POST https://api.goshippo.com/shipments/ — quote only (no customs at checkout).
 		shipment, err := s.shippo.CreateShipment(ctx, fromAddr, toAddr, parcelToShippo(parcel), "")
 		if err != nil || len(shipment.Rates) == 0 {
-			quote.Complete = false
-			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: no carrier available for this route", from.Name))
+			sellerOnly(fmt.Sprintf("%s: no carrier available for this route", from.Name))
 			continue
 		}
 
 		rates := mapShippoRates(shipment.Rates)
 		best, missed := pickBestRate(rates, deliverBy) // cheapest that meets date (or fastest fallback)
 		if best == nil {
-			quote.Complete = false
-			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: no usable rate", from.Name))
+			sellerOnly(fmt.Sprintf("%s: no usable rate", from.Name))
 			continue
 		}
 
@@ -1269,6 +1446,8 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 			ShopName:         from.Name,
 			ShipmentObjectID: shipment.ObjectID, // informational; expires — place-order stores names
 			Options:          make([]QuotedDeliveryOption, 0, len(rates)),
+			From:             quotedFromAddress(from),
+			SellerDelivery:   sellerOpt,
 		}
 		for _, r := range rates {
 			amount, err := rateAmountMinor(r.Amount) // Shippo "45.65" → 4565 cents
@@ -1289,8 +1468,7 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 			shopQuote.Options = append(shopQuote.Options, opt)
 		}
 		if len(shopQuote.Options) == 0 {
-			quote.Complete = false
-			quote.Unquoted = append(quote.Unquoted, fmt.Sprintf("%s: unreadable rates", from.Name))
+			sellerOnly(fmt.Sprintf("%s: unreadable rates", from.Name))
 			continue
 		}
 		// Cheapest-first for AliExpress-style lists.
@@ -1312,6 +1490,7 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		quote.Shipments = append(quote.Shipments, QuotedShipment{
 			ShopID:             shopID.String(),
 			ShopName:           from.Name,
+			Mode:               "courier",
 			Provider:           best.Provider,
 			ServiceName:        best.ServiceName,
 			Amount:             bestAmount,
@@ -1328,6 +1507,36 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		}
 	}
 	return quote, nil
+}
+
+func quotedFromAddress(from repository.CartShipFrom) *QuotedPostalAddress {
+	if from.Street1 == "" && from.City == "" {
+		return nil
+	}
+	return &QuotedPostalAddress{
+		Name:       from.Name,
+		Line1:      from.Street1,
+		Line2:      from.Street2,
+		City:       from.City,
+		Region:     from.Region,
+		PostalCode: from.PostalCode,
+		Country:    from.CountryISO,
+	}
+}
+
+// sellerDeliveryQuotedShipment is the recommended row for a shop that only offers its own delivery.
+func sellerDeliveryQuotedShipment(shopID, shopName string, opt *SellerDeliveryOption) QuotedShipment {
+	return QuotedShipment{
+		ShopID:        shopID,
+		ShopName:      shopName,
+		Mode:          SellerDeliveryModeName,
+		Provider:      "Seller delivery",
+		ServiceName:   fmt.Sprintf("Within %g km", opt.MaxKm),
+		Amount:        opt.PriceAmount,
+		Currency:      opt.Currency,
+		EstimatedDays: opt.EstimatedDays,
+		DaysAvailable: opt.EstimatedDays,
+	}
 }
 
 // parcelFromCheckoutProduct maps product.parcel_* (+ qty) into a Shippo parcel.
@@ -1350,13 +1559,49 @@ func parcelFromCheckoutProduct(p *repository.CheckoutProduct, quantity int) Parc
 	if out.MassUnit == "" {
 		out.MassUnit = "kg"
 	}
+	if quantity < 1 {
+		quantity = 1
+	}
 	if quantity > 1 {
-		// Approx multi-qty as heavier single box (dims unchanged until mergeParcels).
-		if w, err := strconv.ParseFloat(out.Weight, 64); err == nil {
-			out.Weight = strconv.FormatFloat(w*float64(quantity), 'f', 3, 64)
-		}
+		out = scaleParcelForQuantity(out, quantity)
 	}
 	return out
+}
+
+// scaleParcelForQuantity turns one unit's parcel into the shipment for `quantity`.
+// Weight is multiplied. The smallest side is stacked so the box grows with the units.
+func scaleParcelForQuantity(in ParcelInput, quantity int) ParcelInput {
+	if quantity < 2 {
+		return in
+	}
+	if w, err := strconv.ParseFloat(strings.TrimSpace(in.Weight), 64); err == nil && w > 0 {
+		in.Weight = strconv.FormatFloat(w*float64(quantity), 'f', 3, 64)
+	}
+	type side struct {
+		value float64
+		set   func(string)
+	}
+	sides := []side{
+		{set: func(v string) { in.Length = v }},
+		{set: func(v string) { in.Width = v }},
+		{set: func(v string) { in.Height = v }},
+	}
+	raw := []string{in.Length, in.Width, in.Height}
+	smallest := -1
+	smallestVal := 0.0
+	for i, text := range raw {
+		value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+		if err != nil || value <= 0 {
+			return in
+		}
+		sides[i].value = value
+		if smallest < 0 || value < smallestVal {
+			smallest = i
+			smallestVal = value
+		}
+	}
+	sides[smallest].set(strconv.FormatFloat(smallestVal*float64(quantity), 'f', 3, 64))
+	return in
 }
 
 // mergeParcels combines line parcels into one Shippo parcel: max dims, summed weight.

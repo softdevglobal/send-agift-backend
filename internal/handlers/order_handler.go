@@ -78,8 +78,10 @@ func (h *OrderHandler) writeOrderError(w http.ResponseWriter, err error, fallbac
 		utils.Error(w, http.StatusNotFound, "order not found")
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
+	case errors.Is(err, services.ErrOutsideDeliveryZone):
+		utils.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrInvalidOrder):
-		utils.Error(w, http.StatusBadRequest, "items required; delivery_date YYYY-MM-DD; customer_type personal or corporate")
+		utils.Error(w, http.StatusBadRequest, "items required; delivery_date YYYY-MM-DD; customer_type personal or corporate; shipping_quotes[].mode courier|seller_delivery (seller_delivery needs recipient_id)")
 	case errors.Is(err, services.ErrOrderProduct):
 		utils.Error(w, http.StatusBadRequest, "product not found, not published, or shop is not active")
 	case errors.Is(err, services.ErrOrderProductVisibility):

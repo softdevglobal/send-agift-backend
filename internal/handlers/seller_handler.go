@@ -202,6 +202,33 @@ func (h *SellerHandler) DeleteShop(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, map[string]string{"message": "shop deleted"})
 }
 
+func (h *SellerHandler) ListDeliveryZones(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	shopID := chi.URLParam(r, "shopID")
+	zones, err := h.sellers.ListDeliveryZones(r.Context(), sellerID, shopID)
+	if err != nil {
+		h.writeError(w, err, "could not list delivery zones")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]any{"zones": zones})
+}
+
+func (h *SellerHandler) ReplaceDeliveryZones(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	shopID := chi.URLParam(r, "shopID")
+	var req services.DeliveryZonesReplaceInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	zones, err := h.sellers.ReplaceDeliveryZones(r.Context(), sellerID, shopID, req)
+	if err != nil {
+		h.writeError(w, err, "could not save delivery zones")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]any{"zones": zones})
+}
+
 func (h *SellerHandler) writeError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, services.ErrInvalidInput):
@@ -213,7 +240,9 @@ func (h *SellerHandler) writeError(w http.ResponseWriter, err error, fallback st
 	case errors.Is(err, services.ErrInvalidAddress):
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, city; address_type must be pickup|return|both")
 	case errors.Is(err, services.ErrInvalidShop):
-		utils.Error(w, http.StatusBadRequest, "shop name is required")
+		utils.Error(w, http.StatusBadRequest, "shop name is required; latitude and longitude must be sent together (-90..90, -180..180); delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day)")
+	case errors.Is(err, services.ErrInvalidCurrency):
+		utils.Error(w, http.StatusBadRequest, "currency must be a known ISO currency code")
 	case errors.Is(err, services.ErrSellerConflict):
 		utils.Error(w, http.StatusConflict, "email already registered")
 	case errors.Is(err, services.ErrShopConflict):

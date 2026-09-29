@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"sort"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -233,11 +235,13 @@ func (r *SellerRepository) CreateShop(ctx context.Context, s *models.Shop) error
 	err := r.db.QueryRow(ctx, `
 		insert into seller.shops (
 			seller_id, name, slug, description,
-			customer_visible_location, status, address_id, return_address_id, image_url
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			customer_visible_location, status, address_id, return_address_id, image_url,
+			latitude, longitude
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		returning id, status, created_at, updated_at`,
 		s.SellerID, s.Name, s.Slug, s.Description,
 		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ReturnAddressID, s.ImageURL,
+		s.Latitude, s.Longitude,
 	).Scan(&s.ID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	return mapShopWriteError(err)
 }
@@ -253,11 +257,14 @@ func (r *SellerRepository) UpdateShop(ctx context.Context, s *models.Shop) error
 		    address_id = $8,
 		    return_address_id = $9,
 		    image_url = $10,
+		    latitude = $11,
+		    longitude = $12,
 		    updated_at = now()
 		where id = $1 and seller_id = $2
 		returning updated_at`,
 		s.ID, s.SellerID, s.Name, s.Slug, s.Description,
 		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ReturnAddressID, s.ImageURL,
+		s.Latitude, s.Longitude,
 	).Scan(&s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrShopNotFound
@@ -280,7 +287,8 @@ func (r *SellerRepository) DeleteShop(ctx context.Context, sellerID, shopID stri
 func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
 		select id, seller_id, name, slug, description,
-		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
+		       latitude, longitude
 		from seller.shops
 		where seller_id = $1
 		order by created_at asc`, sellerID)
@@ -295,6 +303,7 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 		if err := rows.Scan(
 			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
 			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+			&s.Latitude, &s.Longitude,
 		); err != nil {
 			return nil, err
 		}
@@ -303,7 +312,13 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 	if items == nil {
 		items = []models.Shop{}
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.attachDeliveryZones(ctx, shopPtrs(items)); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // ListActiveShops returns all shops with status='active' across all sellers.
@@ -311,7 +326,8 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
 		select id, seller_id, name, slug, description,
-		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
+		       latitude, longitude
 		from seller.shops
 		where status = 'active'
 		order by created_at asc`)
@@ -326,12 +342,19 @@ func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, 
 		if err := rows.Scan(
 			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
 			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+			&s.Latitude, &s.Longitude,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, s)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.attachDeliveryZones(ctx, shopPtrs(items)); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // GetActiveShopByID returns one shop with status='active', for public browsing.
@@ -341,34 +364,159 @@ func (r *SellerRepository) GetActiveShopByID(ctx context.Context, shopID string)
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
 		select id, seller_id, name, slug, description,
-		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
+		       latitude, longitude
 		from seller.shops
 		where id = $1 and status = 'active'`, shopID,
 	).Scan(
 		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
 		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+		&s.Latitude, &s.Longitude,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShopNotFound
 	}
-	return s, err
+	if err != nil {
+		return nil, err
+	}
+	if err := r.attachDeliveryZones(ctx, []*models.Shop{s}); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (r *SellerRepository) GetShopByID(ctx context.Context, sellerID, shopID string) (*models.Shop, error) {
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
 		select id, seller_id, name, slug, description,
-		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url
+		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
+		       latitude, longitude
 		from seller.shops
 		where id = $1 and seller_id = $2`, shopID, sellerID,
 	).Scan(
 		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
 		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+		&s.Latitude, &s.Longitude,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShopNotFound
 	}
-	return s, err
+	if err != nil {
+		return nil, err
+	}
+	if err := r.attachDeliveryZones(ctx, []*models.Shop{s}); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ListDeliveryZones returns a shop's distance bands, cheapest-reach first (smallest max_km).
+func (r *SellerRepository) ListDeliveryZones(ctx context.Context, shopID string) ([]models.ShopDeliveryZone, error) {
+	rows, err := r.db.Query(ctx, `
+		select id, shop_id, max_km, price_amount, currency, estimated_days, created_at, updated_at
+		from seller.shop_delivery_zones
+		where shop_id = $1
+		order by max_km asc`, shopID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanDeliveryZones(rows)
+}
+
+// ReplaceDeliveryZones deletes the shop's bands and inserts the new list.
+func (r *SellerRepository) ReplaceDeliveryZones(ctx context.Context, shopID uuid.UUID, zones []models.ShopDeliveryZone) ([]models.ShopDeliveryZone, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `delete from seller.shop_delivery_zones where shop_id = $1`, shopID); err != nil {
+		return nil, err
+	}
+	out := make([]models.ShopDeliveryZone, 0, len(zones))
+	for _, z := range zones {
+		saved := z
+		saved.ShopID = shopID
+		saved.IsFree = saved.PriceAmount == 0
+		err := tx.QueryRow(ctx, `
+			insert into seller.shop_delivery_zones (shop_id, max_km, price_amount, currency, estimated_days)
+			values ($1,$2,$3,$4,$5)
+			returning id, created_at, updated_at`,
+			shopID, saved.MaxKm, saved.PriceAmount, saved.Currency, saved.EstimatedDays,
+		).Scan(&saved.ID, &saved.CreatedAt, &saved.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, saved)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].MaxKm < out[j].MaxKm })
+	return out, nil
+}
+
+func (r *SellerRepository) attachDeliveryZones(ctx context.Context, shops []*models.Shop) error {
+	if len(shops) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(shops))
+	index := make(map[uuid.UUID]*models.Shop, len(shops))
+	for _, shop := range shops {
+		if shop == nil {
+			continue
+		}
+		shop.DeliveryZones = []models.ShopDeliveryZone{}
+		ids = append(ids, shop.ID)
+		index[shop.ID] = shop
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := r.db.Query(ctx, `
+		select id, shop_id, max_km, price_amount, currency, estimated_days, created_at, updated_at
+		from seller.shop_delivery_zones
+		where shop_id = any($1)
+		order by max_km asc`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	zones, err := scanDeliveryZones(rows)
+	if err != nil {
+		return err
+	}
+	for _, z := range zones {
+		shop, ok := index[z.ShopID]
+		if !ok {
+			continue
+		}
+		shop.DeliveryZones = append(shop.DeliveryZones, z)
+	}
+	return nil
+}
+
+func shopPtrs(shops []models.Shop) []*models.Shop {
+	out := make([]*models.Shop, len(shops))
+	for i := range shops {
+		out[i] = &shops[i]
+	}
+	return out
+}
+
+func scanDeliveryZones(rows pgx.Rows) ([]models.ShopDeliveryZone, error) {
+	out := []models.ShopDeliveryZone{}
+	for rows.Next() {
+		var z models.ShopDeliveryZone
+		if err := rows.Scan(&z.ID, &z.ShopID, &z.MaxKm, &z.PriceAmount, &z.Currency, &z.EstimatedDays, &z.CreatedAt, &z.UpdatedAt); err != nil {
+			return nil, err
+		}
+		z.IsFree = z.PriceAmount == 0
+		out = append(out, z)
+	}
+	return out, rows.Err()
 }
 
 func mapSellerWriteError(err error) error {

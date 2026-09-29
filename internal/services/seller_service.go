@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,8 +88,24 @@ type ShopInput struct {
 	Status                  string  `json:"status"`	// status for the shop
 	AddressID               *string `json:"address_id"`
 	ReturnAddressID         *string `json:"return_address_id"`
-	ImageURL                *string `json:"image_url"`
+	ImageURL                *string              `json:"image_url"`
+	Latitude                *float64             `json:"latitude"`
+	Longitude               *float64             `json:"longitude"`
+	DeliveryZones           []DeliveryZoneInput `json:"delivery_zones"`
 }	// ShopInput is a struct that contains the input for the shop
+
+// DeliveryZoneInput is one local-delivery band. price_amount 0 = free.
+type DeliveryZoneInput struct {
+	MaxKm         float64 `json:"max_km"`
+	PriceAmount   int     `json:"price_amount"`
+	Currency      string  `json:"currency"`
+	EstimatedDays *int    `json:"estimated_days"` // required; 0 = same day
+}
+
+// DeliveryZonesReplaceInput is the body for PUT .../delivery-zones (replaces the whole list).
+type DeliveryZonesReplaceInput struct {
+	Zones []DeliveryZoneInput `json:"zones"`
+}
 
 type SellerLoginResult struct {
 	Token string `json:"token"`	// token for the seller login	
@@ -399,6 +416,21 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 	if in.ImageURL != nil {
 		shop.ImageURL = in.ImageURL
 	}
+	if in.Latitude != nil || in.Longitude != nil {
+		if err := validateLatLng(in.Latitude, in.Longitude); err != nil {
+			return nil, err
+		}
+		shop.Latitude = in.Latitude
+		shop.Longitude = in.Longitude
+	}
+	var zones []models.ShopDeliveryZone
+	replaceZones := in.DeliveryZones != nil
+	if replaceZones {
+		zones, err = normalizeDeliveryZones(in.DeliveryZones)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := s.sellers.UpdateShop(ctx, shop); err != nil {
 		if errors.Is(err, repository.ErrShopDuplicate) {
 			return nil, ErrShopConflict
@@ -407,6 +439,13 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 			return nil, ErrShopNotFound
 		}
 		return nil, err
+	}
+	if replaceZones {
+		saved, err := s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
+		if err != nil {
+			return nil, err
+		}
+		shop.DeliveryZones = saved
 	}
 	return shop, nil
 }
@@ -454,6 +493,15 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		AddressID:               addressID,
 		ReturnAddressID:         returnAddressID,
 		ImageURL:                in.ImageURL,
+		Latitude:                in.Latitude,
+		Longitude:               in.Longitude,
+	}
+	if err := validateLatLng(in.Latitude, in.Longitude); err != nil {
+		return nil, err
+	}
+	zones, err := normalizeDeliveryZones(in.DeliveryZones)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.sellers.CreateShop(ctx, shop); err != nil {
 		if errors.Is(err, repository.ErrShopDuplicate) {
@@ -461,7 +509,72 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		}
 		return nil, err
 	}
+	if len(zones) > 0 {
+		saved, err := s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
+		if err != nil {
+			_ = s.sellers.DeleteShop(ctx, sellerID.String(), shop.ID.String())
+			return nil, err
+		}
+		shop.DeliveryZones = saved
+	} else {
+		shop.DeliveryZones = []models.ShopDeliveryZone{}
+	}
 	return shop, nil
+}
+
+func (s *SellerService) ListDeliveryZones(ctx context.Context, sellerID, shopID string) ([]models.ShopDeliveryZone, error) {
+	if _, err := s.sellers.GetShopByID(ctx, sellerID, shopID); err != nil {
+		if errors.Is(err, repository.ErrShopNotFound) {
+			return nil, ErrShopNotFound
+		}
+		return nil, err
+	}
+	return s.sellers.ListDeliveryZones(ctx, shopID)
+}
+
+func (s *SellerService) ReplaceDeliveryZones(ctx context.Context, sellerID, shopID string, in DeliveryZonesReplaceInput) ([]models.ShopDeliveryZone, error) {
+	shop, err := s.sellers.GetShopByID(ctx, sellerID, shopID)
+	if err != nil {
+		if errors.Is(err, repository.ErrShopNotFound) {
+			return nil, ErrShopNotFound
+		}
+		return nil, err
+	}
+	zones, err := normalizeDeliveryZones(in.Zones)
+	if err != nil {
+		return nil, err
+	}
+	return s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
+}
+
+func normalizeDeliveryZones(in []DeliveryZoneInput) ([]models.ShopDeliveryZone, error) {
+	if in == nil {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]models.ShopDeliveryZone, 0, len(in))
+	for _, z := range in {
+		if z.MaxKm <= 0 || z.PriceAmount < 0 || z.EstimatedDays == nil || *z.EstimatedDays < 0 {
+			return nil, ErrInvalidShop
+		}
+		currency := strings.ToUpper(strings.TrimSpace(z.Currency))
+		if _, ok := knownCurrencies[currency]; !ok {
+			return nil, ErrInvalidCurrency
+		}
+		key := strconv.FormatFloat(z.MaxKm, 'f', 2, 64)
+		if _, dup := seen[key]; dup {
+			return nil, ErrInvalidShop
+		}
+		seen[key] = struct{}{}
+		out = append(out, models.ShopDeliveryZone{
+			MaxKm:         z.MaxKm,
+			PriceAmount:   z.PriceAmount,
+			Currency:      currency,
+			IsFree:        z.PriceAmount == 0,
+			EstimatedDays: *z.EstimatedDays,
+		})
+	}
+	return out, nil
 }
 
 func (s *SellerService) buildAddress(sellerID uuid.UUID, in SellerAddressInput) (*models.SellerAddress, error) {
@@ -497,6 +610,16 @@ func (s *SellerService) buildAddress(sellerID uuid.UUID, in SellerAddressInput) 
 		Longitude:   in.Longitude,
 		IsDefault:   in.IsDefault,
 	}, nil
+}
+
+func validateLatLng(lat, lng *float64) error {
+	if lat == nil && lng == nil {
+		return nil
+	}
+	if lat == nil || lng == nil || *lat < -90 || *lat > 90 || *lng < -180 || *lng > 180 {
+		return ErrInvalidShop
+	}
+	return nil
 }
 
 func slugOrFromName(slug, name string) string {

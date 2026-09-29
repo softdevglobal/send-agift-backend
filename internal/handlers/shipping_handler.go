@@ -210,6 +210,8 @@ func (h *ShippingHandler) writeError(w http.ResponseWriter, err error, fallback 
 		utils.Error(w, http.StatusBadGateway, strings.TrimPrefix(err.Error(), "shipping provider error: "))
 	case errors.Is(err, services.ErrShippingCustomsRequired):
 		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrOutsideDeliveryZone):
+		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrCourierChangeRequiresChat):
 		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, repository.ErrIdempotencyConflict):
