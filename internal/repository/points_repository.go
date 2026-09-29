@@ -27,14 +27,18 @@ func NewPointsRepository(db *pgxpool.Pool) *PointsRepository {
 	return &PointsRepository{db: db}
 }
 
-// PointsChange is one movement of a customer's points.
+// PointsChange is one movement of a customer's or a seller's points. Exactly
+// one of CustomerID and SellerID is set.
 type PointsChange struct {
 	CustomerID     uuid.UUID
+	SellerID       *uuid.UUID
 	EntryType      string
 	Delta          int64
 	CompetitionID  *uuid.UUID
 	AttemptID      *uuid.UUID
 	OrderID        *uuid.UUID
+	ReferenceType  *string
+	ReferenceID    *uuid.UUID
 	IdempotencyKey string
 	Reason         *string
 	ActorType      string
@@ -42,7 +46,13 @@ type PointsChange struct {
 	// EntryID lets the caller fix the ledger row's id in advance, for rows
 	// that another row in the same transaction points at.
 	EntryID *uuid.UUID
+	// ConsumeReserved is how much of a seller's reserved points this change
+	// uses up: a reward paid out of points promised when the order was placed.
+	ConsumeReserved int64
 }
+
+// ref is a pointer to a reference type, for PointsChange.ReferenceType.
+func ref(kind string) *string { return &kind }
 
 // lockPointsAccount returns the customer's balance with the account row
 // locked for the rest of the transaction, opening an empty account on first
@@ -60,10 +70,27 @@ func lockPointsAccount(ctx context.Context, q querier, customerID uuid.UUID) (in
 	return balance, err
 }
 
-// applyPoints moves a customer's balance and writes its ledger row. The
-// caller holds the account lock. A negative result is refused before the
-// database's own check would fire.
+// lockSellerPointsAccount is lockPointsAccount for a seller, with what they
+// have promised on undelivered orders.
+func lockSellerPointsAccount(ctx context.Context, q querier, sellerID uuid.UUID) (balance, reserved int64, err error) {
+	if _, err = q.Exec(ctx, `
+		insert into finance.seller_points_accounts (seller_id) values ($1)
+		on conflict (seller_id) do nothing`, sellerID); err != nil {
+		return 0, 0, err
+	}
+	err = q.QueryRow(ctx, `
+		select balance, reserved from finance.seller_points_accounts where seller_id = $1 for update`,
+		sellerID).Scan(&balance, &reserved)
+	return balance, reserved, err
+}
+
+// applyPoints moves a balance and writes its ledger row. The caller holds
+// the transaction. A negative result is refused before the database's own
+// check would fire.
 func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.UUID, balance int64, err error) {
+	if ch.SellerID != nil {
+		return applySellerPoints(ctx, q, ch)
+	}
 	balance, err = lockPointsAccount(ctx, q, ch.CustomerID)
 	if err != nil {
 		return uuid.Nil, 0, err
@@ -72,15 +99,18 @@ func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.
 		return uuid.Nil, balance, ErrPointsInsufficient
 	}
 	earned, spent := int64(0), int64(0)
-	switch {
-	case ch.EntryType == models.PointsEntryPlayDebit:
+	switch ch.EntryType {
+	case models.PointsEntryPlayDebit, models.PointsEntryGiftSent:
 		spent = -ch.Delta
-	case ch.EntryType == models.PointsEntryPlayRefund:
-		spent = -ch.Delta // a refund gives back what was spent
-	case ch.EntryType == models.PointsEntryOrderReversal:
-		earned = ch.Delta // takes back what the order earned
-	case ch.Delta > 0:
-		earned = ch.Delta
+	case models.PointsEntryPlayRefund, models.PointsEntryGiftReturned:
+		spent = -ch.Delta // gives back what was spent
+	case models.PointsEntryOrderReversal, models.PointsEntryProductRewardReversal,
+		models.PointsEntryGiftReversal:
+		earned = ch.Delta // takes back what was earned
+	default:
+		if ch.Delta > 0 {
+			earned = ch.Delta
+		}
 	}
 	if err = q.QueryRow(ctx, `
 		update finance.points_accounts
@@ -92,22 +122,101 @@ func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.
 		returning balance`, ch.CustomerID, ch.Delta, earned, spent).Scan(&balance); err != nil {
 		return uuid.Nil, 0, err
 	}
+	id, err := insertLedgerRow(ctx, q, ch, balance)
+	return id, balance, err
+}
+
+// applySellerPoints is applyPoints for a seller. Reserved points are still
+// the seller's, but a change can never take the balance below what is
+// promised — except by paying out that promise (ConsumeReserved).
+func applySellerPoints(ctx context.Context, q querier, ch PointsChange) (uuid.UUID, int64, error) {
+	balance, reserved, err := lockSellerPointsAccount(ctx, q, *ch.SellerID)
+	if err != nil {
+		return uuid.Nil, 0, err
+	}
+	stillReserved := reserved - ch.ConsumeReserved
+	if stillReserved < 0 || balance+ch.Delta < stillReserved {
+		return uuid.Nil, balance, ErrPointsInsufficient
+	}
+	purchased, spent := int64(0), int64(0)
+	switch ch.EntryType {
+	case models.PointsEntryPointsPurchase:
+		purchased = ch.Delta
+	case models.PointsEntryRewardFunding, models.PointsEntryRewardFundingReturn:
+		spent = -ch.Delta
+	}
+	if err = q.QueryRow(ctx, `
+		update finance.seller_points_accounts
+		set balance = balance + $2,
+		    reserved = reserved - $3,
+		    lifetime_purchased = greatest(lifetime_purchased + $4, 0),
+		    lifetime_spent = greatest(lifetime_spent + $5, 0),
+		    updated_at = now()
+		where seller_id = $1
+		returning balance`, *ch.SellerID, ch.Delta, ch.ConsumeReserved, purchased, spent).
+		Scan(&balance); err != nil {
+		return uuid.Nil, 0, err
+	}
+	id, err := insertLedgerRow(ctx, q, ch, balance)
+	return id, balance, err
+}
+
+// insertLedgerRow writes the ledger row for a change already applied to its
+// account. A repeated idempotency key is ErrPointsDuplicate, which rolls the
+// whole change back with the caller's transaction.
+func insertLedgerRow(ctx context.Context, q querier, ch PointsChange, balance int64) (uuid.UUID, error) {
 	id := uuid.New()
 	if ch.EntryID != nil {
 		id = *ch.EntryID
 	}
-	_, err = q.Exec(ctx, `
+	var customerID *uuid.UUID
+	if ch.SellerID == nil {
+		customerID = &ch.CustomerID
+	}
+	_, err := q.Exec(ctx, `
 		insert into finance.points_ledger
-			(id, customer_id, entry_type, amount_delta, balance_after, competition_id, attempt_id,
-			 idempotency_key, reason, actor_type, actor_id, order_id)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		id, ch.CustomerID, ch.EntryType, ch.Delta, balance, ch.CompetitionID, ch.AttemptID,
-		ch.IdempotencyKey, ch.Reason, ch.ActorType, ch.ActorID, ch.OrderID)
+			(id, customer_id, seller_id, entry_type, amount_delta, balance_after, competition_id,
+			 attempt_id, idempotency_key, reason, actor_type, actor_id, order_id,
+			 reference_type, reference_id)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		id, customerID, ch.SellerID, ch.EntryType, ch.Delta, balance, ch.CompetitionID,
+		ch.AttemptID, ch.IdempotencyKey, ch.Reason, ch.ActorType, ch.ActorID, ch.OrderID,
+		ch.ReferenceType, ch.ReferenceID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return uuid.Nil, 0, ErrPointsDuplicate
+		return uuid.Nil, ErrPointsDuplicate
 	}
-	return id, balance, err
+	return id, err
+}
+
+// reserveSellerPoints promises n of a seller's points to an order. It
+// reports false, changing nothing, when they do not have n available.
+func reserveSellerPoints(ctx context.Context, q querier, sellerID uuid.UUID, n int64) (bool, error) {
+	balance, reserved, err := lockSellerPointsAccount(ctx, q, sellerID)
+	if err != nil {
+		return false, err
+	}
+	if balance-reserved < n {
+		return false, nil
+	}
+	_, err = q.Exec(ctx, `
+		update finance.seller_points_accounts
+		set reserved = reserved + $2, updated_at = now()
+		where seller_id = $1`, sellerID, n)
+	return err == nil, err
+}
+
+// releaseSellerPoints gives back points promised to an order that will not
+// pay them out.
+func releaseSellerPoints(ctx context.Context, q querier, sellerID uuid.UUID, n int64) error {
+	if _, _, err := lockSellerPointsAccount(ctx, q, sellerID); err != nil {
+		return err
+	}
+	_, err := q.Exec(ctx, `
+		update finance.seller_points_accounts
+		set reserved = greatest(reserved - $2, 0), updated_at = now()
+		where seller_id = $1`, sellerID, n)
+	return err
 }
 
 // Balance is a customer's current points, zero when they have no account.
@@ -119,7 +228,96 @@ func (r *PointsRepository) Balance(ctx context.Context, customerID uuid.UUID) (i
 	return balance, err
 }
 
-// Wallet is a customer's balance, lifetime totals and latest entries.
+// ledgerSelect reads ledger rows with what a person needs to recognise them:
+// the competition played, the order, and the product a reward was for.
+const ledgerSelect = `
+	select l.id, l.customer_id, l.seller_id, l.entry_type, l.amount_delta, l.balance_before,
+	       l.balance_after, l.direction, l.status, l.competition_id, l.attempt_id, l.order_id,
+	       l.reference_type, l.reference_id, l.reason, l.actor_type, l.created_at,
+	       c.title, o.order_number, p.name
+	from finance.points_ledger l
+	left join competition.competitions c on c.id = l.competition_id
+	left join marketplace.orders o on o.id = l.order_id
+	left join marketplace.order_items oi on l.reference_type = 'order_item' and oi.id = l.reference_id
+	left join seller.products p on p.id = oi.product_id
+`
+
+func scanPointsEntries(rows pgx.Rows) ([]models.PointsEntry, error) {
+	defer rows.Close()
+	out := []models.PointsEntry{}
+	for rows.Next() {
+		var e models.PointsEntry
+		if err := rows.Scan(&e.ID, &e.CustomerID, &e.SellerID, &e.EntryType, &e.AmountDelta,
+			&e.BalanceBefore, &e.BalanceAfter, &e.Direction, &e.Status, &e.CompetitionID,
+			&e.AttemptID, &e.OrderID, &e.ReferenceType, &e.ReferenceID, &e.Reason, &e.ActorType,
+			&e.CreatedAt, &e.CompetitionTitle, &e.OrderNumber, &e.ProductName); err != nil {
+			return nil, err
+		}
+		e.Amount = e.AmountDelta
+		if e.Amount < 0 {
+			e.Amount = -e.Amount
+		}
+		e.Category = models.PointsCategory(e.EntryType)
+		if e.EntryType == models.PointsEntryGiftReceived || e.EntryType == models.PointsEntryGiftReversal {
+			// The sender's order is theirs, not the recipient's to see.
+			e.OrderID, e.OrderNumber = nil, nil
+		}
+		e.Description = describePointsEntry(e)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// describePointsEntry is the line a person reads in their history.
+func describePointsEntry(e models.PointsEntry) string {
+	or := func(s *string, fallback string) string {
+		if s != nil && *s != "" {
+			return *s
+		}
+		return fallback
+	}
+	product := or(e.ProductName, "a product")
+	// A competition play names the round; a practice play names the game.
+	game := or(e.CompetitionTitle, or(e.Reason, "a game"))
+	order := or(e.OrderNumber, "your order")
+	switch e.EntryType {
+	case models.PointsEntryProductReward:
+		return "Purchased " + product
+	case models.PointsEntryProductRewardReversal:
+		return "Refunded " + product
+	case models.PointsEntryOrderReward:
+		return "Order " + order + " delivered"
+	case models.PointsEntryOrderReversal:
+		return "Order " + order + " refunded"
+	case models.PointsEntryPlayDebit:
+		return "Played " + game
+	case models.PointsEntryPlayRefund:
+		return "Refund for " + game
+	case models.PointsEntryPrizePoints:
+		return "Prize won: " + game
+	case models.PointsEntrySignupBonus:
+		return "Welcome bonus"
+	case models.PointsEntryGiftSent:
+		return "Sent with gift " + order
+	case models.PointsEntryGiftReceived:
+		return "Gift received"
+	case models.PointsEntryGiftReturned:
+		return or(e.Reason, "Gift points returned")
+	case models.PointsEntryGiftReversal:
+		return "Gift refunded"
+	case models.PointsEntryPointsPurchase:
+		return "Bought points"
+	case models.PointsEntryRewardFunding:
+		return "Reward paid for " + product + " (" + order + ")"
+	case models.PointsEntryRewardFundingReturn:
+		return "Reward returned for " + product + " (" + order + ")"
+	default:
+		return or(e.Reason, "Adjusted by SendAGift")
+	}
+}
+
+// Wallet is a customer's balance, lifetime totals, where their points came
+// from, and their latest entries.
 func (r *PointsRepository) Wallet(ctx context.Context, customerID uuid.UUID, limit int) (*models.PointsWallet, error) {
 	w := &models.PointsWallet{CustomerID: customerID, Entries: []models.PointsEntry{}}
 	err := r.db.QueryRow(ctx, `
@@ -129,27 +327,30 @@ func (r *PointsRepository) Wallet(ctx context.Context, customerID uuid.UUID, lim
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	rows, err := r.db.Query(ctx, `
-		select l.id, l.entry_type, l.amount_delta, l.balance_after, l.competition_id, l.attempt_id,
-		       l.order_id, l.reason, l.actor_type, l.created_at, c.title
-		from finance.points_ledger l
-		left join competition.competitions c on c.id = l.competition_id
+	if err := r.db.QueryRow(ctx, `
+		select
+			coalesce(sum(amount_delta) filter (where entry_type in
+				('order_reward', 'order_reversal', 'product_reward', 'product_reward_reversal')), 0),
+			coalesce(sum(amount_delta) filter (where entry_type in
+				('gift_points_received', 'gift_points_reversal', 'signup_bonus')), 0),
+			coalesce(sum(amount_delta) filter (where entry_type = 'prize_points'), 0),
+			coalesce(-sum(amount_delta) filter (where entry_type in ('play_debit', 'play_refund')), 0),
+			coalesce(-sum(amount_delta) filter (where entry_type in
+				('gift_points_sent', 'gift_points_returned')), 0)
+		from finance.points_ledger where customer_id = $1`, customerID).
+		Scan(&w.Totals.FromPurchases, &w.Totals.FromGifts, &w.Totals.FromPrizes,
+			&w.Totals.SpentOnGames, &w.Totals.SentAsGifts); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.Query(ctx, ledgerSelect+`
 		where l.customer_id = $1
 		order by l.seq desc
 		limit $2`, customerID, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var e models.PointsEntry
-		if err := rows.Scan(&e.ID, &e.EntryType, &e.AmountDelta, &e.BalanceAfter, &e.CompetitionID,
-			&e.AttemptID, &e.OrderID, &e.Reason, &e.ActorType, &e.CreatedAt, &e.CompetitionTitle); err != nil {
-			return nil, err
-		}
-		w.Entries = append(w.Entries, e)
-	}
-	return w, rows.Err()
+	w.Entries, err = scanPointsEntries(rows)
+	return w, err
 }
 
 // applyOne runs one points change in its own transaction. A change already
@@ -329,8 +530,9 @@ func (r *PointsRepository) SetEarningRule(ctx context.Context, countryID uuid.UU
 }
 
 // RunEarning is one pass of the earning job: points for newly delivered
-// orders, points taken back from refunded or cancelled ones, and sign-up
-// bonuses. Every award is keyed by what earned it, so a pass can be repeated
+// orders, points taken back from refunded or cancelled ones, sign-up
+// bonuses, and the points that ride on orders (product rewards and gift
+// points — see points_rewards.go). Every award is keyed by what earned it, so a pass can be repeated
 // or overlap another without ever paying twice.
 func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.EarningRunResult, error) {
 	res := &models.EarningRunResult{}
@@ -490,6 +692,9 @@ func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.E
 			res.SignupBonuses++
 			res.BonusPointsPaid += s.bonus
 		}
+	}
+	if err := r.runOrderPoints(ctx, batch, res); err != nil {
+		return res, err
 	}
 	return res, nil
 }

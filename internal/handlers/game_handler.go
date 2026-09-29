@@ -118,6 +118,21 @@ func (h *GameHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
 
 // writeError maps service errors onto HTTP status codes.
 func (h *GameHandler) writeError(w http.ResponseWriter, err error, fallback string) {
+	// A paid play turned away: nothing was charged, and the body says why
+	// and what the player needs (points_required, points_balance).
+	var refusal *services.PlayRefusal
+	if errors.As(err, &refusal) {
+		status := http.StatusUnprocessableEntity
+		if refusal.Code == services.PlaySignInRequired {
+			status = http.StatusUnauthorized
+		}
+		body := map[string]any{"error": refusal.Message, "code": refusal.Code}
+		for k, v := range refusal.Details {
+			body[k] = v
+		}
+		utils.JSON(w, status, body)
+		return
+	}
 	switch {
 	case errors.Is(err, services.ErrGameNotFound):
 		utils.Error(w, http.StatusNotFound, "game not found")

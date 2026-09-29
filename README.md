@@ -30,6 +30,12 @@ Copy `.env.example` to `.env` and fill in values. Shippo uses a **test API key**
 |---|---|
 | `SHIPPO_API_KEY` | Shippo test or live API token |
 | `SHIPPO_LABEL_BUCKET` | S3 bucket name stored on label records — set to the **same value as `S3_BUCKET`** |
+| `POINTS_CENTS_PER_POINT` | What one point costs a seller, in minor units of `POINTS_CURRENCY` (default `10` = $0.10) |
+| `POINTS_CURRENCY` | Currency sellers buy points in (default `USD`) |
+| `POINTS_PAYMENT_PROVIDER` | `instant` (default until Stripe is connected — points are credited as soon as they are bought), `manual` (an admin confirms each payment) or `test` (sellers approve their own purchase; development only) |
+| `POINTS_PER_GAME_PLAY` | Points one game costs, taken when it starts (default `50`; `0` makes games free). Paid games need a signed-in customer |
+| `POINTS_REWARD_TIMING` | When product reward points reach the buyer: `order` (default — as soon as the order is placed; cancelling takes them back and is refused once they are spent) or `delivery` |
+| `POINTS_WEBHOOK_SECRET` | HMAC-SHA256 secret for `POST /api/v1/payments/points/webhook`; empty refuses the webhook |
 
 Webhook URL for tracking updates (configure in the [Shippo API portal](https://docs.goshippo.com/docs/tracking/webhooks/)):
 

@@ -28,6 +28,23 @@ type Config struct {
 	GoogleMapsKey   string
 	ShippoAPIKey    string
 	ShippoLabelBucket string
+
+	// Seller points purchases. PointsCentsPerPoint is what one point costs in
+	// minor units of PointsCurrency (10 = $0.10 a point). The provider is
+	// "instant" (the default until Stripe is connected: points are credited
+	// the moment they are bought), "manual" (an admin confirms each payment)
+	// or "test" (sellers approve their own purchase — development only). The webhook secret
+	// signs provider confirmations; without it the webhook is refused.
+	PointsCentsPerPoint   int
+	PointsCurrency        string
+	PointsPaymentProvider string
+	PointsWebhookSecret   string
+	// PointsRewardTiming is when a product's reward points reach the buyer:
+	// "order" (as soon as the order is placed — the default while there is
+	// no payment step) or "delivery".
+	PointsRewardTiming string
+	// PointsPerGamePlay is what one practice game costs; 0 makes games free.
+	PointsPerGamePlay int
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -52,6 +69,13 @@ func Load() (*Config, error) {
 		GoogleMapsKey:   os.Getenv("GOOGLE_MAPS_API_KEY"),
 		ShippoAPIKey:    os.Getenv("SHIPPO_API_KEY"),
 		ShippoLabelBucket: envOr("SHIPPO_LABEL_BUCKET", "sendagift-labels"),
+
+		PointsCentsPerPoint:   intOr("POINTS_CENTS_PER_POINT", 10),
+		PointsCurrency:        envOr("POINTS_CURRENCY", "USD"),
+		PointsPaymentProvider: envOr("POINTS_PAYMENT_PROVIDER", "instant"),
+		PointsWebhookSecret:   os.Getenv("POINTS_WEBHOOK_SECRET"),
+		PointsRewardTiming:    envOr("POINTS_REWARD_TIMING", "order"),
+		PointsPerGamePlay:     intOrZero("POINTS_PER_GAME_PLAY", 50),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -87,6 +111,28 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// intOrZero is intOr that also accepts 0 (e.g. "games are free").
+func intOrZero(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
+}
+
+// intOr reads a positive whole number from the environment, or the fallback.
+func intOr(key string, fallback int) int {
+	n, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 // This function is used to get the value of an environment variable or return a fallback value

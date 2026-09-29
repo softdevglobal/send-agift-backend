@@ -294,6 +294,7 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 		OfficialRules:                src.OfficialRules,
 		PrizeGrowthEnabled:           src.PrizeGrowthEnabled,
 		PrizeType:                    src.PrizeType,
+		PrizePoints:                  src.PrizePoints,
 		WinnerMethod:                 src.WinnerMethod,
 		StartPrizeCents:              &startPrize,
 		IncrementPerPlayCents:        src.IncrementPerPlayCents,
@@ -640,7 +641,7 @@ func (s *PointsService) RunEarningLoop(ctx context.Context, every time.Duration)
 				log.Printf("points earning: %v", err)
 				continue
 			}
-			if res.OrdersRewarded+res.OrdersReversed+res.SignupBonuses > 0 {
+			if res.Anything() {
 				log.Printf("points earning: %+v", *res)
 			}
 		}

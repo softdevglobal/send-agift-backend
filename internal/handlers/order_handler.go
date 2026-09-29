@@ -90,6 +90,12 @@ func (h *OrderHandler) writeOrderError(w http.ResponseWriter, err error, fallbac
 		utils.Error(w, http.StatusBadRequest, "all items must use the same currency")
 	case errors.Is(err, services.ErrOrderNotCancellable):
 		utils.Error(w, http.StatusConflict, "order cannot be cancelled in its current status")
+	case errors.Is(err, services.ErrOrderRewardSpent):
+		utils.Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, services.ErrGiftPoints):
+		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrGiftPointsBalance):
+		utils.JSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "INSUFFICIENT_POINTS"})
 	default:
 		log.Printf("order handler error: %v", err)
 		utils.Error(w, http.StatusInternalServerError, fallback)

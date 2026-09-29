@@ -109,18 +109,31 @@ type CreateSessionInput struct {
 	ServerSeed    string
 	Config        json.RawMessage
 	ExpiresAt     time.Time
+	// ChargePoints is what the play costs the customer, debited in the same
+	// transaction as the session: no play without payment, no payment
+	// without a play. ChargeReason names the game on the ledger row.
+	ChargePoints int64
+	ChargeReason string
 }
 
-// CreateSession records a new play before the first move is made.
+// CreateSession records a new play before the first move is made. A play
+// that costs points fails with ErrPointsInsufficient, recording nothing,
+// when the customer does not hold them.
 func (r *GameRepository) CreateSession(ctx context.Context, in CreateSessionInput) (*models.GameSession, error) {
 	config := []byte(in.Config)
 	if len(config) == 0 {
 		config = []byte("{}")
 	}
 
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
 	var s models.GameSession
 	var scannedConfig []byte
-	err := r.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		insert into competition.game_sessions
 			(game_version_id, customer_id, guest_token, mode, server_seed, config, expires_at)
 		values ($1, $2, $3, $4, $5, $6, $7)
@@ -134,6 +147,24 @@ func (r *GameRepository) CreateSession(ctx context.Context, in CreateSessionInpu
 		return nil, err
 	}
 	s.Config = json.RawMessage(scannedConfig)
+
+	if in.ChargePoints > 0 {
+		if in.Identity.CustomerID == nil {
+			return nil, ErrPointsInsufficient
+		}
+		reason := in.ChargeReason
+		if _, _, err := applyPoints(ctx, tx, PointsChange{
+			CustomerID: *in.Identity.CustomerID, EntryType: models.PointsEntryPlayDebit,
+			Delta: -in.ChargePoints, ReferenceType: ref("game_session"), ReferenceID: &s.ID,
+			IdempotencyKey: "game-play:" + s.ID.String(), Reason: &reason,
+			ActorType: "customer", ActorID: in.Identity.CustomerID,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
 	return &s, nil
 }
 

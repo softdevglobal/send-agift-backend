@@ -122,7 +122,7 @@ const competitionSelect = `
 	       c.increment_per_play_cents, c.max_prize_cents, c.continue_at_cap, c.daily_play_limit,
 	       c.min_plays_to_win, c.current_prize_cents, c.eligible_play_count, c.unique_player_count,
 	       c.prize_version, c.final_prize_cents, c.round_no, c.previous_round_id, c.config_version,
-	       c.paused_at, c.closed_at, c.updated_by_admin_id, g.game_type, c.win_odds
+	       c.paused_at, c.closed_at, c.updated_by_admin_id, g.game_type, c.win_odds, c.prize_points
 	from competition.competitions c
 	inner join core.countries co on co.id = c.country_id
 	inner join competition.game_versions v on v.id = c.game_version_id
@@ -144,7 +144,7 @@ func scanCompetition(row scanner) (*models.Competition, error) {
 		&c.IncrementPerPlayCents, &c.MaxPrizeCents, &c.ContinueAtCap, &c.DailyPlayLimit,
 		&c.MinPlaysToWin, &c.CurrentPrizeCents, &c.EligiblePlayCount, &c.UniquePlayerCount,
 		&c.PrizeVersion, &c.FinalPrizeCents, &c.RoundNo, &c.PreviousRoundID, &c.ConfigVersion,
-		&c.PausedAt, &c.ClosedAt, &c.UpdatedByAdminID, &c.GameType, &c.WinOdds)
+		&c.PausedAt, &c.ClosedAt, &c.UpdatedByAdminID, &c.GameType, &c.WinOdds, &c.PrizePoints)
 	if err != nil {
 		return nil, err
 	}
@@ -246,9 +246,9 @@ func (r *CompetitionRepository) Create(ctx context.Context, c *models.Competitio
 				 created_by_admin_id,
 				 prize_growth_enabled, prize_type, winner_method, start_prize_cents, increment_per_play_cents,
 				 max_prize_cents, continue_at_cap, daily_play_limit, min_plays_to_win,
-				 round_no, previous_round_id, updated_by_admin_id, win_odds)
+				 round_no, previous_round_id, updated_by_admin_id, win_odds, prize_points)
 			values ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-			        $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $17, $29)
+			        $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $17, $29, $30)
 			returning id, status, config_version, created_at, updated_at`,
 			c.CountryID, c.GameVersionID, c.Title, c.StartsAt, c.EndsAt, c.Timezone, c.ServerSeed,
 			c.PointsPerAttempt, c.MaxAttemptsPerCustomer, c.MinAge, c.RequiresIdentityVerification,
@@ -256,7 +256,7 @@ func (r *CompetitionRepository) Create(ctx context.Context, c *models.Competitio
 			c.CreatedByAdminID,
 			c.PrizeGrowthEnabled, c.PrizeType, c.WinnerMethod, c.StartPrizeCents, c.IncrementPerPlayCents,
 			c.MaxPrizeCents, c.ContinueAtCap, c.DailyPlayLimit, c.MinPlaysToWin,
-			roundNo(c.RoundNo), c.PreviousRoundID, c.WinOdds).
+			roundNo(c.RoundNo), c.PreviousRoundID, c.WinOdds, c.PrizePoints).
 			Scan(&c.ID, &c.Status, &c.ConfigVersion, &c.CreatedAt, &c.UpdatedAt)
 		if err != nil {
 			return err
@@ -299,7 +299,7 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 			    prize_growth_enabled = $17, prize_type = $18, winner_method = $19, start_prize_cents = $20,
 			    increment_per_play_cents = $21, max_prize_cents = $22, continue_at_cap = $23,
 			    daily_play_limit = $24, min_plays_to_win = $25, updated_by_admin_id = $26,
-			    win_odds = $27, config_version = config_version + 1,
+			    win_odds = $27, prize_points = $28, config_version = config_version + 1,
 			    status = 'draft', updated_at = now()
 			where id = $1
 			returning config_version`,
@@ -308,7 +308,7 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 			c.NumberOfWinners, c.PrizeDescription, c.PrizeValueAmount, c.PrizeCurrency, c.OfficialRules,
 			c.PrizeGrowthEnabled, c.PrizeType, c.WinnerMethod, c.StartPrizeCents,
 			c.IncrementPerPlayCents, c.MaxPrizeCents, c.ContinueAtCap,
-			c.DailyPlayLimit, c.MinPlaysToWin, c.UpdatedByAdminID, c.WinOdds).
+			c.DailyPlayLimit, c.MinPlaysToWin, c.UpdatedByAdminID, c.WinOdds, c.PrizePoints).
 			Scan(&c.ConfigVersion); err != nil {
 			return err
 		}
@@ -1096,23 +1096,50 @@ func (r *CompetitionRepository) WinnerByID(ctx context.Context, competitionID, w
 }
 
 // ValidateWinner confirms a winner and opens their 14-day claim window.
+//
+// A points prize has nothing to claim or ship: the points are credited with
+// the validation, in the same transaction, and the claim is recorded as
+// already fulfilled.
 func (r *CompetitionRepository) ValidateWinner(ctx context.Context, winnerID uuid.UUID, claimDeadline time.Time, audit models.AuditEntry) error {
 	return r.inTx(ctx, func(tx pgx.Tx) error {
-		var customerID uuid.UUID
+		var (
+			customerID, competitionID uuid.UUID
+			prizeType                 string
+			prizePoints               *int64
+		)
 		err := tx.QueryRow(ctx, `
-			update competition.competition_winners
+			update competition.competition_winners w
 			set status = 'validated', validated_at = now(), updated_at = now()
-			where id = $1 and status = 'pending_validation'
-			returning customer_id`, winnerID).Scan(&customerID)
+			from competition.competitions c
+			where w.id = $1 and w.status = 'pending_validation' and c.id = w.competition_id
+			returning w.customer_id, w.competition_id, c.prize_type, c.prize_points`, winnerID).
+			Scan(&customerID, &competitionID, &prizeType, &prizePoints)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrWinnerStateChanged
 		}
 		if err != nil {
 			return err
 		}
+		claimStatus := "pending"
+		if prizeType == "points" && prizePoints != nil && *prizePoints > 0 {
+			if _, _, err := applyPoints(ctx, tx, PointsChange{
+				CustomerID: customerID, EntryType: models.PointsEntryPrizePoints, Delta: *prizePoints,
+				CompetitionID: &competitionID, ReferenceType: ref("competition_winner"), ReferenceID: &winnerID,
+				IdempotencyKey: "prize:" + winnerID.String(), ActorType: "system",
+			}); err != nil {
+				return err
+			}
+			claimStatus = "fulfilled"
+			if _, err := tx.Exec(ctx, `
+				update competition.competition_winners
+				set settlement_status = 'not_applicable', updated_at = now()
+				where id = $1`, winnerID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `
-			insert into competition.prize_claims (winner_id, customer_id, claim_deadline_at)
-			values ($1, $2, $3)`, winnerID, customerID, claimDeadline); err != nil {
+			insert into competition.prize_claims (winner_id, customer_id, claim_deadline_at, status)
+			values ($1, $2, $3, $4)`, winnerID, customerID, claimDeadline, claimStatus); err != nil {
 			return err
 		}
 		return insertAudit(ctx, tx, audit)

@@ -19,7 +19,12 @@ var (
 	ErrInvalidProduct    = errors.New("invalid product")
 	ErrInventoryNotFound = errors.New("inventory not found")
 	ErrInvalidInventory  = errors.New("invalid inventory")
+	// ErrInvalidRewardPoints is a reward out of range.
+	ErrInvalidRewardPoints = errors.New("reward_points must be a whole number from 0 to 1000000")
 )
+
+// maxRewardPoints caps the points one unit of a product can reward.
+const maxRewardPoints = 1_000_000
 
 // maxProductMediaItems caps gallery size (images + videos) on one product.
 const maxProductMediaItems = 12
@@ -59,8 +64,11 @@ type ProductInput struct {
 	OccasionTags           []string `json:"occasion_tags"`
 	CustomerTypeVisibility string   `json:"customer_type_visibility"`
 	PointsDisplayEnabled   bool     `json:"points_display_enabled"`
-	PrepMinutes            int      `json:"prep_minutes"`
-	ImageURL               *string  `json:"image_url"` // cover; auto-set from first image in media when omitted
+	// RewardPoints a customer earns per unit bought, paid from the seller's
+	// points on delivery.
+	RewardPoints int     `json:"reward_points"`
+	PrepMinutes  int     `json:"prep_minutes"`
+	ImageURL     *string `json:"image_url"` // cover; auto-set from first image in media when omitted
 	// Parcel matches the seller shipping form (length/width/height/weight).
 	Parcel *models.ProductParcel `json:"parcel"`
 	// Media is the product gallery (images + videos). On update, nil keeps existing;
@@ -263,6 +271,11 @@ func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput, assets []mo
 	if in.PriceAmount < 0 || in.PrepMinutes < 0 {
 		return nil, ErrInvalidProduct
 	}
+	// Any reward is allowed to be set; it is only promised to shoppers while
+	// the seller holds the points to pay it.
+	if in.RewardPoints < 0 || in.RewardPoints > maxRewardPoints {
+		return nil, ErrInvalidRewardPoints
+	}
 	if _, ok := knownCurrencies[in.Currency]; !ok {
 		return nil, ErrInvalidCurrency
 	}
@@ -339,6 +352,7 @@ func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput, assets []mo
 		OccasionTags:           in.OccasionTags,
 		CustomerTypeVisibility: in.CustomerTypeVisibility,
 		PointsDisplayEnabled:   in.PointsDisplayEnabled,
+		RewardPoints:           in.RewardPoints,
 		PrepMinutes:            in.PrepMinutes,
 		ImageURL:               imageURL,
 		Parcel:                 parcel,

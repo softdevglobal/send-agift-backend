@@ -2829,6 +2829,91 @@ bills them as a single session. The fields map straight onto `AddressInput`
 
 ---
 
+### 8.17 Points
+
+One append-only ledger (`finance.points_ledger`) records every change to anyone's points,
+customer or seller; the balances on `finance.points_accounts` and
+`finance.seller_points_accounts` are caches written in the same transaction. Nothing a
+client sends can set a balance.
+
+Every ledger entry comes back as:
+
+```json
+{
+  "id": "…", "entry_type": "product_reward", "category": "PRODUCT_PURCHASE",
+  "direction": "credit", "amount": 100, "amount_delta": 100,
+  "balance_before": 20, "balance_after": 120, "status": "completed",
+  "order_id": "…", "reference_type": "order_item", "reference_id": "…",
+  "description": "Purchased Wireless Headphones", "actor_type": "system",
+  "created_at": "…"
+}
+```
+
+| `category` | `entry_type`s |
+| --- | --- |
+| `PRODUCT_PURCHASE` | `product_reward`, `order_reward` |
+| `GIFT_REWARD` | `gift_points_received`, `prize_points`, `signup_bonus` |
+| `GIFT_SENT` | `gift_points_sent` |
+| `GAME_ENTRY` | `play_debit` |
+| `POINTS_PURCHASE` | `points_purchase` (seller) |
+| `REWARD_FUNDING` | `reward_funding` (seller) |
+| `REFUND` | `play_refund`, `order_reversal`, `product_reward_reversal`, `gift_points_returned`, `gift_points_reversal`, `reward_funding_return` |
+| `ADMIN_ADJUSTMENT` | `admin_grant`, `admin_deduction`, `correction` |
+
+**Customer** — `GET /customers/me/points` returns `balance`, `lifetime_earned`,
+`lifetime_spent`, `totals` (`from_purchases`, `from_gifts`, `from_prizes`,
+`spent_on_games`, `sent_as_gifts`) and the latest 100 `entries`.
+
+**Earning.** A product's `reward_points` (set by the seller, 0–1,000,000 per unit) are
+taken from the seller's points when the order is placed. With `POINTS_REWARD_TIMING=order`
+(the default while there is no payment step) they reach the customer straight away, and
+cancelling the order takes them back in full — refused with `409` once they have been
+spent. With `POINTS_REWARD_TIMING=delivery` they are held until the line is delivered. A seller who does not hold enough available points sells
+the line without a reward; public product reads show `reward_points: 0` in that case. A
+cancelled line gives the reservation back; a refund after payout takes the points back
+from the customer (only what they still hold) and returns them to the seller.
+
+**Gift points.** `POST /customers/me/orders` accepts `gift_points` (needs a
+`recipient_id` whose recipient has an email). They leave the sender's balance with the
+order (`400 INSUFFICIENT_POINTS` if they do not have them) and, on delivery, reach the
+customer account with the recipient's email — or come back to the sender if there is
+none, or if the order is cancelled. Orders carry `gift_points` and `gift_points_status`
+(`none | held | delivered | returned | reversed`); lines carry `reward_points_per_unit`,
+`reward_points` and `reward_status` (`none | reserved | awarded | released | reversed`).
+
+**Prizes.** A competition with `prize_type: "points"` and `prize_points: N` credits N
+points to each winner when a Super Admin validates them; nothing to claim or ship, and no
+money reserve is needed to schedule it.
+
+**Games.** Unchanged: a play's `points_per_attempt` is debited on the server inside the
+play transaction, refused with `INSUFFICIENT_POINTS` when the balance is short.
+
+All of the above except gift sending, prize validation and play debits is applied by the
+points job, which runs every minute (and on `POST /admin/points/earning-runs`). Every
+payout is keyed by what earned it, so a pass can repeat or overlap another without paying
+twice.
+
+**Sellers buying points** — at `POINTS_CENTS_PER_POINT` (default 10: **1 point = $0.10**).
+Until a card provider is connected the default provider is `instant`: a purchase is credited
+the moment it is made (`status: "completed"` in the create response).
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/sellers/me/points` | `balance`, `reserved` (promised on undelivered orders), `available`, `lifetime_purchased`, `lifetime_spent`, `rate`, `payment_provider`, `test_payments`, `entries` |
+| GET | `/sellers/me/points/purchases` | `{items: [...]}` newest first |
+| POST | `/sellers/me/points/purchases` | `{amount_cents}` or `{points}`, plus `idempotency_key` (or `Idempotency-Key` header). $1–$10,000, whole points. Returns the `pending` purchase; a retried key returns the same purchase |
+| POST | `/sellers/me/points/purchases/{purchaseID}/cancel` | pending → `cancelled` |
+| POST | `/sellers/me/points/purchases/{purchaseID}/test-payment` | `{outcome: "success" \| "failure"}` — completes a pending purchase; `403` unless `POINTS_PAYMENT_PROVIDER` is `instant` or `test` |
+| POST | `/payments/points/webhook` | Provider confirmation, `X-Points-Signature: <hex HMAC-SHA256 of the body>`. Body `{purchase_id, status: "succeeded" \| "failed", amount_cents, currency, provider_reference, failure_reason}` |
+| GET | `/admin/points/purchases?status=pending` | admin |
+| POST | `/admin/points/purchases/{purchaseID}/confirm` | superadmin + `X-Reauth-Token`; `{paid_amount_cents?, provider_reference?, note?}` |
+| POST | `/admin/points/purchases/{purchaseID}/fail` | superadmin + `X-Reauth-Token`; `{reason}` |
+
+Points are only credited when the payment is confirmed, worked out from the amount
+actually paid at the rate the purchase was quoted at. A purchase row is locked while it is
+completed, so confirmations sent twice (or at once) credit once, and one
+`provider_reference` can only ever complete one purchase.
+
 ## 9. Where each request/response struct lives
 
 Request bodies are decoded either into a private struct in the handler (when the HTTP shape
@@ -3047,7 +3132,8 @@ Message strings are exactly what the API returns, so they can be matched in test
 Documented so nobody rediscovers them the hard way:
 
 1. **No payment step.** Orders are created as `pending_payment` and nothing moves them to
-   `paid`. Sellers can accept regardless.
+   `paid`. Sellers can accept regardless. Points that ride on an order (product rewards, gift
+   points) are therefore paid on delivery, not on payment.
 2. **No inventory reservation at checkout.** `inventory.reserved_qty` and
    `unavailable_dates` exist but ordering neither decrements nor reserves stock.
 3. **Soft delete leaves data public.** `DELETE /sellers/me` sets `status = 'deleted'` on

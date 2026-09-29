@@ -51,6 +51,8 @@ func New(
 	competitions *handlers.CompetitionHandler,
 	// Handler instance that manages customers' points wallets
 	points *handlers.PointsHandler,
+	// Handler instance that manages sellers buying points
+	sellerPoints *handlers.SellerPointsHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
 	// Handler instance that proxies Google Places address lookups
@@ -157,6 +159,10 @@ func New(
 		// Skill competitions: live leaderboards, official attempts, winners, prize claims
 		// Example: GET /api/v1/competitions/{id}/leaderboard
 		RegisterCompetitionRoutes(r, competitions, points, jwtSecret)
+
+		// Sellers buying points, and the admin/webhook that confirm payment
+		// Example: POST /api/v1/sellers/me/points/purchases
+		RegisterSellerPointsRoutes(r, sellerPoints, jwtSecret)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload

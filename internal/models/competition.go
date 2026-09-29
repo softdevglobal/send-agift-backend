@@ -57,6 +57,8 @@ type Competition struct {
 	WinnerMethod       string `json:"winner_method"`
 	// Instant-win rounds: each play wins with probability 1 in WinOdds.
 	WinOdds *int `json:"win_odds,omitempty"`
+	// Points prizes: what each validated winner receives.
+	PrizePoints *int64 `json:"prize_points,omitempty"`
 	// Quiz rounds: the questions with their answers. Loaded only for admins;
 	// players get them without answers, one play at a time.
 	QuizQuestions         []games.QuizQuestion `json:"quiz_questions,omitempty"`
@@ -231,6 +233,7 @@ type CompetitionView struct {
 	// and nothing grows.
 	PrizeGrowthEnabled    bool   `json:"prize_growth_enabled"`
 	PrizeType             string `json:"prize_type"`
+	PrizePoints           *int64 `json:"prize_points,omitempty"`
 	StartPrizeCents       int64  `json:"start_prize_cents"`
 	CurrentPrizeCents     int64  `json:"current_prize_cents"`
 	IncrementPerPlayCents int64  `json:"increment_per_play_cents"`

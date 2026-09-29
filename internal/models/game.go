@@ -77,6 +77,8 @@ type GameView struct {
 	GameType    string          `json:"game_type"`
 	Version     string          `json:"version"`
 	Config      json.RawMessage `json:"config"`
+	// PlayCostPoints is what one play costs; 0 is free.
+	PlayCostPoints int64 `json:"play_cost_points"`
 }
 
 // GameSessionView is handed to the client when a play starts. The seed is what
@@ -90,6 +92,9 @@ type GameSessionView struct {
 	Config    json.RawMessage `json:"config"`
 	StartedAt time.Time       `json:"started_at"`
 	ExpiresAt time.Time       `json:"expires_at"`
+	// What this play cost and the balance it left, when it cost anything.
+	PointsCharged int64  `json:"points_charged,omitempty"`
+	PointsBalance *int64 `json:"points_balance,omitempty"`
 }
 
 // GameScoreView is the result of a submission.
