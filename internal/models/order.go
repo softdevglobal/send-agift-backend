@@ -65,10 +65,28 @@ type OrderItem struct {
 	Tracking *OrderItemTracking `json:"tracking,omitempty"`
 }
 
+// OrderShopDelivery maps to marketplace.order_shop_deliveries: the delivery the
+// customer chose and paid for one shop's parcel at checkout.
+type OrderShopDelivery struct {
+	ShopID   uuid.UUID `json:"shop_id"`
+	ShopName string    `json:"shop_name,omitempty"`
+	SellerID uuid.UUID `json:"seller_id"`
+	// "courier" or "seller_delivery".
+	Mode          string   `json:"mode"`
+	Provider      string   `json:"provider"`
+	ServiceName   string   `json:"service_name"`
+	Amount        int      `json:"amount"`
+	Currency      string   `json:"currency"`
+	EstimatedDays *int     `json:"estimated_days,omitempty"`
+	DistanceKm    *float64 `json:"distance_km,omitempty"`
+}
+
 // OrderDetails is an order header with its line items.
 type OrderDetails struct {
 	Order
 	Items []OrderItem `json:"items"`
+	// One entry per shop priced at checkout. A shop missing here is arranged later.
+	ShopDeliveries []OrderShopDelivery `json:"shop_deliveries"`
 }
 
 // SellerOrderItemSummary is a seller-scoped order line for list views.
@@ -77,6 +95,7 @@ type SellerOrderItemSummary struct {
 	OrderNumber     string    `json:"order_number"`
 	OrderStatus     string    `json:"order_status"`
 	DeliveryDate    time.Time `json:"delivery_date"`
+	ShopName        string    `json:"shop_name"`
 	ProductName     string    `json:"product_name"`
 	ProductSlug     string    `json:"product_slug"`
 	ProductImageURL *string   `json:"product_image_url,omitempty"`
@@ -86,8 +105,12 @@ type SellerOrderItemSummary struct {
 // SellerOrderItemDetails is a seller-scoped order line with order, product, and ship-to context.
 type SellerOrderItemDetails struct {
 	OrderItem
-	Order           Order             `json:"order"`
-	Product         Product           `json:"product"`
-	Recipient       *Recipient        `json:"recipient,omitempty"`
-	ShippingAddress *RecipientAddress `json:"shipping_address,omitempty"`
+	ShopName string `json:"shop_name"`
+	// What the customer paid to deliver this shop's parcel. Nil when the shop
+	// was not priced at checkout.
+	ShopDelivery    *OrderShopDelivery `json:"shop_delivery"`
+	Order           Order              `json:"order"`
+	Product         Product            `json:"product"`
+	Recipient       *Recipient         `json:"recipient,omitempty"`
+	ShippingAddress *RecipientAddress  `json:"shipping_address,omitempty"`
 }

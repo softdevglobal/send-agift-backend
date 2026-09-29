@@ -795,7 +795,7 @@ erDiagram
 | `delivery_date` | date | NOT NULL | requested delivery day |
 | `status` | text | DEFAULT `draft`, CHECK, indexed | see [17](#17-status-value-reference) |
 | `subtotal_amount` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | sum of line totals, computed server-side |
-| `delivery_amount` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | posted by the client today |
+| `delivery_amount` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | sum of `order_shop_deliveries.amount`, computed server-side from the per-shop quotes |
 | `total_amount` | integer | NOT NULL DEFAULT 0 CHECK ≥ 0 | subtotal + delivery |
 | `currency` | text | NOT NULL | taken from the items, which must agree |
 | `gift_message` | text | nullable | printed on the card |
@@ -823,6 +823,28 @@ becomes `delivered` when every line is `delivered` or `cancelled`.
 
 Because `product_id` has no `ON DELETE` clause, a product that appears on any order cannot
 be deleted — `DELETE /sellers/me/products/{id}` fails with a FK violation on sold products.
+
+### `marketplace.order_shop_deliveries`
+
+Migration `000046`. The delivery the customer chose and paid for each shop's parcel. One
+order can mix shops and sellers; every shop ships separately, so delivery is stored per shop.
+
+| Column | Type | Key / constraint | Notes |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `order_id` | uuid | **FK → `marketplace.orders(id)` ON DELETE CASCADE** | |
+| `shop_id` | uuid | **FK → `seller.shops(id)`**, UNIQUE with `order_id` | one row per shop per order |
+| `seller_id` | uuid | **FK → `seller.sellers(id)`**, indexed | |
+| `mode` | text | CHECK `courier`/`seller_delivery` | |
+| `provider`, `service_name` | text | NOT NULL DEFAULT `''` | courier picked, or `Seller delivery` / `Within N km` |
+| `amount` | integer | NOT NULL CHECK ≥ 0 | minor units |
+| `currency` | text | NOT NULL | always the order currency |
+| `estimated_days` | integer | nullable, CHECK ≥ 0 | seller delivery only |
+| `distance_km` | numeric | nullable, CHECK ≥ 0 | seller delivery only |
+| `created_at` | timestamptz | NOT NULL | |
+
+A shop with products on the order but no row here was not priced at checkout; its seller
+arranges delivery after the order.
 
 ---
 
