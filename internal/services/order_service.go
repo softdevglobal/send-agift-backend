@@ -51,7 +51,11 @@ type OrderItemInput struct {
 // OrderShippingQuoteInput is a checkout quote the client echoes back on place-order
 // so we can persist a pending marketplace.shipments row per shop.
 type OrderShippingQuoteInput struct {
-	ShopID           string `json:"shop_id"`
+	ShopID string `json:"shop_id"`
+	// Mode is "courier" (default) or "seller_delivery". For seller_delivery the
+	// price and days are recomputed from the shop's delivery zones; courier
+	// fields and amount in the body are ignored.
+	Mode             string `json:"mode"`
 	RateObjectID     string `json:"rate_object_id"`
 	ShipmentObjectID string `json:"shipment_object_id"`
 	Provider         string `json:"provider"`
@@ -194,6 +198,11 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		})
 	}
 
+	sellerDeliveries, err := s.priceSellerDeliveries(ctx, customerID, recipientID, quotesByShop)
+	if err != nil {
+		return nil, err
+	}
+
 	deliveryAmount := 0
 	if in.DeliveryAmount != nil {
 		if *in.DeliveryAmount < 0 {
@@ -235,11 +244,71 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		}
 	}
 
-	if err := s.persistCheckoutQuotes(ctx, order.ID, items, quotesByShop); err != nil {
+	if err := s.persistCheckoutQuotes(ctx, order.ID, items, quotesByShop, sellerDeliveries); err != nil {
 		return nil, err
 	}
 
 	return &models.OrderDetails{Order: *order, Items: items}, nil
+}
+
+// priceSellerDeliveries re-prices every shop the customer chose seller delivery for,
+// from the shop's delivery zones and the recipient's distance. The quote amount is
+// replaced with the server price so the order total can't be tampered with.
+func (s *OrderService) priceSellerDeliveries(
+	ctx context.Context,
+	customerID string,
+	recipientID *uuid.UUID,
+	quotesByShop map[string]OrderShippingQuoteInput,
+) (map[string]*SellerDeliveryOption, error) {
+	out := map[string]*SellerDeliveryOption{}
+	var shopIDs []uuid.UUID
+	for shopKey, q := range quotesByShop {
+		mode := strings.ToLower(strings.TrimSpace(q.Mode))
+		if mode == "" || mode == "courier" {
+			continue
+		}
+		if mode != SellerDeliveryModeName {
+			return nil, ErrInvalidOrder
+		}
+		sid, err := uuid.Parse(shopKey)
+		if err != nil {
+			return nil, ErrInvalidOrder
+		}
+		shopIDs = append(shopIDs, sid)
+	}
+	if len(shopIDs) == 0 {
+		return out, nil
+	}
+	if recipientID == nil || s.shipments == nil {
+		return nil, fmt.Errorf("%w: seller_delivery needs a recipient_id", ErrInvalidOrder)
+	}
+	to, err := s.shipments.ShipToForRecipient(ctx, customerID, recipientID.String())
+	if err != nil {
+		return nil, err
+	}
+	froms, err := s.shipments.ShipFromForShops(ctx, shopIDs)
+	if err != nil {
+		return nil, err
+	}
+	zones, err := s.shipments.DeliveryZonesForShops(ctx, shopIDs)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	for _, sid := range shopIDs {
+		from := froms[sid]
+		opt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zones[sid], now)
+		if !opt.Available {
+			return nil, fmt.Errorf("%w: %s", ErrOutsideDeliveryZone, opt.Reason)
+		}
+		key := sid.String()
+		q := quotesByShop[key]
+		q.Amount = opt.PriceAmount
+		q.Currency = opt.Currency
+		quotesByShop[key] = q
+		out[key] = opt
+	}
+	return out, nil
 }
 
 // persistCheckoutQuotes writes pending courier shipments from the selected
@@ -249,6 +318,7 @@ func (s *OrderService) persistCheckoutQuotes(
 	orderID uuid.UUID,
 	items []models.OrderItem,
 	quotesByShop map[string]OrderShippingQuoteInput,
+	sellerDeliveries map[string]*SellerDeliveryOption,
 ) error {
 	if s.shipments == nil || len(quotesByShop) == 0 {
 		return nil
@@ -257,6 +327,23 @@ func (s *OrderService) persistCheckoutQuotes(
 		item := &items[i]
 		q, ok := quotesByShop[item.ShopID.String()]
 		if !ok {
+			continue
+		}
+		if opt, isSeller := sellerDeliveries[item.ShopID.String()]; isSeller {
+			meta, _ := json.Marshal(map[string]any{"source": "checkout_quote", "mode": SellerDeliveryModeName})
+			itemID := item.ID
+			shipment := &models.Shipment{
+				OrderID:          orderID,
+				OrderItemID:      &itemID,
+				SellerID:         item.SellerID,
+				DeliveryMode:     "seller_managed",
+				Status:           "pending",
+				ProviderMetadata: meta,
+			}
+			opt.applyToShipment(shipment)
+			if err := s.shipments.UpsertQuote(ctx, shipment); err != nil {
+				return err
+			}
 			continue
 		}
 		meta, err := json.Marshal(map[string]any{

@@ -53,9 +53,26 @@ type Shop struct {
 	Status                  string     `json:"status"`
 	AddressID               *uuid.UUID `json:"address_id,omitempty"`
 	ReturnAddressID         *uuid.UUID `json:"return_address_id,omitempty"`
-	CreatedAt               time.Time  `json:"created_at"`
-	UpdatedAt               time.Time  `json:"updated_at"`
-	ImageURL                *string    `json:"image_url,omitempty"`
+	CreatedAt               time.Time          `json:"created_at"`
+	UpdatedAt               time.Time          `json:"updated_at"`
+	ImageURL                *string            `json:"image_url,omitempty"`
+	Latitude                *float64           `json:"latitude,omitempty"`
+	Longitude               *float64           `json:"longitude,omitempty"`
+	DeliveryZones           []ShopDeliveryZone `json:"delivery_zones"`
+}
+
+// ShopDeliveryZone is one local-delivery distance band (max_km → price).
+// PriceAmount 0 means free (IsFree is derived, not stored).
+type ShopDeliveryZone struct {
+	ID          uuid.UUID `json:"id"`
+	ShopID      uuid.UUID `json:"shop_id"`
+	MaxKm          float64   `json:"max_km"`
+	PriceAmount    int       `json:"price_amount"`
+	Currency       string    `json:"currency"`
+	IsFree         bool      `json:"is_free"`
+	EstimatedDays  int       `json:"estimated_days"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // SellerDetails is seller profile with addresses and shops.

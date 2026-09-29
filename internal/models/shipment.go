@@ -26,6 +26,13 @@ type Shipment struct {
 	ProviderCustomsID        *string         `json:"provider_customs_declaration_id,omitempty"`
 	ProviderTrackingURL      *string         `json:"provider_tracking_url,omitempty"`
 	ProviderMetadata         json.RawMessage `json:"provider_metadata,omitempty"`
+	// Seller delivery zone snapshot (local delivery / seller's own courier).
+	DistanceKm            *float64   `json:"distance_km,omitempty"`
+	ZoneMaxKm             *float64   `json:"zone_max_km,omitempty"`
+	PriceAmount           *int       `json:"price_amount,omitempty"` // minor units; 0 = free
+	Currency              *string    `json:"currency,omitempty"`
+	EstimatedDays         *int       `json:"estimated_days,omitempty"`
+	EstimatedDeliveryDate *time.Time `json:"estimated_delivery_date,omitempty"`
 	CreatedAt                time.Time       `json:"created_at"`
 	UpdatedAt                time.Time       `json:"updated_at"`
 }

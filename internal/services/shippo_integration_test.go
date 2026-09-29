@@ -36,6 +36,9 @@ func TestShippoInternationalCustomsFlow(t *testing.T) {
 			ValueAmount: "25.00", ValueCurrency: "USD", OriginCountry: "US",
 		}},
 	}
+	if err := validateCustomsInput(&customsInput, from.Country, to.Country, from.Name); err != nil {
+		t.Fatalf("validate customs: %v", err)
+	}
 	customs, err := client.CreateCustomsDeclaration(ctx, customsToShippo(customsInput))
 	if err != nil {
 		t.Fatalf("create customs: %v", err)

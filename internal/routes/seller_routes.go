@@ -32,6 +32,8 @@ func RegisterSellerRoutes(
 		r.Post("/sellers/me/shops", sellers.CreateShop)
 		r.Put("/sellers/me/shops/{id}", sellers.UpdateShop)
 		r.Delete("/sellers/me/shops/{id}", sellers.DeleteShop)
+		r.Get("/sellers/me/shops/{shopID}/delivery-zones", sellers.ListDeliveryZones)
+		r.Put("/sellers/me/shops/{shopID}/delivery-zones", sellers.ReplaceDeliveryZones)
 
 		r.Get("/sellers/me/shops/{shopID}/products", products.ListByShop)
 		r.Post("/sellers/me/shops/{shopID}/products", products.Create)

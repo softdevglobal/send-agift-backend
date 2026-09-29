@@ -13,7 +13,7 @@ exists, and request/response bodies. `README.md` is the Postman walkthrough;
   - [3.3 Feature → file map](#33-feature--file-map)
   - [3.4 Shared utilities and stubs](#34-shared-utilities-and-stubs)
   - [3.5 Per-API call chains (which file does what)](#35-per-api-call-chains-which-file-does-what)
-  - [3.6 Every endpoint → file call chain (all ~82)](#36-every-endpoint--file-call-chain-all-82)
+  - [3.6 Every endpoint → file call chain (all ~89)](#36-every-endpoint--file-call-chain-all-89)
 - [4. All APIs used and why](#4-all-apis-used-and-why)
   - [4.1 Internal APIs (our `/api/v1` routes)](#41-internal-apis-our-apiv1-routes)
   - [4.2 External HTTP / cloud APIs](#42-external-http--cloud-apis)
@@ -35,6 +35,7 @@ exists, and request/response bodies. `README.md` is the Postman walkthrough;
   - [8.10 Products and inventory](#810-products-and-inventory)
   - [8.11 Seller order items](#811-seller-order-items)
   - [8.12 Shipping (Shippo)](#812-shipping-shippo)
+  - [8.12a Shop delivery zones and delivery by shop](#812a-shop-delivery-zones-and-delivery-by-shop)
   - [8.13 Media (S3 presign)](#813-media-s3-presign)
   - [8.14 Reels](#814-reels)
   - [8.15 Public storefront browsing](#815-public-storefront-browsing)
@@ -173,6 +174,10 @@ Middleware used on those groups:
 | Reels + S3 files | `media_handler.go` → client PUT to S3 → `reel_service.go` → `reel_repository.go` + `media.media_assets` | Presign keeps the API off the upload bandwidth path; DB stores keys + `cdn_url` |
 | Product reviews | `product_review_*` + `media_handler` (`review-photo`) + `order_repository.GetItemForCustomer` | Verified purchase (delivered line); photos via `media.media_assets`; helpful votes |
 | Label PDF storage | `shipping_service.go` + `s3_service.Upload` + `media_repository.go` | Download Shippo PDF, store in S3, save `media_assets` row, link `shipments.label_media_id` |
+| Checkout delivery quote | `shipping_service.QuoteDelivery`, `shipment_repository` (`ShipFromForShops`, `ShipToForRecipient`, `DeliveryZonesForShops`), `order_repository.GetCheckoutProduct` | One Shippo quote per shop, parcel scaled by quantity (`parcelFromCheckoutProduct`, `scaleParcelForQuantity`, `mergeParcels`) |
+| Delivery by shop | `seller_delivery.go` (`buildSellerDeliveryOption`, `haversineKm`), `seller_service` zone CRUD, `seller_repository` (`ReplaceDeliveryZones`, `ListDeliveryZones`), `shipping_service` (`StartLocalDelivery`, `MarkShippedManually`) | Price a shop's own delivery from distance bands and keep the agreed snapshot on the shipment |
+| Customer courier lock | `order_service.persistCheckoutQuotes`, `shipping_service` (`parseCheckoutSelected`, `matchCheckoutRateObjectID`, `BuyLabel`) | The courier chosen at checkout is the one the seller buys, unless the customer agrees a change |
+| Product gallery + parcel | `product_service.go`, `product_repository.go`, `seller.product_media`, `media_handler` (`product-image`, `product-video`) | Ordered images/videos per product; one-unit parcel used for quotes |
 | Address autocomplete | `places_*` | API key stays on server; frontend only sees place_id / address fields |
 
 ### 3.4 Shared utilities and stubs
@@ -601,7 +606,7 @@ flowchart TB
 | Utils | `utils/*.go` | JWT, bcrypt, JSON helpers | Feature logic |
 | Models | `models/*.go` | Structs + `json` tags | Logic |
 
-### 3.6 Every endpoint → file call chain (all ~82)
+### 3.6 Every endpoint → file call chain (all ~89)
 
 **Honest answer:** §3.5 has diagrams for **feature families** (login, orders, shipping, …), not 82 separate mermaid charts — many endpoints share the exact same stack (e.g. all recipient routes use the same handler/service/repo).
 
@@ -698,8 +703,16 @@ Shared utils used when noted: `Hash` = `utils/hash.go`, `JWT` = `utils/jwt.go`.
 | 80 | GET | `/products/{productId}` | — | `marketplace_routes.go` | `shops_handler.GetProduct` | `shop_marketplace_service.GetPublishedProduct` | `product_repository` | `PublicProduct` |
 | 81 | GET | `/places/autocomplete` | RL | `places_routes.go` | `places_handler.Autocomplete` | `places_service.Autocomplete` | Google Places API | `{suggestions}` |
 | 82 | GET | `/places/details` | RL | `places_routes.go` | `places_handler.Details` | `places_service.Details` | Google Places API | `PlaceDetails` |
+| 83 | POST | `/customers/me/shipping/quote` | Auth + Role(customer) | `shipping_routes.go` | `shipping_handler.QuoteDelivery` | `shipping_service.QuoteDelivery` → `buildSellerDeliveryOption` | `shipment_repository` (`ShipToForRecipient`, `ShipFromForShops`, `DeliveryZonesForShops`) + `order_repository.GetCheckoutProduct` + Shippo | `DeliveryQuote` |
+| 84 | GET | `/sellers/me/shops/{shopID}/delivery-zones` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.ListDeliveryZones` | `seller_service.ListDeliveryZones` | `seller_repository.ListDeliveryZones` | `{zones: []ShopDeliveryZone}` |
+| 85 | PUT | `/sellers/me/shops/{shopID}/delivery-zones` | Auth + Role(seller) | `seller_routes.go` | `seller_handler.ReplaceDeliveryZones` | `seller_service.ReplaceDeliveryZones` → `normalizeDeliveryZones` | `seller_repository.ReplaceDeliveryZones` (one TX) | `{zones: []ShopDeliveryZone}` |
+| 86 | GET | `/sellers/me/order-items/{orderItemID}/shipping/label` | Auth + Role(seller) | `shipping_routes.go` | `shipping_handler.LabelURL` | `shipping_service.LabelURL` | `shipment_repository.GetLabelForSeller` + `s3_service.PresignGetURL` | `LabelLink` |
+| 87 | POST | `/sellers/me/order-items/{orderItemID}/shipping/manual` | Auth + Role(seller) | `shipping_routes.go` | `shipping_handler.MarkShippedManually` | `shipping_service.MarkShippedManually` | `shipment_repository.DispatchSellerManaged` | `Shipment` |
+| 88 | POST | `/sellers/me/order-items/{orderItemID}/shipping/local` | Auth + Role(seller) | `shipping_routes.go` | `shipping_handler.StartLocalDelivery` | `shipping_service.StartLocalDelivery` | `shipment_repository.DispatchSellerManaged` | `Shipment` |
+| 89 | POST | `/sellers/me/order-items/{orderItemID}/shipping/local/delivered` | Auth + Role(seller) | `shipping_routes.go` | `shipping_handler.CompleteLocalDelivery` | `shipping_service.CompleteLocalDelivery` | `shipment_repository.MarkLocalDelivered` | `Shipment` |
 
-**Count = 82** (matches every `r.Get/Post/Put/Patch/Delete` registered in `internal/routes` plus `/health`).
+**Count = 89** for the rows above. Reviews, messaging, reel social, games and competitions
+register more routes that this table does not list; see their own sections and route files.
 
 How to read one row (example #3 login):
 
@@ -808,7 +821,8 @@ ship-to, separate from the buyer’s own address book.
 
 | Method | Path | Auth | Files | Why included |
 | --- | --- | --- | --- | --- |
-| POST | `/customers/me/orders` | customer JWT | `order_handler.go`, `order_service.go`, `order_repository.go` | Place gift order; server prices from published products |
+| POST | `/customers/me/shipping/quote` | customer JWT | `shipping_handler.go`, `shipping_service.go`, `seller_delivery.go`, `shipment_repository.go`, `shippo_client.go` | Price delivery before ordering: courier options per shop plus the shop's own delivery price |
+| POST | `/customers/me/orders` | customer JWT | `order_handler.go`, `order_service.go`, `order_repository.go` | Place gift order; server prices from published products; `shipping_quotes[]` locks the chosen delivery per shop |
 | GET | `/customers/me/orders` | customer JWT | same | Order history (headers only) |
 | GET | `/customers/me/orders/{id}` | customer JWT | same | Order + line items |
 | POST | `/customers/me/orders/{id}/cancel` | customer JWT | same | Cancel while still allowed |
@@ -826,8 +840,10 @@ ship-to, separate from the buyer’s own address book.
 | DELETE | `/sellers/me/addresses/{id}` | seller JWT | same | Delete address (clears shop links first) |
 | GET | `/sellers/me/shops` | seller JWT | same | All own shops (any status, including draft) |
 | POST | `/sellers/me/shops` | seller JWT | same | Open another storefront |
-| PUT | `/sellers/me/shops/{id}` | seller JWT | same | Edit shop (name, slug, status, address ids) |
-| DELETE | `/sellers/me/shops/{id}` | seller JWT | same | Hard-delete shop (cascades products/reels) |
+| PUT | `/sellers/me/shops/{id}` | seller JWT | same | Edit shop (name, slug, status, address ids, lat/lng, delivery zones) |
+| DELETE | `/sellers/me/shops/{id}` | seller JWT | same | Hard-delete shop (cascades products/reels/delivery zones) |
+| GET | `/sellers/me/shops/{shopID}/delivery-zones` | seller JWT | same | Read the shop's delivery price bands |
+| PUT | `/sellers/me/shops/{shopID}/delivery-zones` | seller JWT | same | Replace every band in one call (`zones: []` clears them) |
 
 #### Products + inventory
 
@@ -848,8 +864,12 @@ ship-to, separate from the buyer’s own address book.
 | GET | `/sellers/me/order-items` | seller JWT | `seller_order_handler.go`, `order_service.go`, `order_repository.go` | Only this seller’s lines across orders |
 | GET | `/sellers/me/order-items/{id}` | seller JWT | same | Line + order + product + recipient + ship-to |
 | PATCH | `/sellers/me/order-items/{id}/accept` | seller JWT | same | `pending` → `accepted` (required before rates) |
-| POST | `/sellers/me/order-items/{orderItemID}/shipping/rates` | seller JWT | `shipping_handler.go`, `shipping_service.go`, `shippo_client.go`, `shipment_repository.go` | Quote carriers; store pending shipment + parcel/customs |
-| POST | `/sellers/me/order-items/{orderItemID}/shipping/labels` | seller JWT | same + `idempotency_repository.go`, `media_repository.go`, `s3_service.go` | Buy label, store PDF, mark item `dispatched` |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/rates` | seller JWT | `shipping_handler.go`, `shipping_service.go`, `shippo_client.go`, `shipment_repository.go` | Quote carriers for the line quantity; store pending shipment + customs; return shop delivery when in range |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/labels` | seller JWT | same + `idempotency_repository.go`, `media_repository.go`, `s3_service.go` | Buy label (customer courier lock enforced), store PDF, mark item `dispatched` |
+| GET | `/sellers/me/order-items/{orderItemID}/shipping/label` | seller JWT | same + `s3_service.go` | 10-minute presigned link to the label PDF |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/manual` | seller JWT | `shipping_handler.go`, `shipping_service.go`, `shipment_repository.go` | Record the seller's own courier + tracking number when no carrier quotes the lane |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/local` | seller JWT | same | Shop delivers it itself; only inside the shop's delivery zones |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/local/delivered` | seller JWT | same | Mark a shop delivery handed over; item → `delivered` |
 | POST | `/webhooks/shippo/tracking` | — (Shippo calls us) | `shipping_handler.go`, `shipping_service.go`, `shipment_repository.go` | Tracking updates; mark item/order delivered when complete |
 
 **Why order-item (not order) routes for sellers:** one customer order can include products
@@ -1194,6 +1214,7 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 | POST | `/customers/me/recipients/{id}/addresses` | `CustomerHandler.AddRecipientAddress` |
 | PUT | `/customers/me/recipients/{id}/addresses/{addressId}` | `CustomerHandler.UpdateRecipientAddress` |
 | DELETE | `/customers/me/recipients/{id}/addresses/{addressId}` | `CustomerHandler.DeleteRecipientAddress` |
+| POST | `/customers/me/shipping/quote` | `ShippingHandler.QuoteDelivery` |
 | POST | `/customers/me/orders` | `OrderHandler.Create` |
 | GET | `/customers/me/orders` | `OrderHandler.List` |
 | GET | `/customers/me/orders/{id}` | `OrderHandler.Get` |
@@ -1220,6 +1241,8 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 | POST | `/sellers/me/shops` | `SellerHandler.CreateShop` |
 | PUT | `/sellers/me/shops/{id}` | `SellerHandler.UpdateShop` |
 | DELETE | `/sellers/me/shops/{id}` | `SellerHandler.DeleteShop` |
+| GET | `/sellers/me/shops/{shopID}/delivery-zones` | `SellerHandler.ListDeliveryZones` |
+| PUT | `/sellers/me/shops/{shopID}/delivery-zones` | `SellerHandler.ReplaceDeliveryZones` |
 | GET | `/sellers/me/shops/{shopID}/products` | `ProductHandler.ListByShop` |
 | POST | `/sellers/me/shops/{shopID}/products` | `ProductHandler.Create` |
 | GET | `/sellers/me/products/{id}` | `ProductHandler.Get` |
@@ -1232,6 +1255,10 @@ Auth column: `—` public, `JWT` any valid token, `role` a required role claim.
 | PATCH | `/sellers/me/order-items/{id}/accept` | `SellerOrderHandler.AcceptItem` |
 | POST | `/sellers/me/order-items/{orderItemID}/shipping/rates` | `ShippingHandler.GetRates` |
 | POST | `/sellers/me/order-items/{orderItemID}/shipping/labels` | `ShippingHandler.BuyLabel` |
+| GET | `/sellers/me/order-items/{orderItemID}/shipping/label` | `ShippingHandler.LabelURL` |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/manual` | `ShippingHandler.MarkShippedManually` |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/local` | `ShippingHandler.StartLocalDelivery` |
+| POST | `/sellers/me/order-items/{orderItemID}/shipping/local/delivered` | `ShippingHandler.CompleteLocalDelivery` |
 | POST | `/sellers/me/shops/{shopID}/reels` | `ReelHandler.Create` |
 | GET | `/sellers/me/shops/{shopID}/reels` | `ReelHandler.ListByShop` |
 | POST | `/sellers/me/products/{productID}/reels` | `ReelHandler.CreateForProduct` |
@@ -1645,6 +1672,111 @@ Note the `{id}` in the DELETE is the **saved-gift id**, not the product id.
 
 ### 8.8 Customer orders
 
+#### `POST /customers/me/shipping/quote`
+
+Prices delivery for a cart before any order exists. Nothing is written to the database.
+
+```json
+{
+  "recipient_id": "63dce1d5-5cfe-4e46-9e51-d6cb2474dde4",
+  "delivery_date": "2026-09-30",
+  "items": [
+    { "product_id": "317ae580-1771-4cf1-b6d9-dad9eaf01b23", "quantity": 7 }
+  ]
+}
+```
+
+Lines are grouped by shop, and each shop is one parcel quoted with Shippo from the shop
+address to the recipient's default address. The parcel comes from `products.parcel_*`
+(or a default 20×15×10 cm, 1.2 kg box when a product has none) and is scaled by
+quantity: weight × quantity, and the smallest side × quantity so the units stack. Several
+products from one shop are merged into one box (largest sides, summed weight).
+
+Each shop also gets `seller_delivery`: the shop's own delivery priced from its
+[delivery zones](#812a-shop-delivery-zones-and-delivery-by-shop). `200`:
+
+```json
+{
+  "shops": [
+    {
+      "shop_id": "2dbc400f-…",
+      "shop_name": "Bay Area Gifts",
+      "shipment_object_id": "shippo-shipment-id",
+      "from": {
+        "name": "Bay Area Gifts",
+        "line1": "215 Clayton St",
+        "city": "San Francisco",
+        "region": "CA",
+        "postal_code": "94117",
+        "country": "US"
+      },
+      "options": [
+        {
+          "provider": "DHL Express",
+          "service_name": "Worldwide",
+          "amount": 3513,
+          "currency": "USD",
+          "estimated_days": 1,
+          "days_available": 1,
+          "recommended": true,
+          "rate_object_id": "shippo-rate-id",
+          "shipment_object_id": "shippo-shipment-id"
+        }
+      ],
+      "seller_delivery": {
+        "mode": "seller_delivery",
+        "available": true,
+        "distance_km": 4.45,
+        "max_km": 5,
+        "farthest_km": 10,
+        "price_amount": 5000,
+        "currency": "USD",
+        "is_free": false,
+        "estimated_days": 1,
+        "estimated_delivery_date": "2026-09-29"
+      }
+    }
+  ],
+  "shipments": [
+    {
+      "shop_id": "2dbc400f-…",
+      "shop_name": "Bay Area Gifts",
+      "mode": "courier",
+      "provider": "DHL Express",
+      "service_name": "Worldwide",
+      "amount": 3513,
+      "currency": "USD",
+      "estimated_days": 1,
+      "days_available": 1,
+      "misses_delivery_date": false,
+      "rate_object_id": "shippo-rate-id",
+      "shipment_object_id": "shippo-shipment-id"
+    }
+  ],
+  "amount": 3513,
+  "currency": "USD",
+  "complete": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `shops[].options` | every Shippo rate, cheapest first; `recommended` is the cheapest that meets `delivery_date` (else the fastest) |
+| `shops[].from` | the shop address the parcel leaves from (`COALESCE(return_address_id, address_id)`); omitted when the shop has none |
+| `shops[].seller_delivery` | shop delivery for this recipient; `available: false` carries a `reason` |
+| `shipments[]` | one recommended pick per shop, used as the default selection |
+| `amount` | sum of `shipments[]`, minor units |
+| `complete` | `false` when a shop has no courier rate **and** no shop delivery; see `unquoted[]` |
+
+When no carrier quotes a shop's lane, the shop is still listed with `options: []`. If the
+recipient is inside the shop's zones, `seller_delivery` becomes the recommended pick and
+`complete` stays `true`.
+
+All amounts are minor units: `5000` is $50.00.
+
+Errors: `400` when the recipient has no street, city, or country; `404` for an unknown
+recipient; `400 invalid request` for an empty `items` list or unknown product.
+
 #### `POST /customers/me/orders`
 
 The server prices the order — you send products and quantities, never amounts.
@@ -1660,9 +1792,32 @@ The server prices the order — you send products and quantities, never amounts.
   "delivery_amount": 1200,
   "items": [
     { "product_id": "317ae580-1771-4cf1-b6d9-dad9eaf01b23", "quantity": 2 }
+  ],
+  "shipping_quotes": [
+    {
+      "shop_id": "d40b…",
+      "mode": "courier",
+      "rate_object_id": "shippo-rate-id",
+      "shipment_object_id": "shippo-shipment-id",
+      "provider": "USPS",
+      "service_name": "Priority Mail",
+      "amount": 4633,
+      "currency": "USD"
+    },
+    { "shop_id": "a91c…", "mode": "seller_delivery", "amount": 5000, "currency": "USD" }
   ]
 }
 ```
+
+`shipping_quotes[]` is optional and holds one choice per shop from the quote:
+
+- `mode: "courier"` saves a pending shipment with the chosen provider and service. That
+  locks the courier: the seller's label purchase must use it unless the customer agrees a
+  change in chat.
+- `mode: "seller_delivery"` re-prices from the shop's zones on the server (the body
+  `amount` is ignored) and saves a pending `seller_managed` shipment with the distance,
+  band, price, and days. It needs `recipient_id`, and fails with `400 recipient is outside
+  the shop's delivery zones: …` if the recipient is out of range.
 
 For each line the service snapshots the live product, so a later price change cannot alter
 a placed order. It rejects the call unless the product is `published`, its shop is
@@ -1707,7 +1862,8 @@ a placed order. It rejects the call unless the product is `published`, its shop 
 }
 ```
 
-Errors: `400 items required; delivery_date YYYY-MM-DD; customer_type personal or corporate`,
+Errors: `400 items required; delivery_date YYYY-MM-DD; customer_type personal or corporate; shipping_quotes[].mode courier|seller_delivery (seller_delivery needs recipient_id)`,
+`400 recipient is outside the shop's delivery zones: …`,
 `400 product not found, not published, or shop is not active`,
 `400 product is not available for this customer_type`,
 `400 all items must use the same currency`, `404 recipient not found`.
@@ -1821,7 +1977,66 @@ DELETE /sellers/me/shops/{id}    → { "message": "shop deleted" }
 `POST`/`PUT` body is the `shop` object from registration. `address_id` is the ship-from
 address; `return_address_id` overrides it for returns, and shipping prefers
 `return_address_id` when both are set. Only `status: "active"` shops appear in the public
-`GET /shops`, and `DELETE` is a hard delete that cascades to products and reels.
+`GET /shops`, and `DELETE` is a hard delete that cascades to products, reels, and
+delivery zones.
+
+Two optional groups on the same body power delivery by shop:
+
+```json
+{
+  "name": "Bay Area Gifts",
+  "address_id": "5c31…",
+  "latitude": 37.7749,
+  "longitude": -122.4194,
+  "delivery_zones": [
+    { "max_km": 3,  "price_amount": 0,    "currency": "USD", "estimated_days": 0 },
+    { "max_km": 5,  "price_amount": 5000, "currency": "USD", "estimated_days": 1 },
+    { "max_km": 10, "price_amount": 8000, "currency": "USD", "estimated_days": 2 }
+  ]
+}
+```
+
+- `latitude` / `longitude` pin the shop. Send both or neither (−90..90, −180..180). When
+  unset, distance is measured from the ship-from address's own coordinates, which the
+  frontend fills from Google Places.
+- `delivery_zones` on `PUT` **replaces** every band when present (`[]` clears them) and
+  leaves them untouched when omitted. Each band needs `max_km > 0`, `price_amount ≥ 0`
+  (minor units, `0` is free), a known `currency`, and whole `estimated_days ≥ 0` (`0` is
+  same day). Two bands cannot share a `max_km`.
+
+Every `Shop` response carries `latitude`, `longitude` (when set) and `delivery_zones`
+sorted nearest first:
+
+```json
+"delivery_zones": [
+  {
+    "id": "8b1e…",
+    "shop_id": "2dbc400f…",
+    "max_km": 5,
+    "price_amount": 5000,
+    "currency": "USD",
+    "is_free": false,
+    "estimated_days": 1,
+    "created_at": "2026-09-28T06:10:00Z",
+    "updated_at": "2026-09-28T06:10:00Z"
+  }
+]
+```
+
+`400 shop name is required; latitude and longitude must be sent together (-90..90, -180..180); delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day)`
+covers every invalid shop or band; `400 currency must be a known ISO currency code` for an
+unknown band currency.
+
+#### Delivery zones only
+
+```
+GET /sellers/me/shops/{shopID}/delivery-zones   → { "zones": []ShopDeliveryZone }
+PUT /sellers/me/shops/{shopID}/delivery-zones   → { "zones": []ShopDeliveryZone }
+```
+
+`PUT` body is `{ "zones": [ …bands as above… ] }` and replaces the whole list in one
+transaction. Use it to edit bands without resending the rest of the shop. `404 shop not
+found` if the shop is not yours.
 
 ### 8.10 Products and inventory
 
@@ -1854,7 +2069,37 @@ Inventory can be created inline:
 
 `status` ∈ `draft | published | paused | rejected`; `customer_type_visibility` ∈
 `personal | corporate | both`; `price_amount` and `prep_minutes` must be ≥ 0; `currency`
-must be a known ISO code. `201` returns `ProductDetails` (product + `inventory`):
+must be a known ISO code.
+
+Two more optional fields on create and update:
+
+```json
+{
+  "parcel": {
+    "length": "20", "width": "15", "height": "10", "distance_unit": "cm",
+    "weight": "1.2", "mass_unit": "kg"
+  },
+  "media": [
+    { "object_path": "public/products/images/…-front.jpg", "mime_type": "image/jpeg", "size_bytes": 184233 },
+    { "object_path": "public/products/videos/…-unbox.mp4", "mime_type": "video/mp4", "size_bytes": 5242880 }
+  ]
+}
+```
+
+- `parcel` is **one unit's** box. Checkout and seller rates multiply it by the ordered
+  quantity (see the quote endpoint). The API accepts a product without it and falls back
+  to a default box; the web app requires it so quotes are real.
+- `media` is the ordered gallery, uploaded first through `POST /media/presign-upload` with
+  folder `product-image` (`public/products/images`) or `product-video`
+  (`public/products/videos`). Up to 12 files, each `image/*` or `video/*`. On `PUT`,
+  omitting `media` keeps the gallery, `[]` clears it, and a list replaces it.
+- `image_url` stays the cover for lists and orders. When it is omitted, the first image in
+  `media` becomes the cover.
+
+`201` returns `ProductDetails` (product + `inventory`, plus `parcel` and `media[]` when
+set). Each `media[]` entry has `media_asset_id`, `position`, `asset_type`
+(`image`/`video`), `object_path`, `cdn_url`, `mime_type`, and `size_bytes`. The public
+`GET /products/{productId}` returns the same `parcel` and `media[]`:
 
 ```json
 {
@@ -1885,6 +2130,8 @@ must be a known ISO code. `201` returns `ProductDetails` (product + `inventory`)
 ```
 
 `409 product slug already exists for this shop` — slugs are unique per shop, not globally.
+`400 name, currency required; status draft|published|paused|rejected; visibility personal|corporate|both; amounts >= 0; media max 12 image/video files with object_path+mime_type`
+for any invalid field, including the gallery.
 
 #### The rest
 
@@ -1932,8 +2179,11 @@ for shipping — rates are refused unless the item is `accepted`, `preparing`, o
 
 ### 8.12 Shipping (Shippo)
 
-Two seller calls plus one provider callback. Both seller routes are keyed by
-`order_item_id`, and both write to the same `marketplace.shipments` row.
+Rates and label purchase plus one provider callback, with a label download and a manual
+fallback. Every seller route is keyed by `order_item_id` and writes the same
+`marketplace.shipments` row. Delivery by the shop itself is in
+[8.12a](#812a-shop-delivery-zones-and-delivery-by-shop); the customer's checkout quote is
+in [8.8](#88-customer-orders).
 
 #### `POST /sellers/me/order-items/{orderItemID}/shipping/rates`
 
@@ -1971,8 +2221,16 @@ entirely for domestic.
 ```
 
 International is decided by comparing ship-from and ship-to ISO2 codes, and then both
-`parcel` and `customs_declaration` are mandatory. Whatever you post is stored on the
-pending shipment row, so a retry can omit it. `200`:
+`parcel` and `customs_declaration` are mandatory. Customs is stored on the pending
+shipment row, so a retry can omit it. Missing `eel_pfc` is filled in (`NOEEI_30_36` for
+US → CA, `NOEEI_30_37_a` otherwise) and `incoterm` defaults to `DDU`.
+
+**Parcel and quantity.** Without a `parcel` body the product's `parcel_*` is used. The
+product parcel, and a posted parcel that equals it, are treated as one unit and scaled
+to the order item's `quantity` (weight × qty, smallest side × qty). A posted parcel that
+differs from the product is sent to Shippo exactly as typed.
+
+`200`:
 
 ```json
 {
@@ -1989,13 +2247,51 @@ pending shipment row, so a retry can omit it. `200`:
       "duration_terms": "6 to 10 days",
       "service_name": "Priority Mail International"
     }
-  ]
+  ],
+  "checkout_selected": {
+    "provider": "USPS",
+    "service_name": "Priority Mail International",
+    "amount": 2845,
+    "amount_major": "28.45",
+    "currency": "USD"
+  },
+  "recommended_rate_object_id": "299a3ab049a541d8a56fc668f531cec5",
+  "must_buy_customer_courier": true,
+  "customer_delivery_amount": 2845,
+  "currency": "USD",
+  "customer_selected_mode": "courier",
+  "seller_delivery": {
+    "mode": "seller_delivery",
+    "available": false,
+    "reason": "recipient is 16021.40 km away; the farthest delivery zone is 10.00 km",
+    "distance_km": 16021.4,
+    "farthest_km": 10,
+    "price_amount": 0,
+    "is_free": false,
+    "estimated_days": 0
+  }
 }
 ```
 
+| Field | Meaning |
+| --- | --- |
+| `rates[].amount` | major-unit string from Shippo (`"28.45"`), unlike every other amount |
+| `checkout_selected` | the courier the customer picked at checkout, if any |
+| `recommended_rate_object_id` | the fresh rate matching that courier by provider + service name; checkout rate ids expire, so buy with this one |
+| `must_buy_customer_courier` | `true` when checkout locked a courier; label purchase then refuses any other rate |
+| `customer_delivery_amount` | what the customer was charged for delivery (minor units) |
+| `customer_selected_mode` | `courier`, `seller_delivery`, or `""` |
+| `seller_delivery` | shop delivery for this recipient, same shape as the checkout quote |
+| `carrier_rates_error` | set when Shippo returned nothing but shop delivery is still available |
+
+When no carrier can quote the lane (or Shippo is not configured) and the recipient is
+inside the shop's zones, the call still succeeds with `rates: []`, `seller_delivery`, and
+`carrier_rates_error` — the seller then uses `…/shipping/local`.
+
 Errors: `409 order item is not ready for shipping`, `400` with the missing-address detail,
 `400 parcel is required for international shipments`, `502` with the carrier's own text,
-`503 shipping provider not configured` when `SHIPPO_API_KEY` is unset.
+`503 shipping provider not configured` when `SHIPPO_API_KEY` is unset (and no shop
+delivery is available).
 
 #### `POST /sellers/me/order-items/{orderItemID}/shipping/labels`
 
@@ -2007,8 +2303,19 @@ Errors: `409 order item is not ready for shipping`, `400` with the missing-addre
 }
 ```
 
-Pick a `rate_object_id` from the rates response. `idempotency_key` must be unique per real
-purchase: the key is claimed in `core.idempotency_keys` before Shippo is called, and
+Pick a `rate_object_id` from the rates response. When `must_buy_customer_courier` is
+`true`, send this instead and the server buys the locked courier from the latest rates:
+
+```json
+{ "use_customer_selected": true, "idempotency_key": "label-60fca39c-1727501234" }
+```
+
+Sending any other courier while the lock is on returns
+`409 use the customer-selected courier, or message the customer to agree a change first`.
+Call `/shipping/rates` again first if the rates are old — Shippo rotates rate ids on
+every quote.
+
+`idempotency_key` must be unique per real purchase: the key is claimed in `core.idempotency_keys` before Shippo is called, and
 replaying it returns the stored shipment instead of buying a second label. The label PDF
 is downloaded from Shippo, uploaded to S3, and recorded as a `media.media_assets` row of
 `asset_type = 'label'`, whose id lands on `shipments.label_media_id`. The order item moves
@@ -2038,6 +2345,40 @@ The response is the patch that was applied, not a re-read of the row, so `order_
 `delivery_mode`, and the timestamps are zero values here. Fetch the order item to see
 committed state.
 
+#### `GET /sellers/me/order-items/{orderItemID}/shipping/label`
+
+Labels live in a private bucket. This returns a presigned link valid for 10 minutes:
+
+```json
+{
+  "url": "https://bucket.s3.amazonaws.com/labels/…label.pdf?X-Amz-…",
+  "mime_type": "application/pdf",
+  "expires_in_seconds": 600,
+  "tracking_number": "CA004982114US",
+  "provider": "USPS"
+}
+```
+
+`404 no shipping label has been bought for this order item` before a label is bought.
+
+#### `POST /sellers/me/order-items/{orderItemID}/shipping/manual`
+
+For a lane no connected carrier quotes. The seller ships with their own courier:
+
+```json
+{
+  "courier_provider": "Kandy Express Couriers",
+  "tracking_number": "KEC-000123",
+  "tracking_url": "https://kandyexpress.lk/track/KEC-000123",
+  "estimated_days": 2
+}
+```
+
+`courier_provider` and `tracking_number` are required. `estimated_days` is optional and
+defaults to the matched zone's days. Creates a `seller_managed` shipment at `in_transit`,
+drops the pending quote, and moves the item to `dispatched`. Distance and zone are
+recorded but not enforced, since a courier can go past the zones. `201 Shipment`.
+
 #### `POST /webhooks/shippo/tracking` (public)
 
 ```json
@@ -2060,6 +2401,74 @@ Any `event` other than `track_updated` is acknowledged and ignored. Statuses map
 
 This endpoint has no signature verification — anyone who knows a tracking number can post
 to it.
+
+### 8.12a Shop delivery zones and delivery by shop
+
+A shop can deliver gifts itself within set distances, priced by band. For example:
+3 km free, 5 km $50, 10 km $80.
+
+**How the price is found.** The server measures the straight-line (haversine) distance
+from the shop to the recipient, rounded to two decimals, and picks the smallest band whose
+`max_km` covers it.
+
+- *From*: `shops.latitude/longitude`, else the ship-from address's coordinates.
+- *To*: the recipient's default address coordinates, saved from Google Places.
+
+A recipient 4.45 km away matches the 5 km band, so `price_amount` is `5000`. Past the
+farthest band, `available` is `false` and `reason` says how far off it is. With no
+bands, or either point missing coordinates, `available` is `false` with a matching
+`reason`, and nothing is blocked.
+
+| Where it appears | What happens |
+| --- | --- |
+| `POST /customers/me/shipping/quote` | `shops[].seller_delivery` next to the courier options |
+| `POST /customers/me/orders` | `shipping_quotes[].mode = "seller_delivery"` re-prices on the server and saves a pending `seller_managed` shipment with the snapshot |
+| `POST …/shipping/rates` | `seller_delivery` in the response, even when Shippo returns nothing |
+| `POST …/shipping/local` | starts the delivery; refused outside the zones |
+| `POST …/shipping/manual` | records the zone snapshot but does not enforce it |
+
+The snapshot — `distance_km`, `zone_max_km`, `price_amount`, `currency`,
+`estimated_days`, `estimated_delivery_date` — is stored on the shipment. If the customer
+picked shop delivery at checkout, the agreed price and days are kept even if the seller
+edits the bands later.
+
+#### `POST /sellers/me/order-items/{orderItemID}/shipping/local`
+
+Optional body `{ "note": "Delivering by bike this afternoon" }`. The item must be
+`accepted`, `preparing`, or `ready`. When the shop has bands and both points have
+coordinates, the recipient must be inside them, else
+`409 recipient is outside the shop's delivery zones: recipient is 22.24 km away; the farthest delivery zone is 10.00 km`.
+
+Creates a `seller_managed` shipment (`courier_provider = "Local delivery"`, no tracking
+number, status `in_transit`), removes the pending quote, and sets the item to
+`dispatched`, all in one transaction. `201`:
+
+```json
+{
+  "id": "4e0b…",
+  "order_id": "c7f9…",
+  "order_item_id": "60fca39c…",
+  "seller_id": "77aa…",
+  "courier_provider": "Local delivery",
+  "delivery_mode": "seller_managed",
+  "status": "in_transit",
+  "distance_km": 4.45,
+  "zone_max_km": 5,
+  "price_amount": 5000,
+  "currency": "USD",
+  "estimated_days": 1,
+  "estimated_delivery_date": "2026-09-29T00:00:00Z",
+  "provider_metadata": { "type": "local_delivery", "seller_delivery": { "…": "…" } }
+}
+```
+
+#### `POST /sellers/me/order-items/{orderItemID}/shipping/local/delivered`
+
+No body. The item must be `dispatched` and its latest shipment `seller_managed`. Sets the
+shipment and item to `delivered` with `delivered_at = now()`, and the order header to
+`delivered` once every item is delivered or cancelled. `200 Shipment`; `400 invalid
+request` for a courier parcel, `409 order item is not ready for shipping` if it was never
+started.
 
 ### 8.13 Media (S3 presign)
 
@@ -2387,15 +2796,18 @@ always `internal/models` types.
 | Any address | `services.AddressInput` | `internal/services/customer_service.go` |
 | Recipients | `services.RecipientInput` | `internal/services/customer_service.go` |
 | Saved gifts | `savedGiftRequest` | `internal/handlers/customer_handler.go` |
-| Orders | `services.OrderCreateInput`, `OrderItemInput` | `internal/services/order_service.go` |
+| Orders | `services.OrderCreateInput`, `OrderItemInput`, `OrderShippingQuoteInput` | `internal/services/order_service.go` |
+| Checkout quote | `services.DeliveryQuoteInput`, `QuoteLineInput` | `internal/services/shipping_service.go` |
 | Seller register/update | `sellerRegisterRequest`, `sellerUpdateRequest` → `services.SellerRegisterInput`, `SellerUpdateInput` | `internal/handlers/seller_handler.go`, `internal/services/seller_service.go` |
 | Seller address | `services.SellerAddressInput` | `internal/services/seller_service.go` |
-| Shops | `services.ShopInput` | `internal/services/seller_service.go` |
-| Products / inventory | `services.ProductInput`, `InventoryInput` | `internal/services/product_service.go` |
+| Shops | `services.ShopInput`, `DeliveryZoneInput` | `internal/services/seller_service.go` |
+| Delivery zones | `services.DeliveryZonesReplaceInput` | `internal/services/seller_service.go` |
+| Products / inventory | `services.ProductInput`, `ProductMediaInput`, `InventoryInput`, `models.ProductParcel` | `internal/services/product_service.go`, `internal/models/product.go` |
 | Reels | `services.ReelInput`, `ReelMediaInput` | `internal/services/reel_service.go` |
 | Reel feed params | `services.ReelFeedFilter` | `internal/services/reel_service.go` |
 | Shipping rates | `services.ShippingShipmentInput`, `ParcelInput`, `CustomsDeclarationInput`, `CustomsItemInput` | `internal/services/shipping_inputs.go` |
 | Shipping labels | `buyLabelRequest` → `services.BuyLabelInput` | `internal/handlers/shipping_handler.go`, `internal/services/shipping_service.go` |
+| Manual / local delivery | `services.ManualShipmentInput`, `LocalDeliveryInput` | `internal/services/shipping_service.go` |
 | Shippo webhook | `shippoWebhookPayload` | `internal/services/shipping_service.go` |
 | Media presign | `presignUploadRequest` | `internal/handlers/media_handler.go` |
 | Places | `services.AutocompleteParams` (from query string) | `internal/services/places_service.go` |
@@ -2410,13 +2822,16 @@ always `internal/models` types.
 | Customer | `models.Customer`, `CustomerAddress`, `CustomerDetails` | `internal/models/customer.go` |
 | Saved gift | `models.SavedGift`, `SavedGiftDetails` | `internal/models/customer.go` |
 | Recipient | `models.Recipient`, `RecipientAddress`, `RecipientDetails` | `internal/models/recipient.go` |
-| Seller | `models.Seller`, `SellerAddress`, `Shop`, `SellerDetails` | `internal/models/seller.go` |
-| Product | `models.Product`, `Inventory`, `ProductDetails`, `ProductShopSummary`, `PublicProduct` | `internal/models/product.go` |
+| Seller | `models.Seller`, `SellerAddress`, `Shop`, `ShopDeliveryZone`, `SellerDetails` | `internal/models/seller.go` |
+| Product | `models.Product`, `ProductParcel`, `ProductMediaItem`, `Inventory`, `ProductDetails`, `ProductShopSummary`, `PublicProduct` | `internal/models/product.go` |
 | Order | `models.Order`, `OrderItem`, `OrderDetails`, `SellerOrderItemSummary`, `SellerOrderItemDetails` | `internal/models/order.go` |
 | Reel | `models.Reel`, `ReelMediaItem`, `ReelShopSummary`, `ReelProductSummary`, `ReelDetails`, `ReelFeed` | `internal/models/reel.go` |
 | Media asset | `models.MediaAsset` | `internal/models/media_asset.go` |
 | Shipment | `models.Shipment` | `internal/models/shipment.go` |
-| Rates | `services.ShippingRatesResult`, `ShippoRate` | `internal/services/shipping_service.go`, `shippo_client.go` |
+| Rates | `services.ShippingRatesResult`, `CheckoutSelectedRate`, `ShippoRate` | `internal/services/shipping_service.go`, `shippo_client.go` |
+| Checkout quote | `services.DeliveryQuote`, `QuotedShopDelivery`, `QuotedPostalAddress`, `QuotedDeliveryOption`, `QuotedShipment` | `internal/services/shipping_service.go` |
+| Shop delivery | `services.SellerDeliveryOption` | `internal/services/seller_delivery.go` |
+| Label link | `services.LabelLink` | `internal/services/shipping_service.go` |
 | Presign | `presignUploadResponse` | `internal/handlers/media_handler.go` |
 | Places | `services.PlaceSuggestion`, `PlaceDetails` | `internal/services/places_service.go` |
 
@@ -2463,18 +2878,32 @@ sequenceDiagram
     participant API
     participant Sel as Seller
     participant Shippo
-    Cust->>API: POST /customers/me/orders
-    API-->>Cust: order pending_payment, items pending
+    Cust->>API: POST /customers/me/shipping/quote
+    API->>Shippo: one parcel per shop (scaled by quantity)
+    API-->>Cust: courier options + seller_delivery per shop
+    Cust->>API: POST /customers/me/orders (shipping_quotes[])
+    API-->>Cust: order pending_payment, pending shipment per line
     Sel->>API: GET /sellers/me/order-items
     Sel->>API: PATCH /order-items/{id}/accept
     Sel->>API: POST /order-items/{id}/shipping/rates
     API->>Shippo: shipment (+ customs if international)
-    Sel->>API: POST /order-items/{id}/shipping/labels
-    API->>Shippo: buy label
-    API-->>Sel: label_created, item dispatched
-    Shippo->>API: POST /webhooks/shippo/tracking (DELIVERED)
+    API-->>Sel: rates, customer courier lock, seller_delivery
+    alt courier
+        Sel->>API: POST /order-items/{id}/shipping/labels
+        API->>Shippo: buy label
+        API-->>Sel: label_created, item dispatched
+        Shippo->>API: POST /webhooks/shippo/tracking (DELIVERED)
+    else delivery by shop
+        Sel->>API: POST /order-items/{id}/shipping/local
+        API-->>Sel: in_transit, item dispatched
+        Sel->>API: POST /order-items/{id}/shipping/local/delivered
+    end
     API-->>API: item delivered; order delivered only if all items resolved
 ```
+
+The customer's choice at checkout carries through. A courier pick locks label purchase to
+that provider and service. A shop-delivery pick stores the agreed price and days, and
+`/shipping/local` keeps them.
 
 ### 10.4 Multi-seller completion
 
@@ -2528,14 +2957,14 @@ Message strings are exactly what the API returns, so they can be matched in test
 | 409 | `product already saved` | saved gifts |
 | 400 | `invalid or missing product_id` | saved gifts |
 | 404 | `saved gift not found` | saved gifts |
-| 400 | `shop name is required` | shop write |
+| 400 | `shop name is required; latitude and longitude …` (full text below) | shop write |
 | 409 | `shop slug already exists` | shop write |
 | 404 | `shop not found` | shop, product, reel routes |
-| 400 | `name, currency required; status must be draft\|published\|paused\|rejected; visibility personal\|corporate\|both; amounts >= 0` | product write |
+| 400 | `name, currency required; status draft\|published\|paused\|rejected; visibility personal\|corporate\|both; amounts >= 0; media max 12 image/video files with object_path+mime_type` | product write |
 | 400 | `qty fields must be >= 0; unavailable_dates must be YYYY-MM-DD` | inventory write |
 | 409 | `product slug already exists for this shop` | product write |
 | 404 | `product not found` / `inventory not found` | product routes |
-| 400 | `items required; delivery_date YYYY-MM-DD; customer_type personal or corporate` | order create |
+| 400 | `items required; delivery_date YYYY-MM-DD; customer_type personal or corporate; shipping_quotes[].mode courier\|seller_delivery (seller_delivery needs recipient_id)` | order create |
 | 400 | `product not found, not published, or shop is not active` | order create |
 | 400 | `product is not available for this customer_type` | order create |
 | 400 | `all items must use the same currency` | order create |
@@ -2551,6 +2980,12 @@ Message strings are exactly what the API returns, so they can be matched in test
 | 503 | `shipping provider not configured` | shipping |
 | 409 | `order item is not ready for shipping` | shipping |
 | 502 | carrier text passed through | shipping |
+| 409 | `use the customer-selected courier, or message the customer to agree a change first` | label purchase with a locked courier |
+| 409 | `recipient is outside the shop's delivery zones: …` | `…/shipping/local` |
+| 400 | `recipient is outside the shop's delivery zones: …` | order create with `mode: seller_delivery` |
+| 404 | `no shipping label has been bought for this order item` | `GET …/shipping/label` |
+| 400 | `shop name is required; latitude and longitude must be sent together (-90..90, -180..180); delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day)` | shop write, delivery-zones `PUT` |
+| 400 | `currency must be a known ISO currency code` | shop write (band currency), product write |
 | 404 | `place not found` | places |
 
 ---
@@ -2582,3 +3017,13 @@ Documented so nobody rediscovers them the hard way:
     `internal/services/verification_service.go`, `internal/repository/user_repository.go`,
     `internal/services/email_service.go`, and `internal/models/user.go` contain only a
     package clause — there is no verification or email feature yet.
+11. **Shop delivery distance is a straight line.** Bands are matched on haversine
+    distance, not road distance, so a river or motorway can make the real trip longer.
+12. **Shop delivery needs coordinates.** An address typed without a Google Places pick
+    has no latitude/longitude, so `seller_delivery` comes back `available: false` and the
+    shop can only use couriers or `…/shipping/manual`.
+13. **Quantity boxes are estimates.** Multiple units are quoted as one box with the
+    smallest side stacked. A seller packing differently should post their own `parcel` on
+    `…/shipping/rates`.
+14. **Checkout rate ids expire.** Never buy with `checkout_selected.rate_object_id`; call
+    `…/shipping/rates` and use `recommended_rate_object_id` or `use_customer_selected`.
