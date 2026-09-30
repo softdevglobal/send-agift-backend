@@ -14,10 +14,9 @@ import (
 	"myapp/internal/repository"
 )
 
-// Integration tests for orders that mix shops and sellers: checkout pricing
-// per shop, what each seller sees, and that shipping one shop's parcel never
-// touches another shop's products. Shippo is disabled (no API key), so these
-// run offline; seller delivery zones stand in for a carrier.
+// Integration tests for orders that mix shops and sellers: each shop is priced
+// from its delivery zones, and shipping one shop's parcel never touches
+// another shop's products.
 //
 //	TEST_DATABASE_URL=postgres://user:pass@localhost:5432/scratch_db?sslmode=disable \
 //	    go test ./internal/services -run MultiShop -v
@@ -89,8 +88,7 @@ func newMultiShopFixture(t *testing.T) *multiShopFixture {
 	shipments := repository.NewShipmentRepository(pool)
 	orderRepo := repository.NewOrderRepository(pool)
 	f.orders = NewOrderService(orderRepo, repository.NewCustomerRepository(pool), repository.NewCountryRepository(pool), shipments)
-	f.shipping = NewShippingService(NewShippoClient(""), shipments, repository.NewIdempotencyRepository(pool),
-		repository.NewMediaRepository(pool), orderRepo, nil, "")
+	f.shipping = NewShippingService(shipments, orderRepo)
 	return f
 }
 
@@ -139,11 +137,9 @@ func (f *multiShopFixture) shop(seller uuid.UUID, price int) testShop {
 	return s
 }
 
-func (f *multiShopFixture) courierQuote(s testShop, amount int) OrderShippingQuoteInput {
+func (f *multiShopFixture) zoneQuote(s testShop) OrderShippingQuoteInput {
 	return OrderShippingQuoteInput{
-		ShopID: s.shop.String(), Mode: "courier", Provider: "DHL Express", ServiceName: "Worldwide",
-		RateObjectID: "rate_" + uuid.NewString()[:8], ShipmentObjectID: "shp_" + uuid.NewString()[:8],
-		Amount: amount, Currency: "USD",
+		ShopID: s.shop.String(), Mode: SellerDeliveryModeName, Amount: 1, Currency: "USD",
 	}
 }
 
@@ -217,17 +213,18 @@ func TestMultiShopDeliveryIsSumOfShops(t *testing.T) {
 	b := f.shop(f.seller(), 2500)
 
 	tamper := 1 // the server must not trust this
-	res, err := f.placeOrder([]OrderShippingQuoteInput{f.courierQuote(a, 4230), f.courierQuote(b, 1999)}, &tamper, a, b)
+	res, err := f.placeOrder([]OrderShippingQuoteInput{f.zoneQuote(a), f.zoneQuote(b)}, &tamper, a, b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.delivery != 4230+1999 {
-		t.Fatalf("delivery = %d, want %d (sum of shop quotes, client amount ignored)", res.delivery, 4230+1999)
+	// Both shops are inside the 5 km zone ($50). Client amounts are ignored.
+	if res.delivery != 5000+5000 {
+		t.Fatalf("delivery = %d, want 10000 (sum of zone prices, client amount ignored)", res.delivery)
 	}
 	if res.total != res.subtotal+res.delivery {
 		t.Fatalf("total %d != subtotal %d + delivery %d", res.total, res.subtotal, res.delivery)
 	}
-	if res.deliveries[a.shop] != 4230 || res.deliveries[b.shop] != 1999 {
+	if res.deliveries[a.shop] != 5000 || res.deliveries[b.shop] != 5000 {
 		t.Fatalf("shop deliveries = %v", res.deliveries)
 	}
 
@@ -236,7 +233,7 @@ func TestMultiShopDeliveryIsSumOfShops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if itemA.ShopDelivery == nil || itemA.ShopDelivery.Amount != 4230 || itemA.ShopDelivery.Provider != "DHL Express" {
+	if itemA.ShopDelivery == nil || itemA.ShopDelivery.Amount != 5000 || itemA.ShopDelivery.Provider != "Seller delivery" {
 		t.Fatalf("seller A shop delivery = %+v", itemA.ShopDelivery)
 	}
 	if _, err := f.orders.GetItemForSeller(f.ctx, a.seller.String(), res.itemsByShop[b.shop][0].String()); !errors.Is(err, ErrOrderItemNotFound) {
@@ -250,34 +247,17 @@ func TestMultiShopPartialQuoteKeepsPricedShops(t *testing.T) {
 	b := f.shop(f.seller(), 2500)
 	c := f.shop(f.seller(), 700)
 
-	// Checkout could only price two of three shops.
-	res, err := f.placeOrder([]OrderShippingQuoteInput{f.courierQuote(a, 4000), f.courierQuote(b, 1500)}, nil, a, b, c)
+	// Every shop on the order is priced from its zone, even when the client
+	// only names some of them. All three shops sit inside the $50 zone.
+	res, err := f.placeOrder([]OrderShippingQuoteInput{f.zoneQuote(a), f.zoneQuote(b)}, nil, a, b, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.delivery != 5500 {
-		t.Fatalf("delivery = %d, want 5500", res.delivery)
+	if res.delivery != 15000 {
+		t.Fatalf("delivery = %d, want 15000", res.delivery)
 	}
-	if _, ok := res.deliveries[c.shop]; ok {
-		t.Fatalf("unpriced shop should have no delivery row: %v", res.deliveries)
-	}
-
-	f.acceptAll(c.seller, res.itemsByShop[c.shop])
-	rates, err := f.shipping.GetRates(f.ctx, c.seller.String(), res.itemsByShop[c.shop][0].String(), ShippingShipmentInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rates.ShopDelivery != nil || rates.CustomerDeliveryAmount != 0 {
-		t.Fatalf("unpriced shop rates: shop_delivery=%+v amount=%d", rates.ShopDelivery, rates.CustomerDeliveryAmount)
-	}
-
-	f.acceptAll(a.seller, res.itemsByShop[a.shop])
-	rates, err = f.shipping.GetRates(f.ctx, a.seller.String(), res.itemsByShop[a.shop][0].String(), ShippingShipmentInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rates.CustomerDeliveryAmount != 4000 {
-		t.Fatalf("shop A customer_delivery_amount = %d, want 4000 (not the order total %d)", rates.CustomerDeliveryAmount, res.delivery)
+	if res.deliveries[a.shop] != 5000 || res.deliveries[b.shop] != 5000 || res.deliveries[c.shop] != 5000 {
+		t.Fatalf("shop deliveries = %v", res.deliveries)
 	}
 }
 
@@ -286,20 +266,20 @@ func TestMultiShopSellerDeliveryIsRepricedByServer(t *testing.T) {
 	a := f.shop(f.seller(), 10000)
 	b := f.shop(f.seller(), 2500)
 
-	// Client claims shop delivery is free; the zone price wins.
+	// Client claims shop delivery is free; the zone price wins for every shop.
 	res, err := f.placeOrder([]OrderShippingQuoteInput{
 		{ShopID: a.shop.String(), Mode: SellerDeliveryModeName, Amount: 0, Currency: "USD"},
-		f.courierQuote(b, 1200),
+		{ShopID: b.shop.String(), Mode: SellerDeliveryModeName, Amount: 1200, Currency: "USD"},
 	}, nil, a, b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Shop is ~3.5 km from the recipient → 5 km zone, $50.
-	if res.deliveries[a.shop] != 5000 {
-		t.Fatalf("seller delivery amount = %d, want 5000 from the zone", res.deliveries[a.shop])
+	// Each shop is ~3.5 km from the recipient → 5 km zone, $50.
+	if res.deliveries[a.shop] != 5000 || res.deliveries[b.shop] != 5000 {
+		t.Fatalf("seller delivery amounts = %v, want 5000 from the zone", res.deliveries)
 	}
-	if res.delivery != 5000+1200 {
-		t.Fatalf("delivery = %d, want 6200", res.delivery)
+	if res.delivery != 10000 {
+		t.Fatalf("delivery = %d, want 10000", res.delivery)
 	}
 	item, err := f.orders.GetItemForSeller(f.ctx, a.seller.String(), res.itemsByShop[a.shop][0].String())
 	if err != nil {
@@ -315,25 +295,19 @@ func TestMultiShopRejectsBadQuotes(t *testing.T) {
 	a := f.shop(f.seller(), 10000)
 	outsider := f.shop(f.seller(), 999)
 
-	wrongCurrency := f.courierQuote(a, 1000)
-	wrongCurrency.Currency = "EUR"
-	if _, err := f.placeOrder([]OrderShippingQuoteInput{wrongCurrency}, nil, a); !errors.Is(err, ErrInvalidOrder) {
-		t.Fatalf("currency mismatch: err = %v, want invalid order", err)
-	}
-
-	noProvider := f.courierQuote(a, 1000)
-	noProvider.Provider = ""
-	if _, err := f.placeOrder([]OrderShippingQuoteInput{noProvider}, nil, a); !errors.Is(err, ErrInvalidOrder) {
-		t.Fatalf("missing provider: err = %v, want invalid order", err)
+	courier := f.zoneQuote(a)
+	courier.Mode = "courier"
+	if _, err := f.placeOrder([]OrderShippingQuoteInput{courier}, nil, a); !errors.Is(err, ErrInvalidOrder) {
+		t.Fatalf("courier quote: err = %v, want invalid order", err)
 	}
 
 	// A quote for a shop with nothing on the order is dropped, not charged.
-	res, err := f.placeOrder([]OrderShippingQuoteInput{f.courierQuote(a, 1000), f.courierQuote(outsider, 9999)}, nil, a)
+	res, err := f.placeOrder([]OrderShippingQuoteInput{f.zoneQuote(a), f.zoneQuote(outsider)}, nil, a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.delivery != 1000 || len(res.deliveries) != 1 {
-		t.Fatalf("delivery = %d rows=%v, want 1000 from shop A only", res.delivery, res.deliveries)
+	if res.delivery != 5000 || len(res.deliveries) != 1 {
+		t.Fatalf("delivery = %d rows=%v, want 5000 from shop A only", res.delivery, res.deliveries)
 	}
 }
 
@@ -346,7 +320,7 @@ func TestMultiShopSameSellerTwoShopsShipSeparately(t *testing.T) {
 
 	// Two products in shop A, one in shop B, one in another seller's shop.
 	res, err := f.placeOrder([]OrderShippingQuoteInput{
-		f.courierQuote(a, 4000), f.courierQuote(b, 1500), f.courierQuote(other, 900),
+		f.zoneQuote(a), f.zoneQuote(b), f.zoneQuote(other),
 	}, nil, a, a, b, other)
 	if err != nil {
 		t.Fatal(err)
@@ -373,13 +347,6 @@ func TestMultiShopSameSellerTwoShopsShipSeparately(t *testing.T) {
 
 	// Shop B still pending must not block shop A.
 	f.acceptAll(seller, shopA)
-	rates, err := f.shipping.GetRates(f.ctx, seller.String(), shopA[0].String(), ShippingShipmentInput{})
-	if err != nil {
-		t.Fatalf("shop A rates with shop B pending: %v", err)
-	}
-	if rates.CombinedItemCount != 2 || rates.CustomerDeliveryAmount != 4000 {
-		t.Fatalf("shop A parcel: items=%d amount=%d, want 2 and 4000", rates.CombinedItemCount, rates.CustomerDeliveryAmount)
-	}
 
 	// Resolving the parcel by order + shop picks shop A's line, never shop B's.
 	resolved, err := f.shipping.ResolveShopParcelItem(f.ctx, seller.String(), res.id.String(), a.shop.String(), "accepted")
@@ -408,8 +375,8 @@ func TestMultiShopSameSellerTwoShopsShipSeparately(t *testing.T) {
 	}
 
 	// Shop B: a pending line blocks its own parcel only.
-	if _, err := f.shipping.GetRates(f.ctx, seller.String(), shopB[0].String(), ShippingShipmentInput{}); !errors.Is(err, ErrShippingNotReady) {
-		t.Fatalf("shop B rates while pending: err = %v, want not ready", err)
+	if _, err := f.shipping.StartLocalDelivery(f.ctx, seller.String(), shopB[0].String(), LocalDeliveryInput{}); !errors.Is(err, ErrShippingNotReady) {
+		t.Fatalf("shop B delivery while pending: err = %v, want not ready", err)
 	}
 
 	if _, err := f.shipping.CompleteLocalDelivery(f.ctx, seller.String(), shopA[0].String()); err != nil {
@@ -433,16 +400,14 @@ func TestMultiShopSameSellerTwoShopsShipSeparately(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.acceptAll(other.seller, shopOther)
-	if _, err := f.shipping.MarkShippedManually(f.ctx, other.seller.String(), shopOther[0].String(), ManualShipmentInput{
-		CourierProvider: "Kandy Express", TrackingNumber: "KE-1",
-	}); err != nil {
+	if _, err := f.shipping.StartLocalDelivery(f.ctx, other.seller.String(), shopOther[0].String(), LocalDeliveryInput{}); err != nil {
 		t.Fatal(err)
 	}
 	if st := f.statuses(shopOther); !allEqual(st, "dispatched") {
-		t.Fatalf("other seller after manual courier = %v, want dispatched", st)
+		t.Fatalf("other seller after local delivery = %v, want dispatched", st)
 	}
 	f.scan(&orderStatus, `select status from marketplace.orders where id = $1`, res.id)
 	if orderStatus == "delivered" {
-		t.Fatal("order delivered while the manual courier parcel is still in transit")
+		t.Fatal("order delivered while another shop's parcel is still in transit")
 	}
 }
