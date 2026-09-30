@@ -1,21 +1,21 @@
 package main
 
 import (
-	"context"	// context is used to manage the lifecycle of a request
-	"fmt" 		// fmt is used to format and print text 
-	"log"		// log is used to log messages to the console
-	"net/http"	// net/http is used to create and manage HTTP servers and clients
-	"time"	// time is used to measure and manage time-related operations
+	"context"  // context is used to manage the lifecycle of a request
+	"fmt"      // fmt is used to format and print text
+	"log"      // log is used to log messages to the console
+	"net/http" // net/http is used to create and manage HTTP servers and clients
+	"time"     // time is used to measure and manage time-related operations
 
-	"myapp/internal/config" // config is used to load and manage the configuration of the application
-	"myapp/internal/database" // database is used to connect and manage the database
-	"myapp/internal/handlers" // handlers is used to handle the HTTP requests and responses
+	"myapp/internal/config"     // config is used to load and manage the configuration of the application
+	"myapp/internal/database"   // database is used to connect and manage the database
+	"myapp/internal/handlers"   // handlers is used to handle the HTTP requests and responses
 	"myapp/internal/repository" // repository is used to manage the data access layer of the application
-	"myapp/internal/routes"		// routes is used to manage the routing of the application
-	"myapp/internal/services"  // services is used to manage the business logic of the project
+	"myapp/internal/routes"     // routes is used to manage the routing of the application
+	"myapp/internal/services"   // services is used to manage the business logic of the project
 )
 
-// func = is the function main function 
+// func = is the function main function
 func main() {
 	cfg, err := config.Load() // load application configuration from the environment variables
 	if err != nil {
@@ -36,13 +36,12 @@ func main() {
 		log.Fatalf("migration error: %v", err)
 	}
 
-
 	// admins, countries, customers, sellers are the repositories for the admin, country, customer, and seller entities
-	admins := repository.NewAdminRepository(pool) // create a new admin repository
+	admins := repository.NewAdminRepository(pool)      // create a new admin repository
 	countries := repository.NewCountryRepository(pool) // create a new country repository
 	countryCapabilities := repository.NewCountryCapabilityRepository(pool)
 	customers := repository.NewCustomerRepository(pool) // create a new customer repository
-	sellers := repository.NewSellerRepository(pool) // create a new seller repository
+	sellers := repository.NewSellerRepository(pool)     // create a new seller repository
 	products := repository.NewProductRepository(pool)
 	orders := repository.NewOrderRepository(pool)
 	shipments := repository.NewShipmentRepository(pool)
@@ -63,7 +62,7 @@ func main() {
 	}
 
 	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry) // create a new auth service
-	adminService := services.NewAdminService(admins) // create a new admin service
+	adminService := services.NewAdminService(admins)                                                                      // create a new admin service
 	countryService := services.NewCountryService(countries)
 	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
 	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
@@ -87,8 +86,8 @@ func main() {
 	shippoClient := services.NewShippoClient(cfg.ShippoAPIKey)
 	shippingService := services.NewShippingService(shippoClient, shipments, idempotency, mediaAssets, orders, s3Service, cfg.ShippoLabelBucket)
 
-	authHandler := handlers.NewAuthHandler(authService) // create a new auth handler
-	adminHandler := handlers.NewAdminHandler(adminService) // create a new admin handler
+	authHandler := handlers.NewAuthHandler(authService)          // create a new auth handler
+	adminHandler := handlers.NewAdminHandler(adminService)       // create a new admin handler
 	countryHandler := handlers.NewCountryHandler(countryService) // create a new country handler
 	countryCapabilityHandler := handlers.NewCountryCapabilityHandler(countryCapabilityService)
 	customerHandler := handlers.NewCustomerHandler(customerService) // create a new customer handler
@@ -111,11 +110,13 @@ func main() {
 	placesService := services.NewPlacesService(cfg)
 	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
 	shippingHandler := handlers.NewShippingHandler(shippingService)
+	availabilityService := services.NewAvailabilityService(repository.NewAvailabilityRepository(pool), shippoClient)
+	availabilityHandler := handlers.NewAvailabilityHandler(availabilityService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, mediaHandler, placesHandler, shippingHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, cfg.JWTSecret) // create a new router
 
-	addr := ":" + cfg.AppPort // create a new address for the server
-	fmt.Printf("✅ Database connected: %s\n", cfg.DBName) // print the database name
+	addr := ":" + cfg.AppPort                                      // create a new address for the server
+	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name
 	fmt.Printf("🚀 Server listening on http://localhost%s\n", addr) // print the server address
 
 	if err := http.ListenAndServe(addr, router); err != nil { // start the server

@@ -56,6 +56,8 @@ func New(
 	// Handler instance that proxies Google Places address lookups
 	places *handlers.PlacesHandler,
 	shipping *handlers.ShippingHandler,
+	// Handler instance that checks which shops can deliver to an address by a date
+	availability *handlers.AvailabilityHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -167,6 +169,10 @@ func New(
 		RegisterPlacesRoutes(r, places)
 
 		RegisterShippingRoutes(r, shipping, jwtSecret)
+
+		// Public catalog filter: which shops can deliver to an address by a date.
+		// Example: POST /api/v1/shipping/availability
+		RegisterAvailabilityRoutes(r, availability)
 	})
 
 	// Return the fully configured router
