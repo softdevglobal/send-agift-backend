@@ -26,8 +26,6 @@ type Config struct {
 	AWSSecretKey    string
 	S3Bucket        string
 	GoogleMapsKey   string
-	ShippoAPIKey    string
-	ShippoLabelBucket string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -50,8 +48,6 @@ func Load() (*Config, error) {
 		AWSSecretKey:    os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		S3Bucket:        os.Getenv("S3_BUCKET"),
 		GoogleMapsKey:   os.Getenv("GOOGLE_MAPS_API_KEY"),
-		ShippoAPIKey:    os.Getenv("SHIPPO_API_KEY"),
-		ShippoLabelBucket: envOr("SHIPPO_LABEL_BUCKET", "sendagift-labels"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -73,7 +69,7 @@ func Load() (*Config, error) {
 }
 
 // DSN builds a Postgres connection string.
-// This string is used to connect to the database 
+// This string is used to connect to the database
 func (c *Config) DSN() string {
 	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",

@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	ErrProductNotFound  = errors.New("product not found")
-	ErrProductDuplicate = errors.New("product already exists")
+	ErrProductNotFound   = errors.New("product not found")
+	ErrProductDuplicate  = errors.New("product already exists")
 	ErrInventoryNotFound = errors.New("inventory not found")
 )
 
@@ -297,6 +297,9 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 	if err := r.attachMedia(ctx, ptrs); err != nil {
 		return nil, err
 	}
+	if err := r.attachLowStock(ctx, ptrs); err != nil {
+		return nil, err
+	}
 	return items, nil
 }
 
@@ -341,7 +344,58 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 	if err := r.attachMedia(ctx, []*models.Product{&out.Product}); err != nil {
 		return nil, err
 	}
+	if err := r.attachLowStock(ctx, []*models.Product{&out.Product}); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// attachLowStock sets StockLeft when sellable quantity is at or below the
+// product's low_stock_threshold. Healthy stock stays omitted.
+func (r *ProductRepository) attachLowStock(ctx context.Context, products []*models.Product) error {
+	if len(products) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(products))
+	index := make(map[uuid.UUID]*models.Product, len(products))
+	for _, product := range products {
+		if product == nil {
+			continue
+		}
+		ids = append(ids, product.ID)
+		index[product.ID] = product
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := r.db.Query(ctx, `
+		select product_id, available_qty, reserved_qty, low_stock_threshold
+		from seller.inventory
+		where product_id = any($1)`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var productID uuid.UUID
+		var available, reserved, threshold int
+		if err := rows.Scan(&productID, &available, &reserved, &threshold); err != nil {
+			return err
+		}
+		product := index[productID]
+		if product == nil {
+			continue
+		}
+		sellable := available - reserved
+		if sellable < 0 {
+			sellable = 0
+		}
+		if sellable <= threshold {
+			left := sellable
+			product.StockLeft = &left
+		}
+	}
+	return rows.Err()
 }
 
 func (r *ProductRepository) CreateInventory(ctx context.Context, inv *models.Inventory) error {

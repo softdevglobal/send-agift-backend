@@ -24,18 +24,7 @@ Migrations run on startup.
 go run ./cmd/migrate
 ```
 
-Copy `.env.example` to `.env` and fill in values. Shippo uses a **test API key** (`shippo_test_...`) in development; the app sends it as `Authorization: ShippoToken <key>` on every Shippo request ([auth docs](https://docs.goshippo.com/docs/guides_general/authentication/)).
-
-| Variable | Purpose |
-|---|---|
-| `SHIPPO_API_KEY` | Shippo test or live API token |
-| `SHIPPO_LABEL_BUCKET` | S3 bucket name stored on label records — set to the **same value as `S3_BUCKET`** |
-
-Webhook URL for tracking updates (configure in the [Shippo API portal](https://docs.goshippo.com/docs/tracking/webhooks/)):
-
-`POST http://localhost:8081/api/v1/webhooks/shippo/tracking`
-
-Event type: `track_updated`. Respond with `2xx` within 3 seconds.
+Copy `.env.example` to `.env` and fill in values. Delivery is priced from each shop's delivery zones. There is no carrier integration.
 
 ## Postman rules
 
@@ -1554,7 +1543,7 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/products/product-uuid/inve
 
 Auth: seller JWT. Lists `marketplace.order_items` for the logged-in seller, joined with order, product, and recipient shipping address.
 
-Typical flow: customer places order → seller **lists** items → **accepts** item → calls Shippo **rates** / **labels** (section 11).
+Typical flow: customer places order (priced from delivery zones) → seller **lists** items → **accepts** item → starts shop delivery (section 11).
 
 ### GET `http://localhost:8081/api/v1/sellers/me/order-items`
 
@@ -1604,7 +1593,7 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/order-items/order-item-uui
 - Auth: seller JWT
 - **PATCH body:** none
 - Sets `fulfilment_status` from `pending` → `accepted`
-- Required before Shippo rates/labels
+- Required before the seller starts shop delivery
 
 **Response 200** — updated `OrderItem`
 
@@ -1862,290 +1851,29 @@ Pair these with the reel feeds from section 10b: `/shops/{shopId}/reels` for a s
 
 ---
 
-## 11. Shippo shipping (seller)
+## 11. Delivery zones and shop hand-over
 
-> **Full Postman walkthrough:** [SHIPPO_POSTMAN_TEST.md](./SHIPPO_POSTMAN_TEST.md) — copy-paste bodies for order → accept → rates → label.
+Delivery is priced only from each shop's delivery zones. There is no carrier quote.
 
-Seller JWT required. Uses [Shippo test mode](https://docs.goshippo.com/docs/guides_general/testing/) when `SHIPPO_API_KEY` starts with `shippo_test_` (free, watermarked labels).
+### POST `http://localhost:8081/api/v1/customers/me/shipping/quote`
 
-### Prerequisites
+Auth: customer JWT.
 
-1. `.env` has `SHIPPO_API_KEY`, `S3_BUCKET`, and `SHIPPO_LABEL_BUCKET` (same bucket name as `S3_BUCKET`).
-2. Restart API: `go run ./cmd/api`
-3. Data from earlier sections:
-   - Admin: country (for Shippo test, create **US** — see below)
-   - Seller: register → login → **ship-from address** → shop linked to that address → published product
-   - Customer: register → login → recipient with **shipping address** → place order
-4. Copy `order-uuid` and `shop-uuid` from the customer order response (`id` and `items[].shop_id`), or from `GET /sellers/me/order-items`.
-5. Accept each item: `PATCH /sellers/me/order-items/{id}/accept` (section 10). Shipping then uses the order and shop, not one product id.
+Body: `recipient_id`, `delivery_date`, `items[{product_id, quantity}]`.
 
-Typical flow: customer places order → seller **lists** items → **accepts** item → **POST rates** (with parcel + customs for international) → **POST label**.
+Response: each shop's `seller_delivery` (distance, zone, price, estimated days). Shops outside their zones are listed in `unquoted` and `complete` is false.
 
-### Where parcel and customs are stored
+### Place order
 
-Seller-posted `parcel` and `customs_declaration` are **not** stored on products or order items. They are saved on **`marketplace.shipments`** when you call **POST `/shipping/rates`**:
+`POST /customers/me/orders` with `recipient_id` and `shipping_quotes[{shop_id, mode: "seller_delivery"}]`. The server recomputes every shop's price from its zones and ignores the client amount. A courier `mode` is rejected. A recipient outside a shop's zones cannot place the order.
 
-| DB column | What you POST |
-|---|---|
-| `parcel_details` | Full `parcel` JSON object |
-| `customs_declaration` | Full `customs_declaration` JSON object (international only) |
-| `is_international` | `true` when ship-from country ≠ ship-to country |
-| `order_item_id` | Links shipment to the order line |
-| `status` | `pending` after rates → `label_created` after label |
-| `provider_shipment_id` | Shippo `shipment_object_id` |
-| `provider_customs_declaration_id` | Shippo customs object id (international) |
+### POST `.../sellers/me/orders/{orderID}/shops/{shopID}/shipping/local`
 
-Calling **rates** again for the same order item **updates** the existing `pending` shipment row. **Labels** updates that same row with tracking and label PDF.
+Auth: seller JWT. Starts shop delivery after the item is accepted. Marks the shop's items `dispatched`.
 
-Verify in SQL:
+### POST `.../sellers/me/orders/{orderID}/shops/{shopID}/shipping/local/delivered`
 
-```sql
-SELECT id, order_item_id, status, is_international,
-       parcel_details, customs_declaration,
-       provider_shipment_id, provider_customs_declaration_id
-FROM marketplace.shipments
-WHERE order_item_id = '<order-item-uuid>'
-ORDER BY created_at DESC;
-```
-
-### International vs domestic
-
-| | Domestic (e.g. US → US) | International (e.g. US → AU) |
-|---|---|---|
-| `parcel` in POST body | Optional (defaults used) | **Required** |
-| `customs_declaration` | Not needed | **Required** |
-| Stored on shipment | `parcel_details` only | `parcel_details` + `customs_declaration` |
-
-Addresses (ship-from / ship-to) always come from **seller shop address** and **recipient shipping address** in the database — not from the rates body.
-
-### Recommended test addresses (Shippo test mode)
-
-Shippo test rates work best with **real US addresses** ([testing guide](https://docs.goshippo.com/docs/guides_general/testing/)). Create a US country (admin), then use ISO country `US` on seller and recipient addresses.
-
-**Seller ship-from** (`POST /sellers/me/addresses`):
-
-```json
-{
-  "country_id": "<us-country-uuid>",
-  "label": "Warehouse",
-  "address_type": "return",
-  "line1": "215 Clayton St",
-  "city": "San Francisco",
-  "region": "CA",
-  "postal_code": "94117",
-  "latitude": 37.769,
-  "longitude": -122.429,
-  "is_default": true
-}
-```
-
-**Recipient shipping** (inside `POST /customers/me/recipients` `addresses[]`):
-
-```json
-{
-  "country_id": "<us-country-uuid>",
-  "label": "Home",
-  "address_type": "shipping",
-  "line1": "965 Mission St",
-  "city": "San Francisco",
-  "region": "CA",
-  "postal_code": "94103",
-  "latitude": 37.782,
-  "longitude": -122.408,
-  "is_default": true
-}
-```
-
-Link the seller address to the shop via `address_id` when creating the shop (section 8).
-
-### Step 1 — Get shipping rates
-
-### POST `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates`
-
-Example URL: `http://localhost:8081/api/v1/sellers/me/orders/order-uuid/shops/shop-uuid/shipping/rates`
-
-- Auth: seller JWT
-- **POST body:** optional for domestic; **required** for international (parcel + customs)
-
-**Domestic** — empty body is fine (default parcel is used):
-
-```json
-{}
-```
-
-**International** — parcel and customs are required:
-
-```json
-{
-  "parcel": {
-    "length": "20",
-    "width": "15",
-    "height": "10",
-    "distance_unit": "cm",
-    "weight": "1.200",
-    "mass_unit": "kg"
-  },
-  "customs_declaration": {
-    "contents_type": "MERCHANDISE",
-    "non_delivery_option": "RETURN",
-    "certify_signer": "Bay Area Gifts",
-    "eel_pfc": "NOEEI_30_37_a",
-    "incoterm": "DDU",
-    "items": [
-      {
-        "description": "Gift Box USA",
-        "quantity": 1,
-        "net_weight": "1.200",
-        "mass_unit": "kg",
-        "value_amount": "25.00",
-        "value_currency": "USD",
-        "origin_country": "US",
-        "tariff_number": "950300"
-      }
-    ]
-  }
-}
-```
-
-Customs fields: `contents_type`, `non_delivery_option`, `certify_signer`, and at least one `items[]` entry are required. `eel_pfc` and `incoterm` default to `NOEEI_30_37_a` and `DDU` when omitted (US → Canada uses `NOEEI_30_36`).
-
-**Response 200**
-
-```json
-{
-  "shipment_object_id": "shippo-shipment-object-id",
-  "rates": [
-    {
-      "object_id": "rate-object-id-to-use-next",
-      "provider": "USPS",
-      "amount": "5.50",
-      "currency": "USD",
-      "estimated_days": 2,
-      "duration_terms": "Delivery in 1 to 3 business days.",
-      "service_name": "Priority Mail"
-    }
-  ]
-}
-```
-
-Copy one `rates[].object_id` for the next step.
-
-**Common errors**
-
-| Status | Meaning |
-|---|---|
-| 503 | `SHIPPO_API_KEY` missing — check `.env` and restart |
-| 409 | Order item not `accepted` — run `PATCH .../accept` (section 10) |
-| 400 | Missing seller shop address or recipient shipping address |
-| 400 | International shipment missing `parcel` or `customs_declaration` |
-| 500 | Shippo rejected addresses — use valid US test addresses |
-
-### Step 2 — Buy label
-
-### POST `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels`
-
-Example URL: `http://localhost:8081/api/v1/sellers/me/orders/order-uuid/shops/shop-uuid/shipping/labels`
-
-- Auth: seller JWT
-- **POST body:**
-
-```json
-{
-  "rate_object_id": "rate-object-id-from-step-1",
-  "provider": "USPS",
-  "idempotency_key": "label-test-001"
-}
-```
-
-`idempotency_key` — any unique string per label purchase. Repeating the same key returns the cached shipment instead of buying twice.
-
-**Response 201**
-
-```json
-{
-  "id": "shipment-uuid",
-  "order_id": "order-uuid",
-  "seller_id": "seller-uuid",
-  "courier_provider": "USPS",
-  "tracking_number": "9205590164917312751089",
-  "label_media_id": "media-asset-uuid",
-  "delivery_mode": "courier",
-  "status": "label_created",
-  "provider_shipment_id": "shippo-transaction-id",
-  "provider_tracking_url": "https://tools.usps.com/go/TrackConfirmAction_input?...",
-  "created_at": "...",
-  "updated_at": "..."
-}
-```
-
-The API downloads the PDF from Shippo, uploads it to S3, and stores a `media.media_assets` row (`asset_type: label`). Order item `fulfilment_status` becomes `dispatched`.
-
-Test labels are watermarked **SAMPLE — DO NOT MAIL**.
-
-### Step 3 — Webhook (optional, local)
-
-Shippo test mode does **not** send real tracking updates. You can still test your handler manually.
-
-### POST `http://localhost:8081/api/v1/webhooks/shippo/tracking`
-
-- Auth: none
-- **POST body:**
-
-```json
-{
-  "event": "track_updated",
-  "test": true,
-  "data": {
-    "tracking_number": "9205590164917312751089",
-    "tracking_status": {
-      "status": "DELIVERED",
-      "status_date": "2026-09-02T10:00:00Z"
-    }
-  }
-}
-```
-
-Use the `tracking_number` from step 2.
-
-**Response 200**
-
-```json
-{ "status": "ok" }
-```
-
-A `DELIVERED` event updates three things, in this order:
-
-1. `marketplace.shipments.status` → `delivered` (plus `delivered_at`)
-2. that shipment's `marketplace.order_items.fulfilment_status` → `delivered`
-3. `marketplace.orders.status` → `delivered`, **but only if every line on the order is
-   now `delivered` or `cancelled`** and at least one was delivered
-
-Step 3 is what makes multi-seller orders correct. One order can hold items from several
-sellers, each with its own shipment and tracking number. When seller A's parcel arrives,
-only A's item is completed — the order header stays as it was until seller B's parcel is
-also delivered. An order whose items were all cancelled never becomes `delivered`.
-
-To check completion yourself:
-
-```sql
-SELECT o.id, o.status,
-       count(*) AS total_items,
-       count(*) FILTER (WHERE oi.fulfilment_status = 'delivered') AS delivered_items,
-       count(*) FILTER (WHERE oi.fulfilment_status = 'cancelled') AS cancelled_items
-FROM marketplace.orders o
-JOIN marketplace.order_items oi ON oi.order_id = o.id
-WHERE o.id = '<order-uuid>'
-GROUP BY o.id, o.status;
-```
-
-### Shippo portal setup (production / ngrok)
-
-For live webhooks from Shippo (not manual Postman), register in the [Shippo API portal](https://docs.goshippo.com/docs/tracking/webhooks/):
-
-- URL: `https://<your-public-host>/api/v1/webhooks/shippo/tracking`
-- Event: `track_updated`
-
-For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
+Auth: seller JWT. Marks that hand-over delivered.
 
 ---
 
@@ -2229,8 +1957,8 @@ For local dev, expose port 8081 with ngrok and use the ngrok HTTPS URL.
 | GET | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | none (id in URL) | `ReelDetails` |
 | PUT | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | same as create (`media` optional) | `ReelDetails` |
 | DELETE | `http://localhost:8081/api/v1/sellers/me/reels/{id}` | none (id in URL) | `{ "message": "reel deleted" }` |
-| POST | `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/rates` | optional `{ parcel, customs_declaration }` (required international) | `{ shipment_object_id, rates[] }` |
-| POST | `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/labels` | `{ rate_object_id, provider, idempotency_key }` | `Shipment` |
-| POST | `http://localhost:8081/api/v1/webhooks/shippo/tracking` | Shippo `track_updated` payload | `{ "status": "ok" }` |
+| POST | `http://localhost:8081/api/v1/customers/me/shipping/quote` | `{ recipient_id, delivery_date, items[] }` | zone quote per shop |
+| POST | `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/local` | optional `{ note }` | `Shipment` |
+| POST | `http://localhost:8081/api/v1/sellers/me/orders/{orderID}/shops/{shopID}/shipping/local/delivered` | none | `Shipment` |
 
 GET and DELETE never take a JSON body. IDs always go in the URL. See each section above for full JSON examples.
