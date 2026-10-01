@@ -33,7 +33,17 @@ const productSelectCols = `
 	p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
 	p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
 	p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
-	p.parcel_weight, p.parcel_mass_unit`
+	p.parcel_weight, p.parcel_mass_unit, p.reward_points`
+
+// publicProductSelectCols is productSelectCols for customer-facing reads,
+// which only show a reward the seller holds enough points to pay: a reward
+// they cannot fund is never promised to a shopper. The query must join the
+// shop as s.
+var publicProductSelectCols = strings.Replace(productSelectCols, "p.reward_points", `
+	case when p.reward_points > 0
+	      and coalesce((select a.balance - a.reserved from finance.seller_points_accounts a
+	                    where a.seller_id = s.seller_id), 0) >= p.reward_points
+	     then p.reward_points else 0 end`, 1)
 
 func scanProduct(scanner interface {
 	Scan(dest ...any) error
@@ -43,7 +53,7 @@ func scanProduct(scanner interface {
 		&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
 		&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
 		&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
-		&length, &width, &height, &distanceUnit, &weight, &massUnit,
+		&length, &width, &height, &distanceUnit, &weight, &massUnit, &p.RewardPoints,
 	); err != nil {
 		return err
 	}
@@ -82,12 +92,13 @@ func (r *ProductRepository) Create(ctx context.Context, p *models.Product, asset
 		insert into seller.products (
 			shop_id, name, slug, description, product_type, price_amount, currency,
 			status, occasion_tags, customer_type_visibility, points_display_enabled, prep_minutes, image_url,
-			parcel_length, parcel_width, parcel_height, parcel_distance_unit, parcel_weight, parcel_mass_unit
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			parcel_length, parcel_width, parcel_height, parcel_distance_unit, parcel_weight, parcel_mass_unit,
+			reward_points
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		returning id, status, created_at, updated_at`,
 		p.ShopID, p.Name, p.Slug, p.Description, p.ProductType, p.PriceAmount, p.Currency,
 		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
-		pl, pw, ph, pdu, pwt, pmu,
+		pl, pw, ph, pdu, pwt, pmu, p.RewardPoints,
 	).Scan(&p.ID, &p.Status, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return mapProductWriteError(err)
@@ -160,12 +171,13 @@ func (r *ProductRepository) Update(ctx context.Context, p *models.Product, asset
 		    parcel_distance_unit = $17,
 		    parcel_weight = $18,
 		    parcel_mass_unit = $19,
+		    reward_points = $20,
 		    updated_at = now()
 		where id = $1
 		returning updated_at`,
 		p.ID, p.Name, p.Slug, p.Description, p.ProductType, p.PriceAmount, p.Currency,
 		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
-		pl, pw, ph, pdu, pwt, pmu,
+		pl, pw, ph, pdu, pwt, pmu, p.RewardPoints,
 	).Scan(&p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrProductNotFound
@@ -263,7 +275,7 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 	customerType string,
 ) ([]models.Product, error) {
 	rows, err := r.db.Query(ctx, `
-		select `+productSelectCols+`
+		select `+publicProductSelectCols+`
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.shop_id = $1
@@ -315,7 +327,7 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 	out := &models.PublicProduct{}
 	var length, width, height, distanceUnit, weight, massUnit *string
 	err := r.db.QueryRow(ctx, `
-		select `+productSelectCols+`,
+		select `+publicProductSelectCols+`,
 		       s.id, s.name, s.slug, s.image_url, s.customer_visible_location
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
@@ -328,7 +340,7 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 		&out.ID, &out.ShopID, &out.Name, &out.Slug, &out.Description, &out.ProductType, &out.PriceAmount,
 		&out.Currency, &out.Status, &out.OccasionTags, &out.CustomerTypeVisibility,
 		&out.PointsDisplayEnabled, &out.PrepMinutes, &out.CreatedAt, &out.UpdatedAt, &out.ImageURL,
-		&length, &width, &height, &distanceUnit, &weight, &massUnit,
+		&length, &width, &height, &distanceUnit, &weight, &massUnit, &out.RewardPoints,
 		&out.Shop.ID, &out.Shop.Name, &out.Shop.Slug, &out.Shop.ImageURL, &out.Shop.Location,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

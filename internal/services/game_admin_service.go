@@ -32,8 +32,29 @@ func (s *GameService) AdminGames(ctx context.Context) ([]models.AdminGameSummary
 		_, engine := games.EngineFor(list[i].Slug)
 		_, chance := games.ChanceMechanic(list[i].Slug)
 		list[i].Playable = engine || chance || list[i].Slug == games.QuizSlug
+		list[i].Practice = engine
 	}
 	return list, nil
+}
+
+// maxPlayCost caps what one play of a game can cost.
+const maxPlayCost = 1_000_000
+
+// ErrInvalidPlayCost is a play price out of range.
+var ErrInvalidPlayCost = errors.New("play_cost_points must be a whole number from 0 to 1000000")
+
+// SetPlayCost sets what one practice play of a game costs, audited. Any
+// platform admin may set it. It
+// applies to plays started from now on; 0 makes the game free.
+func (s *GameService) SetPlayCost(ctx context.Context, admin AdminActor, slug string, points int64) (*models.AdminGameSummary, error) {
+	if points < 0 || points > maxPlayCost {
+		return nil, ErrInvalidPlayCost
+	}
+	audit := admin.audit("game.play_cost_set", uuid.Nil, nil)
+	if err := s.games.SetPlayCost(ctx, slug, points, audit); err != nil {
+		return nil, mapGameRepoErr(err)
+	}
+	return s.adminGame(ctx, slug)
 }
 
 func (s *GameService) adminGame(ctx context.Context, slug string) (*models.AdminGameSummary, error) {

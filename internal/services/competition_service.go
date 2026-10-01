@@ -81,6 +81,8 @@ const (
 	PlayNotEligible         = "NOT_ELIGIBLE"
 	PlayBusy                = "PLAY_BUSY"
 	PlayTransactionFailed   = "PLAY_TRANSACTION_FAILED"
+	// PlaySignInRequired is a guest trying to start a game that costs points.
+	PlaySignInRequired = "SIGN_IN_REQUIRED"
 )
 
 // PlayRefusal is a play the server turned away before anything was charged,
@@ -297,6 +299,7 @@ func (s *CompetitionService) toView(c *models.Competition) models.CompetitionVie
 		CancelNote:                   c.CancelNote,
 		PrizeGrowthEnabled:           c.PrizeGrowthEnabled,
 		PrizeType:                    c.PrizeType,
+		PrizePoints:                  c.PrizePoints,
 		StartPrizeCents:              c.StartPrizeCents,
 		CurrentPrizeCents:            c.CurrentPrizeCents,
 		IncrementPerPlayCents:        c.IncrementPerPlayCents,
@@ -1000,13 +1003,16 @@ type CompetitionInput struct {
 	// Instant-win chance rounds: each play wins with probability 1 in
 	// win_odds. Ignored for skill games and prize draws.
 	WinOdds *int `json:"win_odds"`
+	// Points prizes (prize_type "points"): what each validated winner
+	// receives, credited to their points balance on validation.
+	PrizePoints *int64 `json:"prize_points"`
 	// Quiz rounds: the questions, answers and time limits.
 	QuizQuestions []games.QuizQuestion `json:"quiz_questions"`
 	// The config_version the admin was editing; a stale edit is refused.
 	ConfigVersion *int `json:"config_version"`
 }
 
-var prizeTypes = map[string]bool{"cash": true, "product": true, "voucher": true, "gift": true, "other": true}
+var prizeTypes = map[string]bool{"cash": true, "product": true, "voucher": true, "gift": true, "points": true, "other": true}
 
 func invalid(msg string) error { return fmt.Errorf("%w: %s", ErrInvalidCompetition, msg) }
 
@@ -1065,7 +1071,19 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 		in.PrizeType = "cash"
 	}
 	if !prizeTypes[in.PrizeType] {
-		return invalid("prize_type must be cash, product, voucher, gift or other")
+		return invalid("prize_type must be cash, product, voucher, gift, points or other")
+	}
+	var prizePoints *int64
+	if in.PrizeType == "points" {
+		if in.PrizePoints == nil || *in.PrizePoints < 1 || *in.PrizePoints > 100_000_000 {
+			return invalid("prize_points must be 1 to 100000000 for a points prize")
+		}
+		// Points are paid per winner as set; there is no money prize to grow.
+		if in.PrizeGrowthEnabled {
+			return invalid("a points prize cannot grow")
+		}
+		n := *in.PrizePoints
+		prizePoints = &n
 	}
 	// The game decides how winners are found: a skill game by the best
 	// verified score, a prize draw by drawing entries at close, any other
@@ -1204,6 +1222,7 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	c.DailyPlayLimit = in.DailyPlayLimit
 	c.MinPlaysToWin = in.MinPlaysToWin
 	c.WinOdds = winOdds
+	c.PrizePoints = prizePoints
 	c.QuizQuestions = questions
 	c.GameSlug = in.GameSlug
 	return nil
@@ -1344,7 +1363,8 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	if c.OfficialRules == nil || strings.TrimSpace(*c.OfficialRules) == "" {
 		blockers = append(blockers, "official rules must be published")
 	}
-	if c.PrizeValueAmount == nil || c.PrizeCurrency == nil {
+	// A points prize is valued in points (prize_points), not money.
+	if c.PrizeType != "points" && (c.PrizeValueAmount == nil || c.PrizeCurrency == nil) {
 		blockers = append(blockers, "prize value and currency are required")
 	}
 	cc, err := s.capability(ctx, c.CountryID, capabilityCache{})
@@ -1371,6 +1391,11 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 		blockers = append(blockers, "an instant-win round needs its win odds")
 	}
 
+	// Points prizes are credited by the platform; there is no money to hold
+	// in reserve for them.
+	if c.PrizeType == "points" {
+		return blockers, nil
+	}
 	// The reserve must hold the most the prize can ever reach: the fixed
 	// prize, or the cap of a growing one.
 	liability := maxLiability(c)

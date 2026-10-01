@@ -25,11 +25,20 @@ var (
 
 type OrderRepository struct {
 	db *pgxpool.Pool
+	// rewardsAtOrder pays product reward points as soon as the order is
+	// placed, instead of when each line is delivered.
+	rewardsAtOrder bool
 }
 
 func NewOrderRepository(db *pgxpool.Pool) *OrderRepository {
 	return &OrderRepository{db: db}
 }
+
+// PayRewardsAtOrder makes product reward points reach the customer when the
+// order is placed rather than on delivery. With no payment step yet, this is
+// what lets a buyer see their points straight away; cancelling then takes
+// them back in full, and is refused once they have been spent.
+func (r *OrderRepository) PayRewardsAtOrder(on bool) { r.rewardsAtOrder = on }
 
 // CheckoutProduct is the catalog row used to stamp price/shop/seller onto an order item.
 type CheckoutProduct struct {
@@ -41,6 +50,7 @@ type CheckoutProduct struct {
 	Status                 string
 	CustomerTypeVisibility string
 	ShopStatus             string
+	RewardPoints           int
 	ParcelLength           *string
 	ParcelWidth            *string
 	ParcelHeight           *string
@@ -55,7 +65,7 @@ func (r *OrderRepository) GetCheckoutProduct(ctx context.Context, productID stri
 		select p.id::text, p.shop_id::text, s.seller_id::text, p.price_amount, p.currency,
 		       p.status, p.customer_type_visibility, s.status,
 		       p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
-		       p.parcel_weight, p.parcel_mass_unit
+		       p.parcel_weight, p.parcel_mass_unit, p.reward_points
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		where p.id = $1`, productID,
@@ -63,7 +73,7 @@ func (r *OrderRepository) GetCheckoutProduct(ctx context.Context, productID stri
 		&p.ID, &p.ShopID, &p.SellerID, &p.PriceAmount, &p.Currency,
 		&p.Status, &p.CustomerTypeVisibility, &p.ShopStatus,
 		&p.ParcelLength, &p.ParcelWidth, &p.ParcelHeight, &p.ParcelDistanceUnit,
-		&p.ParcelWeight, &p.ParcelMassUnit,
+		&p.ParcelWeight, &p.ParcelMassUnit, &p.RewardPoints,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderProductNotFound
@@ -71,6 +81,11 @@ func (r *OrderRepository) GetCheckoutProduct(ctx context.Context, productID stri
 	return p, err
 }
 
+// Create writes the order, its lines and deliveries in one transaction,
+// together with the points that ride on it: each line's reward points are
+// reserved from its seller, and any points the customer attached to the gift
+// are taken from their balance. Not enough points for the gift fails the
+// whole order with ErrPointsInsufficient.
 func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items []models.OrderItem, deliveries []models.OrderShopDelivery) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -78,19 +93,29 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 	}
 	defer tx.Rollback(ctx)
 
+	order.GiftPointsStatus = "none"
+	if order.GiftPoints > 0 {
+		order.GiftPointsStatus = "held"
+	}
 	err = tx.QueryRow(ctx, `
 		insert into marketplace.orders (
 			order_number, customer_id, recipient_id, country_id, customer_type,
 			delivery_date, status, subtotal_amount, delivery_amount, total_amount,
-			currency, gift_message, media_greeting_id
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			currency, gift_message, media_greeting_id, gift_points, gift_points_status
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		returning id, created_at, updated_at`,
 		order.OrderNumber, order.CustomerID, order.RecipientID, order.CountryID, order.CustomerType,
 		order.DeliveryDate, order.Status, order.SubtotalAmount, order.DeliveryAmount, order.TotalAmount,
-		order.Currency, order.GiftMessage, order.MediaGreetingID,
+		order.Currency, order.GiftMessage, order.MediaGreetingID, order.GiftPoints, order.GiftPointsStatus,
 	).Scan(&order.ID, &order.CreatedAt, &order.UpdatedAt)
 	if err != nil {
 		return mapOrderWriteError(err)
+	}
+
+	// Sellers' accounts are locked before the customer's, the same order
+	// every other points change takes.
+	if err := reserveOrderRewards(ctx, tx, items); err != nil {
+		return err
 	}
 
 	for i := range items {
@@ -101,11 +126,13 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 		err = tx.QueryRow(ctx, `
 			insert into marketplace.order_items (
 				order_id, seller_id, shop_id, product_id, quantity,
-				unit_amount, total_amount, fulfilment_status
-			) values ($1,$2,$3,$4,$5,$6,$7,$8)
+				unit_amount, total_amount, fulfilment_status,
+				reward_points_per_unit, reward_points, reward_status
+			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 			returning id, created_at, updated_at`,
 			items[i].OrderID, items[i].SellerID, items[i].ShopID, items[i].ProductID, items[i].Quantity,
 			items[i].UnitAmount, items[i].TotalAmount, items[i].FulfilmentStatus,
+			items[i].RewardPointsPerUnit, items[i].RewardPoints, items[i].RewardStatus,
 		).Scan(&items[i].ID, &items[i].CreatedAt, &items[i].UpdatedAt)
 		if err != nil {
 			return err
@@ -123,6 +150,23 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 		); err != nil {
 			return err
 		}
+	}
+
+	if r.rewardsAtOrder {
+		for i := range items {
+			if items[i].RewardStatus != "reserved" {
+				continue
+			}
+			if err := payLineReward(ctx, tx, items[i].ID, items[i].SellerID, order.CustomerID,
+				order.ID, items[i].RewardPoints); err != nil {
+				return err
+			}
+			items[i].RewardStatus = "awarded"
+		}
+	}
+
+	if err := holdGiftPoints(ctx, tx, order); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)
@@ -179,7 +223,8 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string)
 	rows, err := r.db.Query(ctx, `
 		select id, order_number, customer_id, recipient_id, country_id, customer_type,
 		       delivery_date, status, subtotal_amount, delivery_amount, total_amount,
-		       currency, gift_message, media_greeting_id, created_at, updated_at
+		       currency, gift_message, media_greeting_id, gift_points, gift_points_status,
+		       created_at, updated_at
 		from marketplace.orders
 		where customer_id = $1
 		order by created_at desc`, customerID)
@@ -194,7 +239,8 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string)
 		if err := rows.Scan(
 			&o.ID, &o.OrderNumber, &o.CustomerID, &o.RecipientID, &o.CountryID, &o.CustomerType,
 			&o.DeliveryDate, &o.Status, &o.SubtotalAmount, &o.DeliveryAmount, &o.TotalAmount,
-			&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.CreatedAt, &o.UpdatedAt,
+			&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.GiftPoints, &o.GiftPointsStatus,
+			&o.CreatedAt, &o.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -208,13 +254,15 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 	err := r.db.QueryRow(ctx, `
 		select id, order_number, customer_id, recipient_id, country_id, customer_type,
 		       delivery_date, status, subtotal_amount, delivery_amount, total_amount,
-		       currency, gift_message, media_greeting_id, created_at, updated_at
+		       currency, gift_message, media_greeting_id, gift_points, gift_points_status,
+		       created_at, updated_at
 		from marketplace.orders
 		where id = $1 and customer_id = $2`, orderID, customerID,
 	).Scan(
 		&o.ID, &o.OrderNumber, &o.CustomerID, &o.RecipientID, &o.CountryID, &o.CustomerType,
 		&o.DeliveryDate, &o.Status, &o.SubtotalAmount, &o.DeliveryAmount, &o.TotalAmount,
-		&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.CreatedAt, &o.UpdatedAt,
+		&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.GiftPoints, &o.GiftPointsStatus,
+		&o.CreatedAt, &o.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound
@@ -230,6 +278,7 @@ func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]mode
 	rows, err := r.db.Query(ctx, `
 		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
 		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+		       oi.reward_points_per_unit, oi.reward_points, oi.reward_status,
 		       sh.courier_provider, sh.tracking_number, sh.provider_tracking_url,
 		       sh.status, sh.delivery_mode, sh.delivered_at, sh.created_at
 		from marketplace.order_items oi
@@ -263,6 +312,7 @@ func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]mode
 		if err := rows.Scan(
 			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
 			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
+			&it.RewardPointsPerUnit, &it.RewardPoints, &it.RewardStatus,
 			&courier, &trackingNo, &trackingURL,
 			&shipStatus, &deliveryMode, &deliveredAt, &shippedAt,
 		); err != nil {
@@ -333,6 +383,19 @@ func (r *OrderRepository) CancelForCustomer(ctx context.Context, customerID, ord
 		return err
 	}
 
+	// Rewards promised on the lines go back to their sellers, and points
+	// attached to the gift back to the customer, with the cancellation.
+	oid, err := uuid.Parse(orderID)
+	if err != nil {
+		return ErrOrderNotFound
+	}
+	if _, _, err := settleUndeliveredPoints(ctx, tx, oid); err != nil {
+		return err
+	}
+	if err := takeBackCancelledRewards(ctx, tx, oid); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -352,6 +415,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 	rows, err := r.db.Query(ctx, `
 		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
 		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+		       oi.reward_points_per_unit, oi.reward_points, oi.reward_status,
 		       o.order_number, o.status, o.delivery_date,
 		       shp.name, p.name, p.slug, p.image_url,
 		       r.name
@@ -369,6 +433,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 		if err := rows.Scan(
 			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
 			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
+			&it.RewardPointsPerUnit, &it.RewardPoints, &it.RewardStatus,
 			&it.OrderNumber, &it.OrderStatus, &it.DeliveryDate,
 			&it.ShopName, &it.ProductName, &it.ProductSlug, &it.ProductImageURL,
 			&it.RecipientName,
@@ -445,10 +510,12 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 		select
 			oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
 			oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
+			oi.reward_points_per_unit, oi.reward_points, oi.reward_status,
 			shp.name,
 			o.id, o.order_number, o.customer_id, o.recipient_id, o.country_id, o.customer_type,
 			o.delivery_date, o.status, o.subtotal_amount, o.delivery_amount, o.total_amount,
-			o.currency, o.gift_message, o.media_greeting_id, o.created_at, o.updated_at,
+			o.currency, o.gift_message, o.media_greeting_id, o.gift_points, o.gift_points_status,
+			o.created_at, o.updated_at,
 			p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 			p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
 			p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
@@ -464,10 +531,12 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 	).Scan(
 		&d.ID, &d.OrderID, &d.SellerID, &d.ShopID, &d.ProductID, &d.Quantity,
 		&d.UnitAmount, &d.TotalAmount, &d.FulfilmentStatus, &d.CreatedAt, &d.UpdatedAt,
+		&d.RewardPointsPerUnit, &d.RewardPoints, &d.RewardStatus,
 		&d.ShopName,
 		&d.Order.ID, &d.Order.OrderNumber, &d.Order.CustomerID, &d.Order.RecipientID, &d.Order.CountryID, &d.Order.CustomerType,
 		&d.Order.DeliveryDate, &d.Order.Status, &d.Order.SubtotalAmount, &d.Order.DeliveryAmount, &d.Order.TotalAmount,
-		&d.Order.Currency, &d.Order.GiftMessage, &d.Order.MediaGreetingID, &d.Order.CreatedAt, &d.Order.UpdatedAt,
+		&d.Order.Currency, &d.Order.GiftMessage, &d.Order.MediaGreetingID, &d.Order.GiftPoints, &d.Order.GiftPointsStatus,
+		&d.Order.CreatedAt, &d.Order.UpdatedAt,
 		&d.Product.ID, &d.Product.ShopID, &d.Product.Name, &d.Product.Slug, &d.Product.Description, &d.Product.ProductType, &d.Product.PriceAmount,
 		&d.Product.Currency, &d.Product.Status, &d.Product.OccasionTags, &d.Product.CustomerTypeVisibility,
 		&d.Product.PointsDisplayEnabled, &d.Product.PrepMinutes, &d.Product.CreatedAt, &d.Product.UpdatedAt, &d.Product.ImageURL,
@@ -559,11 +628,13 @@ func (r *OrderRepository) AcceptItemForSeller(ctx context.Context, sellerID, ite
 		set fulfilment_status = 'accepted', updated_at = now()
 		where id = $1 and seller_id = $2 and fulfilment_status = 'pending'
 		returning id, order_id, seller_id, shop_id, product_id, quantity,
-		          unit_amount, total_amount, fulfilment_status, created_at, updated_at`,
+		          unit_amount, total_amount, fulfilment_status, created_at, updated_at,
+		          reward_points_per_unit, reward_points, reward_status`,
 		itemID, sellerID,
 	).Scan(
 		&item.ID, &item.OrderID, &item.SellerID, &item.ShopID, &item.ProductID, &item.Quantity,
 		&item.UnitAmount, &item.TotalAmount, &item.FulfilmentStatus, &item.CreatedAt, &item.UpdatedAt,
+		&item.RewardPointsPerUnit, &item.RewardPoints, &item.RewardStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool

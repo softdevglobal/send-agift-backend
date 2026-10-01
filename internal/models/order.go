@@ -22,8 +22,14 @@ type Order struct {
 	Currency        string     `json:"currency"`
 	GiftMessage     *string    `json:"gift_message,omitempty"`
 	MediaGreetingID *uuid.UUID `json:"media_greeting_id,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	// Points the sender attached to the gift, and where they are:
+	// none | held (taken from the sender, not yet delivered) | delivered
+	// (reached the recipient's account) | returned (back to the sender) |
+	// reversed (taken back after a refund).
+	GiftPoints       int64     `json:"gift_points"`
+	GiftPointsStatus string    `json:"gift_points_status"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // OrderItemTracking is the part of a shipment a customer is allowed to see:
@@ -59,8 +65,15 @@ type OrderItem struct {
 	UnitAmount       int       `json:"unit_amount"`
 	TotalAmount      int       `json:"total_amount"`
 	FulfilmentStatus string    `json:"fulfilment_status"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	// The product's reward points as sold, and where they are:
+	// none | reserved (held from the seller until delivery) | awarded |
+	// released (back to the seller, line cancelled) | reversed (taken back
+	// after a refund).
+	RewardPointsPerUnit int       `json:"reward_points_per_unit"`
+	RewardPoints        int64     `json:"reward_points"`
+	RewardStatus        string    `json:"reward_status"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 	// Present once the line has actually been shipped.
 	Tracking *OrderItemTracking `json:"tracking,omitempty"`
 }

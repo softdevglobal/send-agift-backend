@@ -22,7 +22,11 @@ type Product struct {
 	OccasionTags           []string  `json:"occasion_tags"`
 	CustomerTypeVisibility string    `json:"customer_type_visibility"`
 	PointsDisplayEnabled   bool      `json:"points_display_enabled"`
-	PrepMinutes            int       `json:"prep_minutes"`
+	// RewardPoints a customer earns for each unit bought, paid from the
+	// seller's points when the line is delivered. On customer-facing reads it
+	// is zero when the seller does not hold enough points to pay it.
+	RewardPoints int       `json:"reward_points"`
+	PrepMinutes  int       `json:"prep_minutes"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 	// ImageURL is the cover thumbnail (list cards, order lines). Prefer Media for galleries.
