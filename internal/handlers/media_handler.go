@@ -36,16 +36,17 @@ type presignUploadResponse struct {
 // Folders under "public/" are readable by anyone via PublicURL; anything
 // else stays private and must be read back through GetURL.
 var allowedFolders = map[string]string{
-	"seller-profile": "public/sellers",
-	"shop-image":     "public/shops",
-	"product-image":  "public/products/images",
-	"product-video":  "public/products/videos",
-	"reel-video":     "public/reels/videos",
-	"reel-photo":     "public/reels/photos",
-	"chat-image":     "public/chat/images",
-	"chat-document":  "public/chat/documents",
-	"review-photo":   "public/reviews/photos",
-	"review-video":   "public/reviews/videos",
+	"seller-profile":   "public/sellers",
+	"customer-profile": "public/customers",
+	"shop-image":       "public/shops",
+	"product-image":    "public/products/images",
+	"product-video":    "public/products/videos",
+	"reel-video":       "public/reels/videos",
+	"reel-photo":       "public/reels/photos",
+	"chat-image":       "public/chat/images",
+	"chat-document":    "public/chat/documents",
+	"review-photo":     "public/reviews/photos",
+	"review-video":     "public/reviews/videos",
 }
 
 // PresignUpload issues a short-lived URL the client can PUT a file to directly.
