@@ -26,6 +26,14 @@ go run ./cmd/migrate
 
 Copy `.env.example` to `.env` and fill in values. Delivery is priced from each shop's delivery zones. There is no carrier integration.
 
+| Variable | Purpose |
+|---|---|
+| `POINTS_CENTS_PER_POINT` | What one point costs a seller, in minor units of `POINTS_CURRENCY` (default `10` = $0.10) |
+| `POINTS_CURRENCY` | Currency sellers buy points in (default `USD`) |
+| `POINTS_PAYMENT_PROVIDER` | `instant` (default until Stripe is connected — points are credited as soon as they are bought), `manual` (an admin confirms each payment) or `test` (sellers approve their own purchase; development only) |
+| `POINTS_REWARD_TIMING` | When product reward points reach the buyer: `order` (default — as soon as the order is placed; cancelling takes them back and is refused once they are spent) or `delivery` |
+| `POINTS_WEBHOOK_SECRET` | HMAC-SHA256 secret for `POST /api/v1/payments/points/webhook`; empty refuses the webhook |
+
 ## Postman rules
 
 | | |

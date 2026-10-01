@@ -64,6 +64,9 @@ func main() {
 	countryService := services.NewCountryService(countries)
 	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
 	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
+	// Product reward points reach the buyer when the order is placed, or on
+	// delivery (POINTS_REWARD_TIMING=delivery).
+	orders.PayRewardsAtOrder(cfg.PointsRewardTiming != "delivery")
 	orderService := services.NewOrderService(orders, customers, countries, shipments)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
 	productService := services.NewProductService(products, sellers, s3Service, cfg.S3Bucket)
@@ -74,13 +77,27 @@ func main() {
 	gameService := services.NewGameService(gameRepo)
 	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, pointsRepo)
 	gameService.UseCompetitions(competitionService)
+	// Every practice play costs the points a Super Admin set for that game
+	// (competition.games.play_cost_points), taken on the server when it starts.
+	gameService.ChargeForPlays(pointsRepo)
 	pointsService := services.NewPointsService(pointsRepo)
 	// Prize reconciliation (Progressive Prize spec §9): every round whose
 	// money can still move is re-derived from its ledger on a schedule.
 	go competitionService.RunReconciliation(context.Background(), 15*time.Minute)
 	// Points earning: delivered orders, refunds and sign-up bonuses, by each
-	// country's rule. Idempotent, so it simply runs on a timer.
-	go pointsService.RunEarningLoop(context.Background(), 5*time.Minute)
+	// country's rule, plus product rewards and gift points riding on orders.
+	// Idempotent, so it simply runs on a timer.
+	go pointsService.RunEarningLoop(context.Background(), time.Minute)
+	// Sellers buying points: the provider only starts a payment; points are
+	// credited when the webhook or an admin confirms it.
+	pointsProvider, err := services.NewPointsPaymentProvider(cfg.PointsPaymentProvider)
+	if err != nil {
+		log.Fatalf("points payments: %v", err)
+	}
+	if pointsProvider.SelfConfirm() {
+		log.Printf("⚠️  POINTS_PAYMENT_PROVIDER=%s: seller points are credited without a confirmed payment. Connect a card provider before going live.", pointsProvider.Name())
+	}
+	sellerPointsService := services.NewSellerPointsService(pointsRepo, pointsProvider, cfg.PointsCentsPerPoint, cfg.PointsCurrency, cfg.PointsWebhookSecret)
 	shippingService := services.NewShippingService(shipments, orders)
 
 	authHandler := handlers.NewAuthHandler(authService)          // create a new auth handler
@@ -101,6 +118,7 @@ func main() {
 	gameHandler := handlers.NewGameHandler(gameService)
 	competitionHandler := handlers.NewCompetitionHandler(competitionService)
 	pointsHandler := handlers.NewPointsHandler(pointsService)
+	sellerPointsHandler := handlers.NewSellerPointsHandler(sellerPointsService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
 	// placesService proxies Google Places so the API key stays on the server
@@ -110,7 +128,7 @@ func main() {
 	availabilityService := services.NewAvailabilityService(repository.NewAvailabilityRepository(pool))
 	availabilityHandler := handlers.NewAvailabilityHandler(availabilityService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

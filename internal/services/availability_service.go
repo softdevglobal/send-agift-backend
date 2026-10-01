@@ -194,10 +194,7 @@ func lowStockLeft(gift repository.GiftStock) *int {
 	if !gift.HasInventory {
 		return nil
 	}
-	sellable := gift.AvailableQty - gift.ReservedQty
-	if sellable < 0 {
-		sellable = 0
-	}
+	sellable := max(gift.AvailableQty-gift.ReservedQty, 0)
 	if sellable > gift.LowStockThreshold {
 		return nil
 	}
