@@ -622,10 +622,7 @@ func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.E
 		if err != nil {
 			return res, err
 		}
-		take := v.earned
-		if take > balance {
-			take = balance
-		}
+		take := min(v.earned, balance)
 		if take <= 0 {
 			continue // nothing to take yet; tried again next pass
 		}
