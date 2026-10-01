@@ -20,6 +20,7 @@ import (
 const (
 	placesAutocompleteURL = "https://places.googleapis.com/v1/places:autocomplete"
 	placesDetailsURL      = "https://places.googleapis.com/v1/places/"
+	geocodeURL            = "https://maps.googleapis.com/maps/api/geocode/json"
 )
 
 // detailsFieldMask limits the Place Details response to the fields we map onto
@@ -229,7 +230,53 @@ func (s *PlacesService) Details(ctx context.Context, placeID, sessionToken, lang
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("places: bad details response: %w", err)
 	}
-	return toPlaceDetails(parsed), nil
+	details := toPlaceDetails(parsed)
+	// Many street results (most of Sri Lanka, for one) carry no postal code.
+	// The area around the map point usually has one, so ask for that.
+	if details.PostalCode == "" && details.Latitude != nil && details.Longitude != nil {
+		details.PostalCode = s.postalCodeAt(ctx, *details.Latitude, *details.Longitude)
+	}
+	return details, nil
+}
+
+// postalCodeAt reverse-geocodes a point to the postal code that covers it.
+// It is a best effort: any failure, including the Geocoding API not being
+// enabled for the key, leaves the postal code blank for the customer to type.
+func (s *PlacesService) postalCodeAt(ctx context.Context, lat, lng float64) string {
+	query := url.Values{}
+	query.Set("latlng", fmt.Sprintf("%f,%f", lat, lng))
+	query.Set("result_type", "postal_code")
+	query.Set("key", s.apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, geocodeURL+"?"+query.Encode(), nil)
+	if err != nil {
+		return ""
+	}
+	raw, err := s.do(req)
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Status  string `json:"status"`
+		Results []struct {
+			AddressComponents []struct {
+				LongName string   `json:"long_name"`
+				Types    []string `json:"types"`
+			} `json:"address_components"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil || parsed.Status != "OK" {
+		return ""
+	}
+	for _, result := range parsed.Results {
+		for _, c := range result.AddressComponents {
+			for _, t := range c.Types {
+				if t == "postal_code" && c.LongName != "" {
+					return c.LongName
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // do sends the request and turns non-2xx replies into readable errors.
