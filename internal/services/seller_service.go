@@ -430,6 +430,9 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 		if err != nil {
 			return nil, err
 		}
+		if len(zones) == 0 {
+			return nil, ErrInvalidShop
+		}
 	}
 	if err := s.sellers.UpdateShop(ctx, shop); err != nil {
 		if errors.Is(err, repository.ErrShopDuplicate) {
@@ -503,6 +506,9 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 	if err != nil {
 		return nil, err
 	}
+	if len(zones) == 0 {
+		return nil, ErrInvalidShop
+	}
 	if err := s.sellers.CreateShop(ctx, shop); err != nil {
 		if errors.Is(err, repository.ErrShopDuplicate) {
 			return nil, ErrShopConflict
@@ -543,6 +549,9 @@ func (s *SellerService) ReplaceDeliveryZones(ctx context.Context, sellerID, shop
 	zones, err := normalizeDeliveryZones(in.Zones)
 	if err != nil {
 		return nil, err
+	}
+	if len(zones) == 0 {
+		return nil, ErrInvalidShop
 	}
 	return s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
 }

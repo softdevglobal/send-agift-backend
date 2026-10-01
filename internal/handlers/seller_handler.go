@@ -240,7 +240,7 @@ func (h *SellerHandler) writeError(w http.ResponseWriter, err error, fallback st
 	case errors.Is(err, services.ErrInvalidAddress):
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, city; address_type must be pickup|return|both")
 	case errors.Is(err, services.ErrInvalidShop):
-		utils.Error(w, http.StatusBadRequest, "shop name is required; latitude and longitude must be sent together (-90..90, -180..180); delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day)")
+		utils.Error(w, http.StatusBadRequest, "shop name is required; at least one delivery zone is required; latitude and longitude must be sent together (-90..90, -180..180); delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day)")
 	case errors.Is(err, services.ErrInvalidCurrency):
 		utils.Error(w, http.StatusBadRequest, "currency must be a known ISO currency code")
 	case errors.Is(err, services.ErrSellerConflict):
