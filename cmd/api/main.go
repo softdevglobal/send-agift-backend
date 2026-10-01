@@ -69,13 +69,13 @@ func main() {
 	orders.PayRewardsAtOrder(cfg.PointsRewardTiming != "delivery")
 	orderService := services.NewOrderService(orders, customers, countries, shipments)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
-	productService := services.NewProductService(products, sellers, s3Service, cfg.S3Bucket)
+	productService := services.NewProductService(products, sellers, countries, s3Service, cfg.S3Bucket)
 	reelService := services.NewReelService(reels, reelSocial, sellers, s3Service, cfg.S3Bucket)
 	reelSocialService := services.NewReelSocialService(reelSocial)
 	productReviewService := services.NewProductReviewService(productReviews, orders, s3Service, cfg.S3Bucket)
 	messagingService := services.NewMessagingService(messaging, orders, customers, sellers, admins, s3Service, cfg.S3Bucket)
 	gameService := services.NewGameService(gameRepo)
-	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, pointsRepo)
+	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, countries, pointsRepo)
 	gameService.UseCompetitions(competitionService)
 	// Every practice play costs the points a Super Admin set for that game
 	// (competition.games.play_cost_points), taken on the server when it starts.

@@ -125,8 +125,8 @@ func (f *multiShopFixture) shop(seller uuid.UUID, price int) testShop {
 	f.scan(&addr, `insert into seller.seller_addresses (seller_id, country_id, line1, city, latitude, longitude)
 		values ($1, $2, '9 Duplication Road', 'Colombo', 6.9000, 79.8550) returning id`, seller, f.country)
 	slug := "shop-" + uuid.NewString()[:8]
-	f.scan(&s.shop, `insert into seller.shops (seller_id, name, slug, address_id, latitude, longitude, status)
-		values ($1, $2, $2, $3, 6.9000, 79.8550, 'active') returning id`, seller, slug, addr)
+	f.scan(&s.shop, `insert into seller.shops (seller_id, country_id, name, slug, address_id, latitude, longitude, status)
+		values ($1, $2, $3, $3, $4, 6.9000, 79.8550, 'active') returning id`, seller, f.country, slug, addr)
 	f.exec(`insert into seller.shop_delivery_zones (shop_id, max_km, price_amount, currency, estimated_days)
 		values ($1, 5, 5000, 'USD', 1), ($1, 20, 8000, 'USD', 2)`, s.shop)
 	f.scan(&s.product, `insert into seller.products

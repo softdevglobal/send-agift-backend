@@ -30,19 +30,21 @@ const maxRewardPoints = 1_000_000
 const maxProductMediaItems = 12
 
 type ProductService struct {
-	products *repository.ProductRepository
-	sellers  *repository.SellerRepository
-	s3       *S3Service
-	bucket   string
+	products  *repository.ProductRepository
+	sellers   *repository.SellerRepository
+	countries *repository.CountryRepository
+	s3        *S3Service
+	bucket    string
 }
 
 func NewProductService(
 	products *repository.ProductRepository,
 	sellers *repository.SellerRepository,
+	countries *repository.CountryRepository,
 	s3 *S3Service,
 	bucket string,
 ) *ProductService {
-	return &ProductService{products: products, sellers: sellers, s3: s3, bucket: bucket}
+	return &ProductService{products: products, sellers: sellers, countries: countries, s3: s3, bucket: bucket}
 }
 
 // ProductMediaInput is one already-uploaded file (via /media/presign-upload).
@@ -124,6 +126,9 @@ func (s *ProductService) Create(ctx context.Context, sellerID, shopID string, in
 	if err != nil {
 		return nil, ErrInvalidProduct
 	}
+	if err := s.requireShopCurrency(ctx, sellerID, shopID, in.Currency); err != nil {
+		return nil, err
+	}
 	assets, err := s.buildAssets(sid, in.Media)
 	if err != nil {
 		return nil, err
@@ -172,6 +177,9 @@ func (s *ProductService) Update(ctx context.Context, sellerID, productID string,
 		if errors.Is(err, repository.ErrProductNotFound) {
 			return nil, ErrProductNotFound
 		}
+		return nil, err
+	}
+	if err := s.requireShopCurrency(ctx, sellerID, existing.ShopID.String(), in.Currency); err != nil {
 		return nil, err
 	}
 
@@ -258,6 +266,30 @@ func (s *ProductService) UpdateInventory(ctx context.Context, sellerID, productI
 	return inv, nil
 }
 
+// requireShopCurrency rejects a price whose currency is not the default_currency
+// on the shop's country row.
+func (s *ProductService) requireShopCurrency(ctx context.Context, sellerID, shopID, currency string) error {
+	shop, err := s.sellers.GetShopByID(ctx, sellerID, shopID)
+	if err != nil {
+		if errors.Is(err, repository.ErrShopNotFound) {
+			return ErrShopNotFound
+		}
+		return err
+	}
+	country, err := s.countries.GetByID(ctx, shop.CountryID.String())
+	if err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return ErrInvalidCurrency
+		}
+		return err
+	}
+	code := strings.ToUpper(strings.TrimSpace(currency))
+	if code == "" || !strings.EqualFold(code, country.DefaultCurrency) {
+		return ErrInvalidCurrency
+	}
+	return nil
+}
+
 func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput, assets []models.MediaAsset) (*models.Product, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.Currency = strings.ToUpper(strings.TrimSpace(in.Currency))
@@ -275,9 +307,6 @@ func (s *ProductService) buildProduct(id uuid.UUID, in ProductInput, assets []mo
 	// the seller holds the points to pay it.
 	if in.RewardPoints < 0 || in.RewardPoints > maxRewardPoints {
 		return nil, ErrInvalidRewardPoints
-	}
-	if _, ok := knownCurrencies[in.Currency]; !ok {
-		return nil, ErrInvalidCurrency
 	}
 	if in.ProductType == "" {
 		in.ProductType = "gift"

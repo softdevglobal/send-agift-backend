@@ -117,7 +117,7 @@ func (h *ProductHandler) writeError(w http.ResponseWriter, err error, fallback s
 	case errors.Is(err, services.ErrInvalidProduct):
 		utils.Error(w, http.StatusBadRequest, "name, currency required; status draft|published|paused|rejected; visibility personal|corporate|both; amounts >= 0; media max 12 image/video files with object_path+mime_type")
 	case errors.Is(err, services.ErrInvalidCurrency):
-		utils.Error(w, http.StatusBadRequest, "currency must be a known ISO currency code")
+		utils.Error(w, http.StatusBadRequest, "currency must be the shop's country currency")
 	case errors.Is(err, services.ErrInvalidRewardPoints):
 		utils.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrInvalidInventory):

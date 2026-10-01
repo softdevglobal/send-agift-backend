@@ -139,6 +139,7 @@ type CompetitionService struct {
 	games        *repository.GameRepository
 	customers    *repository.CustomerRepository
 	capabilities *repository.CountryCapabilityRepository
+	countries    *repository.CountryRepository
 	points       *repository.PointsRepository
 	now          func() time.Time
 }
@@ -148,6 +149,7 @@ func NewCompetitionService(
 	gameRepo *repository.GameRepository,
 	customers *repository.CustomerRepository,
 	capabilities *repository.CountryCapabilityRepository,
+	countries *repository.CountryRepository,
 	points *repository.PointsRepository,
 ) *CompetitionService {
 	return &CompetitionService{
@@ -155,6 +157,7 @@ func NewCompetitionService(
 		games:        gameRepo,
 		customers:    customers,
 		capabilities: capabilities,
+		countries:    countries,
 		points:       points,
 		now:          time.Now,
 	}
@@ -1022,6 +1025,13 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	if err != nil {
 		return invalid("country_id is required")
 	}
+	country, err := s.countries.GetByID(ctx, countryID.String())
+	if err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return invalid("country_id does not exist")
+		}
+		return err
+	}
 	title := strings.TrimSpace(in.Title)
 	if n := len([]rune(title)); n < 3 || n > 120 {
 		return invalid("title must be 3 to 120 characters")
@@ -1145,7 +1155,19 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 		continueAtCap = *in.ContinueAtCap
 	}
 	var currency *string
-	if in.PrizeCurrency != nil && strings.TrimSpace(*in.PrizeCurrency) != "" {
+	countryCurrency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
+	if in.PrizeType != "points" {
+		if countryCurrency == "" {
+			return invalid("the selected country has no currency")
+		}
+		currency = &countryCurrency
+		if in.PrizeCurrency != nil && strings.TrimSpace(*in.PrizeCurrency) != "" {
+			cur := strings.ToUpper(strings.TrimSpace(*in.PrizeCurrency))
+			if cur != countryCurrency {
+				return invalid("prize_currency must be the country's currency (" + countryCurrency + ")")
+			}
+		}
+	} else if in.PrizeCurrency != nil && strings.TrimSpace(*in.PrizeCurrency) != "" {
 		cur := strings.ToUpper(strings.TrimSpace(*in.PrizeCurrency))
 		if len(cur) != 3 {
 			return invalid("prize_currency must be a 3-letter code")
@@ -1305,8 +1327,16 @@ func (s *CompetitionService) SetReserve(ctx context.Context, admin AdminActor, i
 		return nil, ErrCompetitionLocked
 	}
 	cur := strings.ToUpper(strings.TrimSpace(in.Currency))
-	if in.ReserveAmount <= 0 || len(cur) != 3 {
-		return nil, fmt.Errorf("%w: reserve_amount must be positive and currency a 3-letter code", ErrInvalidReserve)
+	country, err := s.countries.GetByID(ctx, c.CountryID.String())
+	if err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return nil, fmt.Errorf("%w: country_id does not exist", ErrInvalidReserve)
+		}
+		return nil, err
+	}
+	countryCurrency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
+	if in.ReserveAmount <= 0 || cur == "" || cur != countryCurrency {
+		return nil, fmt.Errorf("%w: reserve_amount must be positive and currency must be the country's currency (%s)", ErrInvalidReserve, countryCurrency)
 	}
 	if in.FundingSource != "sendagift" && in.FundingSource != "approved_sponsor" {
 		return nil, fmt.Errorf("%w: funding_source must be sendagift or approved_sponsor", ErrInvalidReserve)

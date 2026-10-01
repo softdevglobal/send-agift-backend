@@ -86,6 +86,7 @@ type ShopInput struct {
 	Description             *string `json:"description"`	// description for the shop
 	CustomerVisibleLocation *string `json:"customer_visible_location"`	// customer visible location for the shop
 	Status                  string  `json:"status"`	// status for the shop
+	CountryID               string  `json:"country_id"`
 	AddressID               *string `json:"address_id"`
 	ReturnAddressID         *string `json:"return_address_id"`
 	ImageURL                *string              `json:"image_url"`
@@ -423,10 +424,16 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 		shop.Latitude = in.Latitude
 		shop.Longitude = in.Longitude
 	}
+	country, err := s.shopCountry(ctx, in.CountryID)
+	if err != nil {
+		return nil, err
+	}
+	shop.CountryID = country.ID
 	var zones []models.ShopDeliveryZone
 	replaceZones := in.DeliveryZones != nil
 	if replaceZones {
-		zones, err = normalizeDeliveryZones(in.DeliveryZones)
+		currency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
+		zones, err = normalizeDeliveryZones(in.DeliveryZones, currency)
 		if err != nil {
 			return nil, err
 		}
@@ -499,10 +506,16 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		Latitude:                in.Latitude,
 		Longitude:               in.Longitude,
 	}
+	country, err := s.shopCountry(ctx, in.CountryID)
+	if err != nil {
+		return nil, err
+	}
+	shop.CountryID = country.ID
 	if err := validateLatLng(in.Latitude, in.Longitude); err != nil {
 		return nil, err
 	}
-	zones, err := normalizeDeliveryZones(in.DeliveryZones)
+	currency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
+	zones, err := normalizeDeliveryZones(in.DeliveryZones, currency)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +559,11 @@ func (s *SellerService) ReplaceDeliveryZones(ctx context.Context, sellerID, shop
 		}
 		return nil, err
 	}
-	zones, err := normalizeDeliveryZones(in.Zones)
+	currency, err := s.countryCurrency(ctx, shop.CountryID.String())
+	if err != nil {
+		return nil, err
+	}
+	zones, err := normalizeDeliveryZones(in.Zones, currency)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +573,7 @@ func (s *SellerService) ReplaceDeliveryZones(ctx context.Context, sellerID, shop
 	return s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
 }
 
-func normalizeDeliveryZones(in []DeliveryZoneInput) ([]models.ShopDeliveryZone, error) {
+func normalizeDeliveryZones(in []DeliveryZoneInput, allowed string) ([]models.ShopDeliveryZone, error) {
 	if in == nil {
 		return nil, nil
 	}
@@ -567,7 +584,7 @@ func normalizeDeliveryZones(in []DeliveryZoneInput) ([]models.ShopDeliveryZone, 
 			return nil, ErrInvalidShop
 		}
 		currency := strings.ToUpper(strings.TrimSpace(z.Currency))
-		if _, ok := knownCurrencies[currency]; !ok {
+		if currency == "" || currency != allowed {
 			return nil, ErrInvalidCurrency
 		}
 		key := strconv.FormatFloat(z.MaxKm, 'f', 2, 64)
@@ -584,6 +601,34 @@ func normalizeDeliveryZones(in []DeliveryZoneInput) ([]models.ShopDeliveryZone, 
 		})
 	}
 	return out, nil
+}
+
+// shopCountry loads the country the shop sells in. It must be a row in core.countries.
+func (s *SellerService) shopCountry(ctx context.Context, countryID string) (*models.Country, error) {
+	countryID = strings.TrimSpace(countryID)
+	if _, err := uuid.Parse(countryID); err != nil {
+		return nil, ErrInvalidCountry
+	}
+	country, err := s.countries.GetByID(ctx, countryID)
+	if err != nil {
+		if errors.Is(err, repository.ErrCountryNotFound) {
+			return nil, ErrInvalidCountry
+		}
+		return nil, err
+	}
+	return country, nil
+}
+
+func (s *SellerService) countryCurrency(ctx context.Context, countryID string) (string, error) {
+	country, err := s.shopCountry(ctx, countryID)
+	if err != nil {
+		return "", err
+	}
+	code := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
+	if code == "" {
+		return "", ErrInvalidCurrency
+	}
+	return code, nil
 }
 
 func (s *SellerService) buildAddress(sellerID uuid.UUID, in SellerAddressInput) (*models.SellerAddress, error) {
