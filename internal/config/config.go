@@ -26,8 +26,6 @@ type Config struct {
 	AWSSecretKey    string
 	S3Bucket        string
 	GoogleMapsKey   string
-	ShippoAPIKey    string
-	ShippoLabelBucket string
 
 	// Seller points purchases. PointsCentsPerPoint is what one point costs in
 	// minor units of PointsCurrency (10 = $0.10 a point). The provider is
@@ -65,8 +63,6 @@ func Load() (*Config, error) {
 		AWSSecretKey:    os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		S3Bucket:        os.Getenv("S3_BUCKET"),
 		GoogleMapsKey:   os.Getenv("GOOGLE_MAPS_API_KEY"),
-		ShippoAPIKey:    os.Getenv("SHIPPO_API_KEY"),
-		ShippoLabelBucket: envOr("SHIPPO_LABEL_BUCKET", "sendagift-labels"),
 
 		PointsCentsPerPoint:   intOr("POINTS_CENTS_PER_POINT", 10),
 		PointsCurrency:        envOr("POINTS_CURRENCY", "USD"),
@@ -94,7 +90,7 @@ func Load() (*Config, error) {
 }
 
 // DSN builds a Postgres connection string.
-// This string is used to connect to the database 
+// This string is used to connect to the database
 func (c *Config) DSN() string {
 	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",

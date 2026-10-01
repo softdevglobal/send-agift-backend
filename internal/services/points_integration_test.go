@@ -95,15 +95,19 @@ func (f *pointsFixture) seller() uuid.UUID {
 }
 
 // product makes an active shop for seller with one published product that
-// rewards reward points per unit.
+// rewards reward points per unit. The shop sits at a fixed point with a
+// generous, free delivery zone, so any recipient address this fixture
+// creates (also fixed, a few km away) can always be delivered to.
 func (f *pointsFixture) product(seller uuid.UUID, reward int) uuid.UUID {
 	f.t.Helper()
 	var addr, shop, product uuid.UUID
-	f.scan(&addr, `insert into seller.seller_addresses (seller_id, country_id, line1, city)
-		values ($1, $2, '1 Test Road', 'Colombo') returning id`, seller, f.country)
+	f.scan(&addr, `insert into seller.seller_addresses (seller_id, country_id, line1, city, latitude, longitude)
+		values ($1, $2, '1 Test Road', 'Colombo', 6.9000, 79.8550) returning id`, seller, f.country)
 	slug := "shop-" + uuid.NewString()[:8]
-	f.scan(&shop, `insert into seller.shops (seller_id, name, slug, address_id, status)
-		values ($1, $2, $2, $3, 'active') returning id`, seller, slug, addr)
+	f.scan(&shop, `insert into seller.shops (seller_id, name, slug, address_id, latitude, longitude, status)
+		values ($1, $2, $2, $3, 6.9000, 79.8550, 'active') returning id`, seller, slug, addr)
+	f.exec(`insert into seller.shop_delivery_zones (shop_id, max_km, price_amount, currency, estimated_days)
+		values ($1, 100, 0, 'USD', 1)`, shop)
 	f.scan(&product, `insert into seller.products (shop_id, name, slug, price_amount, currency, status, reward_points)
 		values ($1, 'Wireless Headphones', 'headphones', 1000000, 'USD', 'published', $2) returning id`,
 		shop, reward)
@@ -121,11 +125,18 @@ func (f *pointsFixture) customer(email string) uuid.UUID {
 	return id
 }
 
+// recipient makes a recipient with a deliverable address — a few km from
+// where product() places every shop, inside its delivery zone.
 func (f *pointsFixture) recipient(customer uuid.UUID, email *string) uuid.UUID {
 	f.t.Helper()
-	var id uuid.UUID
+	var id, addr uuid.UUID
 	f.scan(&id, `insert into customer.recipients (customer_id, name, email) values ($1, 'Friend', $2) returning id`,
 		customer, email)
+	f.scan(&addr, `insert into customer.recipient_addresses
+		(recipient_id, country_id, line1, city, postal_code, latitude, longitude, is_default)
+		values ($1, $2, '1 Galle Road', 'Colombo', '00300', 6.9271, 79.8612, true) returning id`,
+		id, f.country)
+	f.exec(`update customer.recipients set default_address_id = $2 where id = $1`, id, addr)
 	return id
 }
 
@@ -155,15 +166,21 @@ func (f *pointsFixture) grant(customer uuid.UUID, points int64) {
 	}
 }
 
+// order places an order for customer. Delivery is always priced from a
+// recipient now, so one is made up when the caller does not need to assert
+// anything about the recipient itself.
 func (f *pointsFixture) order(customer, product uuid.UUID, qty int, recipient *uuid.UUID, giftPoints int64) (*models.OrderDetails, error) {
+	rid := recipient
+	if rid == nil {
+		r := f.recipient(customer, nil)
+		rid = &r
+	}
+	ridStr := rid.String()
 	in := OrderCreateInput{
 		CountryID: f.country.String(), DeliveryDate: time.Now().AddDate(0, 0, 3).Format("2006-01-02"),
-		Items:      []OrderItemInput{{ProductID: product.String(), Quantity: qty}},
-		GiftPoints: giftPoints,
-	}
-	if recipient != nil {
-		s := recipient.String()
-		in.RecipientID = &s
+		RecipientID: &ridStr,
+		Items:       []OrderItemInput{{ProductID: product.String(), Quantity: qty}},
+		GiftPoints:  giftPoints,
 	}
 	return f.orders.Create(f.ctx, customer.String(), in)
 }

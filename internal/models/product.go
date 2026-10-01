@@ -35,6 +35,9 @@ type Product struct {
 	Parcel *ProductParcel `json:"parcel,omitempty"`
 	// Media is the ordered gallery (images + videos) from seller.product_media.
 	Media []ProductMediaItem `json:"media,omitempty"`
+	// StockLeft is set on public product reads when available_qty - reserved_qty
+	// is at or below low_stock_threshold. Omitted while stock is healthy.
+	StockLeft *int `json:"stock_left,omitempty"`
 }
 
 // ProductMediaItem is one gallery file joined with media.media_assets.
@@ -81,13 +84,13 @@ func ProductParcelFromNullable(length, width, height, distanceUnit, weight, mass
 
 // Inventory maps to seller.inventory.
 type Inventory struct {
-	ID                uuid.UUID  `json:"id"`
-	ProductID         uuid.UUID  `json:"product_id"`
-	AvailableQty      int        `json:"available_qty"`
-	ReservedQty       int        `json:"reserved_qty"`
-	LowStockThreshold int        `json:"low_stock_threshold"`
+	ID                uuid.UUID   `json:"id"`
+	ProductID         uuid.UUID   `json:"product_id"`
+	AvailableQty      int         `json:"available_qty"`
+	ReservedQty       int         `json:"reserved_qty"`
+	LowStockThreshold int         `json:"low_stock_threshold"`
 	UnavailableDates  []time.Time `json:"unavailable_dates"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
 }
 
 // ProductDetails is a product with its inventory row.
