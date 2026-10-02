@@ -22,6 +22,7 @@ var (
 	ErrCompetitionNotLive  = errors.New("competition is not open yet")
 	ErrCompetitionClosed   = errors.New("competition has closed")
 	ErrCompetitionLocked   = errors.New("competition rules are locked once it has started")
+	ErrSuperAdminOnly      = errors.New("only a super admin can change a published competition")
 	ErrCompetitionState    = errors.New("competition is not in the right state for this action")
 	ErrInvalidCompetition  = errors.New("invalid competition")
 	ErrScheduleBlocked     = errors.New("competition cannot be scheduled")
@@ -107,6 +108,9 @@ type AdminActor struct {
 	ID        uuid.UUID
 	IP        string
 	UserAgent string
+	// SuperAdmin may change a published competition; other admins only
+	// set up drafts.
+	SuperAdmin bool
 }
 
 func (a AdminActor) ledgerActor() repository.Actor {
@@ -1341,6 +1345,11 @@ func (s *CompetitionService) UpdateCompetition(ctx context.Context, admin AdminA
 	if !competitionEditable(c.Status, c.StartsAt, s.now()) {
 		return nil, ErrCompetitionLocked
 	}
+	// Editing a scheduled competition takes it back to draft, pulling it
+	// from players: that is a Super Admin's call.
+	if c.Status != "draft" && !admin.SuperAdmin {
+		return nil, ErrSuperAdminOnly
+	}
 	before := *c
 	if err := s.apply(ctx, c, in); err != nil {
 		return nil, err
@@ -1427,8 +1436,10 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	if c.Status != "draft" {
 		blockers = append(blockers, "only a draft can be scheduled")
 	}
-	if !c.StartsAt.After(s.now()) {
-		blockers = append(blockers, "starts_at must be in the future")
+	// A start time already passed means "open it as soon as it is
+	// published"; only one that has already ended cannot go out.
+	if !c.EndsAt.After(s.now().Add(time.Minute)) {
+		blockers = append(blockers, "it has already ended — set a later end time")
 	}
 	if c.GameVersionStatus != "approved" {
 		blockers = append(blockers, "the game version is no longer approved")
@@ -1496,6 +1507,28 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	return blockers, nil
 }
 
+// competitionAnnouncement is the push notification players in the
+// competition's countries get when it is published: what to play, what can
+// be won, and when it opens in the competition's own time zone.
+func competitionAnnouncement(c *models.Competition) models.PushMessage {
+	opens := "Open now"
+	if loc, err := time.LoadLocation(c.Timezone); err == nil && c.StartsAt.After(time.Now()) {
+		opens = "Opens " + c.StartsAt.In(loc).Format("Mon 2 Jan, 3:04 PM MST")
+	}
+	prize := strings.TrimSpace(c.PrizeDescription)
+	if c.PrizeType == "points" && c.PrizePoints != nil {
+		prize = fmt.Sprintf("%d points", *c.PrizePoints)
+	}
+	return models.PushMessage{
+		Title: "New competition: " + c.Title,
+		Body:  fmt.Sprintf("Play %s and win %s. %s.", c.GameName, prize, opens),
+		Data: map[string]string{
+			"type":           "competition",
+			"competition_id": c.ID.String(),
+		},
+	}
+}
+
 // ScheduleCompetition publishes a draft once every gate passes: every
 // country enabled, rules published, prize reserve funded and covering the prize.
 func (s *CompetitionService) ScheduleCompetition(ctx context.Context, admin AdminActor, id uuid.UUID) (*models.AdminCompetitionView, error) {
@@ -1510,7 +1543,8 @@ func (s *CompetitionService) ScheduleCompetition(ctx context.Context, admin Admi
 	if len(blockers) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrScheduleBlocked, strings.Join(blockers, "; "))
 	}
-	if err := s.repo.Schedule(ctx, c.ID, admin.ledgerActor(), admin.audit("competition.scheduled", c.ID, nil)); err != nil {
+	if err := s.repo.Schedule(ctx, c.ID, admin.ledgerActor(), admin.audit("competition.scheduled", c.ID, nil),
+		competitionAnnouncement(c)); err != nil {
 		if errors.Is(err, repository.ErrCompetitionStateChanged) {
 			return nil, ErrCompetitionState
 		}
@@ -1958,6 +1992,10 @@ func (s *CompetitionService) AdminGet(ctx context.Context, id uuid.UUID) (*model
 			return nil, err
 		}
 	}
+	announcement, err := s.repo.AnnouncementStats(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	blockers := []string{}
 	if c.Status == "draft" {
 		if blockers, err = s.scheduleBlockers(ctx, c); err != nil {
@@ -1975,6 +2013,7 @@ func (s *CompetitionService) AdminGet(ctx context.Context, id uuid.UUID) (*model
 		Submissions:      submissions,
 		UnderReview:      review,
 		ScheduleBlockers: blockers,
+		Announcement:     announcement,
 	}, nil
 }
 

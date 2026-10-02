@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -59,7 +60,11 @@ func adminActor(w http.ResponseWriter, r *http.Request) (services.AdminActor, bo
 		utils.Error(w, http.StatusUnauthorized, "unauthorized")
 		return services.AdminActor{}, false
 	}
-	return services.AdminActor{ID: id, IP: r.RemoteAddr, UserAgent: r.UserAgent()}, true
+	role, _ := r.Context().Value(middleware.RoleContextKey).(string)
+	return services.AdminActor{
+		ID: id, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+		SuperAdmin: strings.EqualFold(role, "superadmin"),
+	}, true
 }
 
 // ─── Public and customer ──────────────────────────────────────────────────
@@ -451,7 +456,7 @@ func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallba
 		utils.Error(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, services.ErrCustomerRequired):
 		utils.Error(w, http.StatusUnauthorized, err.Error())
-	case errors.Is(err, services.ErrNotEligible):
+	case errors.Is(err, services.ErrNotEligible), errors.Is(err, services.ErrSuperAdminOnly):
 		utils.Error(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, services.ErrInvalidCompetition), errors.Is(err, services.ErrInvalidReview),
 		errors.Is(err, services.ErrInvalidClaim), errors.Is(err, services.ErrInvalidReserve):

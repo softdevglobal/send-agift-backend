@@ -378,4 +378,15 @@ type AdminCompetitionView struct {
 	UnderReview     int           `json:"under_review"`
 	// Why the round cannot be scheduled yet, if anything; empty once it can.
 	ScheduleBlockers []string `json:"schedule_blockers"`
+	// The push announcement sent when it was published.
+	Announcement AnnouncementStats `json:"announcement"`
+}
+
+// AnnouncementStats counts a competition's push announcement by outcome.
+type AnnouncementStats struct {
+	Queued  int `json:"queued"`
+	Pending int `json:"pending"`
+	Sent    int `json:"sent"`
+	Skipped int `json:"skipped"`
+	Failed  int `json:"failed"`
 }

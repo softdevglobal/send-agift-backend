@@ -43,6 +43,12 @@ type Config struct {
 	// "order" (as soon as the order is placed — the default while there is
 	// no payment step) or "delivery".
 	PointsRewardTiming string
+
+	// Firebase service-account credentials for push notifications: a path
+	// to the JSON key file, or the JSON itself (for secret managers). With
+	// neither set, notifications queue up and are sent once one is added.
+	FirebaseCredentialsFile string
+	FirebaseCredentialsJSON string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -71,6 +77,9 @@ func Load() (*Config, error) {
 		PointsPaymentProvider: envOr("POINTS_PAYMENT_PROVIDER", "instant"),
 		PointsWebhookSecret:   os.Getenv("POINTS_WEBHOOK_SECRET"),
 		PointsRewardTiming:    envOr("POINTS_REWARD_TIMING", "order"),
+
+		FirebaseCredentialsFile: os.Getenv("FIREBASE_CREDENTIALS_FILE"),
+		FirebaseCredentialsJSON: os.Getenv("FIREBASE_CREDENTIALS_JSON"),
 	}
 
 	// if the JWT secret is not set, return an error

@@ -132,7 +132,25 @@ func main() {
 	availabilityService := services.NewAvailabilityService(repository.NewAvailabilityRepository(pool))
 	availabilityHandler := handlers.NewAvailabilityHandler(availabilityService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, cfg.JWTSecret) // create a new router
+	// Push notifications (Firebase Cloud Messaging): queued with the event
+	// they announce — a competition being published — and sent by this loop.
+	// Without credentials they wait in the queue until some are configured.
+	fcmSender, err := services.NewFCMSender(context.Background(), cfg.FirebaseCredentialsFile, cfg.FirebaseCredentialsJSON)
+	if err != nil {
+		log.Fatalf("push notifications: %v", err)
+	}
+	var pushSender services.PushSender
+	if fcmSender != nil {
+		pushSender = fcmSender
+	} else {
+		log.Printf("⚠️  FIREBASE_CREDENTIALS_FILE is not set: push notifications are queued but not sent.")
+	}
+	pushService := services.NewPushService(repository.NewPushRepository(pool), pushSender)
+	go pushService.RunDeliveryLoop(context.Background(), 10*time.Second,
+		database.Exclusive(pool, database.LockPushDelivery))
+	pushHandler := handlers.NewPushHandler(pushService)
+
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

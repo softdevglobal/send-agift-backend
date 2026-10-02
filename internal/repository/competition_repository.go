@@ -350,6 +350,11 @@ func saveCountries(ctx context.Context, tx pgx.Tx, competitionID uuid.UUID, coun
 	return err
 }
 
+// AnnouncementStats counts how the competition's push announcement went.
+func (r *CompetitionRepository) AnnouncementStats(ctx context.Context, id uuid.UUID) (models.AnnouncementStats, error) {
+	return AnnouncementStats(ctx, r.db, id)
+}
+
 func roundNo(n int) int {
 	if n < 1 {
 		return 1
@@ -359,11 +364,17 @@ func roundNo(n int) int {
 
 // Schedule publishes a draft and posts its starting prize to the ledger (the
 // SEED entry, spec AC-02). The caller has already checked every gate.
-func (r *CompetitionRepository) Schedule(ctx context.Context, id uuid.UUID, actor Actor, audit models.AuditEntry) error {
+// A start time that has already passed moves to now: the competition opens
+// the moment it is published.
+//
+// The announcement is queued for every active customer in the competition's
+// countries in the same transaction, so it goes out exactly when the
+// competition does.
+func (r *CompetitionRepository) Schedule(ctx context.Context, id uuid.UUID, actor Actor, audit models.AuditEntry, announcement models.PushMessage) error {
 	return r.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			update competition.competitions
-			set status = 'scheduled', updated_at = now()
+			set status = 'scheduled', starts_at = greatest(starts_at, now()), updated_at = now()
 			where id = $1 and status = 'draft' and ends_at > now()`, id)
 		if err != nil {
 			return err
@@ -376,6 +387,9 @@ func (r *CompetitionRepository) Schedule(ctx context.Context, id uuid.UUID, acto
 			return err
 		}
 		if err := seedRound(ctx, tx, round, actor); err != nil {
+			return err
+		}
+		if _, err := queueCompetitionAnnouncement(ctx, tx, id, announcement); err != nil {
 			return err
 		}
 		return insertAudit(ctx, tx, audit)

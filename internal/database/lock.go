@@ -15,6 +15,7 @@ const (
 	LockMigrations          int64 = 7_301_001
 	LockPointsEarning       int64 = 7_301_002
 	LockPrizeReconciliation int64 = 7_301_003
+	LockPushDelivery        int64 = 7_301_004
 )
 
 // WithLock runs fn while holding the advisory lock key, first waiting for any

@@ -66,6 +66,8 @@ func New(
 	shipping *handlers.ShippingHandler,
 	// Handler instance that checks which gifts can reach a searched address
 	availability *handlers.AvailabilityHandler,
+	// Handler instance that registers mobile devices for push notifications
+	push *handlers.PushHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -192,6 +194,10 @@ func New(
 		// Find gifts: which published gifts a delivery zone can reach
 		// Example: GET /api/v1/availability?latitude=6.9&longitude=79.8&delivery_date=2026-10-05
 		RegisterAvailabilityRoutes(r, availability)
+
+		// Push notifications: the app registers its Firebase token after sign-in
+		// Example: POST /api/v1/customers/me/push-devices
+		RegisterPushRoutes(r, push, jwtSecret)
 	})
 
 	// Return the fully configured router

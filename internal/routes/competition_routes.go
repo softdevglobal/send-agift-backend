@@ -28,11 +28,12 @@ import (
 //
 // Official scores are submitted through POST /games/sessions/{sessionID}/submit.
 //
-// Admin JWT (support, view only): lists, ledger, plays, analytics, boards,
-// the score review queue and the leaderboard freeze.
+// Admin JWT (support): lists, ledger, plays, analytics, boards, the score
+// review queue and the leaderboard freeze, plus creating, duplicating and
+// editing drafts.
 //
 // Superadmin JWT: everything that changes prize economics or pays out —
-// rules, reserve, publishing, pause/resume/close/cancel, prize adjustments,
+// editing a published competition, reserve, publishing, pause/resume/close/cancel, prize adjustments,
 // voids and refunds, finalising, draws, winners, claims, settlement and
 // points (spec §2, AC-13). Every one is audited, and the ones that move money
 // also need a fresh password confirmation (X-Reauth-Token).
@@ -71,6 +72,13 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 
 		r.Get("/admin/competitions", c.AdminList)
 		r.Get("/admin/competitions/{id}", c.AdminGet)
+		// Any admin may set up drafts: nothing moves money and no player
+		// sees one until a Super Admin funds and publishes it. Editing a
+		// published competition is Super Admin only, checked in the service.
+		r.Post("/admin/competitions", c.Create)
+		r.Put("/admin/competitions/{id}", c.Update)
+		r.Patch("/admin/competitions/{id}", c.Update)
+		r.Post("/admin/competitions/{id}/duplicate", c.Duplicate)
 		r.Get("/admin/competitions/{id}/ledger", c.Ledger)
 		r.Get("/admin/competitions/{id}/plays", c.Plays)
 		r.Get("/admin/competitions/{id}/analytics", c.Analytics)
@@ -90,11 +98,6 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("superadmin"))
-
-		r.Post("/admin/competitions", c.Create)
-		r.Put("/admin/competitions/{id}", c.Update)
-		r.Patch("/admin/competitions/{id}", c.Update)
-		r.Post("/admin/competitions/{id}/duplicate", c.Duplicate)
 
 		r.Put("/admin/competitions/{id}/prize-reserve", c.SetReserve)
 		r.Post("/admin/competitions/{id}/prize-reserve/fund", c.FundReserve)

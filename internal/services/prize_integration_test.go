@@ -1045,3 +1045,177 @@ func TestCompetitionCountries(t *testing.T) {
 		t.Fatalf("want only %s in EUR, got %+v %v", otherName, edited.Countries, *edited.PrizeCurrency)
 	}
 }
+
+type fakePushSender struct {
+	mu   sync.Mutex
+	sent map[string]models.PushMessage
+	dead map[string]bool
+}
+
+func (s *fakePushSender) Send(_ context.Context, token string, msg models.PushMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dead[token] {
+		return ErrPushTokenInvalid
+	}
+	s.sent[token] = msg
+	return nil
+}
+
+// Publishing a competition notifies every active customer in its countries,
+// once, on every device they have; stale tokens are dropped.
+func TestCompetitionAnnouncementPush(t *testing.T) {
+	f := newPrizeFixture(t)
+	pushRepo := repository.NewPushRepository(f.pool)
+	sender := &fakePushSender{sent: map[string]models.PushMessage{}, dead: map[string]bool{}}
+	push := NewPushService(pushRepo, sender)
+
+	withPhone := f.customer(0)
+	phoneA, phoneB, oldPhone := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, tok := range []string{phoneA, phoneB, oldPhone} {
+		if err := push.RegisterDevice(f.ctx, withPhone, PushDeviceInput{Token: tok, Platform: "android"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sender.dead[oldPhone] = true
+	noPhone := f.customer(0)
+
+	var otherCountry uuid.UUID
+	if err := f.pool.QueryRow(f.ctx, `
+		insert into core.countries (iso_code, name, default_currency, default_timezone)
+		values ($1, 'Elsewhere', 'USD', 'UTC') returning id`,
+		"T"+strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:10])).Scan(&otherCountry); err != nil {
+		t.Fatal(err)
+	}
+	var outsider uuid.UUID
+	if err := f.pool.QueryRow(f.ctx, `
+		insert into customer.customers (country_id, email, password_hash, display_name)
+		values ($1, $2, 'x', 'Outsider') returning id`, otherCountry, uuid.NewString()+"@example.test").Scan(&outsider); err != nil {
+		t.Fatal(err)
+	}
+	outsiderPhone := uuid.NewString()
+	if err := push.RegisterDevice(f.ctx, outsider, PushDeviceInput{Token: outsiderPhone, Platform: "ios"}); err != nil {
+		t.Fatal(err)
+	}
+
+	c := f.liveRound(roundOpts{start: 100})
+
+	status := func(customer uuid.UUID) string {
+		var s string
+		if err := f.pool.QueryRow(f.ctx, `
+			select status from core.push_notifications
+			where competition_id = $1 and customer_id = $2`, c.ID, customer).Scan(&s); err != nil {
+			return "none"
+		}
+		return s
+	}
+	if status(withPhone) != "pending" || status(noPhone) != "pending" || status(outsider) != "none" {
+		t.Fatalf("queued: with phone %s, no phone %s, outsider %s",
+			status(withPhone), status(noPhone), status(outsider))
+	}
+
+	if _, err := push.DeliverDue(f.ctx, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if status(withPhone) != "sent" || status(noPhone) != "skipped" {
+		t.Fatalf("after delivery: with phone %s, no phone %s", status(withPhone), status(noPhone))
+	}
+	msg, ok := sender.sent[phoneA]
+	if !ok || sender.sent[phoneB].Title == "" {
+		t.Fatalf("both live devices should get it: %v", sender.sent)
+	}
+	if msg.Data["competition_id"] != c.ID.String() || !strings.Contains(msg.Title, c.Title) {
+		t.Fatalf("message: %+v", msg)
+	}
+	if _, gone := sender.sent[outsiderPhone]; gone {
+		t.Fatal("a customer outside the competition's countries was notified")
+	}
+	if n := f.count(`select count(*) from customer.push_devices where token = $1`, oldPhone); n != 0 {
+		t.Fatal("an invalid token should be forgotten")
+	}
+	view, err := f.svc.AdminGet(f.ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := view.Announcement; a.Queued != 2 || a.Sent != 1 || a.Skipped != 1 || a.Pending != 0 {
+		t.Fatalf("announcement stats: %+v", a)
+	}
+}
+
+// Any admin can set up a draft; changing a published competition — which
+// pulls it back to draft — takes a Super Admin.
+func TestDraftEditingRoles(t *testing.T) {
+	f := newPrizeFixture(t)
+	rules := "Highest score wins."
+	start := int64(100)
+	in := CompetitionInput{
+		CountryIDs: []string{f.country.String()}, GameSlug: "2048", Title: "Roles",
+		StartsAt: time.Now().Add(time.Hour), EndsAt: time.Now().Add(48 * time.Hour), Timezone: "UTC",
+		MaxAttemptsPerCustomer: 3, NumberOfWinners: 1, PrizeDescription: "Cash",
+		PrizeCurrency: &f.currency, OfficialRules: &rules, StartPrizeCents: &start,
+	}
+	admin := AdminActor{ID: uuid.New()}
+	super := AdminActor{ID: uuid.New(), SuperAdmin: true}
+
+	view, err := f.svc.CreateCompetition(f.ctx, admin, in)
+	if err != nil {
+		t.Fatalf("an admin should create a draft: %v", err)
+	}
+	in.Title = "Roles, renamed"
+	if _, err := f.svc.UpdateCompetition(f.ctx, admin, view.ID, in); err != nil {
+		t.Fatalf("an admin should edit a draft: %v", err)
+	}
+
+	if _, err := f.svc.SetReserve(f.ctx, super, view.ID, ReserveInput{
+		ReserveAmount: start, Currency: f.currency, FundingSource: "sendagift"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.FundReserve(f.ctx, super, view.ID, "escrow #1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.ScheduleCompetition(f.ctx, super, view.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.UpdateCompetition(f.ctx, admin, view.ID, in); !errors.Is(err, ErrSuperAdminOnly) {
+		t.Fatalf("an admin must not edit a published competition: %v", err)
+	}
+	if _, err := f.svc.UpdateCompetition(f.ctx, super, view.ID, in); err != nil {
+		t.Fatalf("a super admin may: %v", err)
+	}
+}
+
+// A start time that has already passed opens the competition the moment it
+// is published, rather than blocking it.
+func TestPublishRightNow(t *testing.T) {
+	f := newPrizeFixture(t)
+	rules := "Highest score wins."
+	start := int64(100)
+	view, err := f.svc.CreateCompetition(f.ctx, f.admin, CompetitionInput{
+		CountryIDs: []string{f.country.String()}, GameSlug: "2048", Title: "Right now",
+		StartsAt: time.Now().Add(-5 * time.Minute), EndsAt: time.Now().Add(48 * time.Hour), Timezone: "UTC",
+		MaxAttemptsPerCustomer: 3, NumberOfWinners: 1, PrizeDescription: "Cash",
+		PrizeCurrency: &f.currency, OfficialRules: &rules, StartPrizeCents: &start,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.SetReserve(f.ctx, f.admin, view.ID, ReserveInput{
+		ReserveAmount: start, Currency: f.currency, FundingSource: "sendagift"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.FundReserve(f.ctx, f.admin, view.ID, "escrow #1"); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Add(-time.Second)
+	if _, err := f.svc.ScheduleCompetition(f.ctx, f.admin, view.ID); err != nil {
+		t.Fatalf("a past start should publish straight away: %v", err)
+	}
+	c, err := f.svc.load(f.ctx, view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.StartsAt.Before(before) || f.svc.status(c) != "live" {
+		t.Fatalf("should open now: starts %v, status %s", c.StartsAt, f.svc.status(c))
+	}
+}
