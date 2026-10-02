@@ -1,0 +1,26 @@
+# Keep secrets and local clutter out of the build context. Configuration
+# reaches the container as environment variables, never as a baked-in .env.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+bin/
+dist/
+*.log
+*.out
+coverage.*
+__debug_bin*
+
+docs/
+*.md
+restore-addresses.sql
+docker-compose*.yml
+Dockerfile
+.dockerignore

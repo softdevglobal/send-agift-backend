@@ -34,6 +34,28 @@ Copy `.env.example` to `.env` and fill in values. Delivery is priced from each s
 | `POINTS_REWARD_TIMING` | When product reward points reach the buyer: `order` (default — as soon as the order is placed; cancelling takes them back and is refused once they are spent) or `delivery` |
 | `POINTS_WEBHOOK_SECRET` | HMAC-SHA256 secret for `POST /api/v1/payments/points/webhook`; empty refuses the webhook |
 
+## Run with Docker
+
+The `Dockerfile` builds one image holding two binaries: `/app/api` (the default command) and `/app/migrate`. Pass the commit so `GET /version` reports it:
+
+```sh
+docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t sendagift-api .
+```
+
+`docker-compose.yml` runs the whole stack — Postgres, the migrations, the API and the web app — with the frontend checked out next to this repo at `../send-agift-frontend`. Secrets come from `.env`; the database is a fresh one inside Docker.
+
+```sh
+GIT_SHA=$(git rev-parse --short HEAD) docker compose up --build
+```
+
+| URL | What |
+|---|---|
+| http://localhost:8090 | Web app; `/api`, `/health` and `/version` are forwarded to the API |
+| http://localhost:8091 | API directly |
+| `localhost:5433` | Postgres (`sendagift` / `sendagift`) |
+
+Change the host ports with `WEB_PORT`, `API_PORT` and `DB_HOST_PORT`. `docker compose down` stops everything; add `-v` to wipe the database.
+
 ## Postman rules
 
 | | |

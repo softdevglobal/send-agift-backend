@@ -2,6 +2,7 @@ package routes
 
 import (
 	// Standard library for HTTP handling
+	"encoding/json"
 	"net/http"
 
 	// Chi router library - a lightweight HTTP router for Go
@@ -14,6 +15,11 @@ import (
 	// Your internal handlers package - contains business logic for each route
 	"myapp/internal/handlers"
 )
+
+// BuildSHA is the git commit the binary was built from, stamped in at build
+// time (go build -ldflags "-X myapp/internal/routes.BuildSHA=<sha>"). Local
+// builds that skip the flag report "dev".
+var BuildSHA = "dev"
 
 // New builds the root HTTP router and mounts all route groups.
 // This function takes all the handlers and returns the configured HTTP router.
@@ -108,6 +114,13 @@ func New(
 		// Write the JSON response body
 		// The underscores ignore the return values (number of bytes written and error)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// GET /version reports which commit this server was built from, so a
+	// deploy can be checked against the SHA it was meant to ship.
+	r.Get("/version", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"sha": BuildSHA})
 	})
 
 	// Create a route group under /api/v1

@@ -1,0 +1,84 @@
+# The whole SendAGift stack on one machine: Postgres, the migrations, the
+# Go API and the web app. Expects the frontend checked out next to this
+# repo, at ../send-agift-frontend.
+#
+#   docker compose up --build        start everything
+#   open http://localhost:8090       the web app (API calls go through it)
+#   docker compose down              stop (add -v to wipe the database)
+#
+# Secrets (JWT, S3, Google Maps) come from this repo's .env. The database is
+# a fresh one inside Docker, separate from any Postgres on this machine.
+# Host ports can be changed with WEB_PORT, API_PORT and DB_HOST_PORT.
+
+name: sendagift
+
+x-api-env: &api-env
+  env_file: .env
+  environment:
+    # Point at the database container, whatever .env says for local runs.
+    DB_HOST: db
+    DB_PORT: "5432"
+    DB_USER: sendagift
+    DB_PASSWORD: sendagift
+    DB_NAME: sendagift
+    DB_SSLMODE: disable
+    APP_PORT: "8080"
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sendagift
+      POSTGRES_PASSWORD: sendagift
+      POSTGRES_DB: sendagift
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "${DB_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sendagift -d sendagift"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Runs once and exits, the same way a deploy runs migrations before the
+  # new API starts.
+  migrate:
+    image: sendagift-api:local
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    <<: *api-env
+    entrypoint: ["/app/migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: sendagift-api:local
+    <<: *api-env
+    ports:
+      - "${API_PORT:-8091}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    image: sendagift-web:local
+    build:
+      context: ../send-agift-frontend
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    environment:
+      API_UPSTREAM: http://api:8080
+    ports:
+      - "${WEB_PORT:-8090}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  db-data:
