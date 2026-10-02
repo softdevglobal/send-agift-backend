@@ -623,7 +623,8 @@ func (r *CompetitionRepository) CreateAttempt(ctx context.Context, in CreateAtte
 			Scan(&active, &total); err != nil {
 			return err
 		}
-		if active >= in.MaxAttempts {
+		// 0 is no limit: only the points balance counts.
+		if in.MaxAttempts > 0 && active >= in.MaxAttempts {
 			return ErrAttemptLimitReached
 		}
 
@@ -787,6 +788,12 @@ func (r *CompetitionRepository) SaveOfficialScore(ctx context.Context, in Offici
 		if err != nil {
 			return err
 		}
+		// Everyone this score just passed hears about it.
+		if in.ValidationStatus == "accepted" {
+			if err := queueOvertaken(ctx, tx, in.CompetitionID, in.CustomerID, out.ID, in.Score); err != nil {
+				return err
+			}
+		}
 
 		_, err = tx.Exec(ctx, `
 			update competition.competition_attempts
@@ -849,15 +856,18 @@ func (r *CompetitionRepository) ReviewQueue(ctx context.Context, competitionID u
 // review fields change; the score itself is immutable (enforced in SQL).
 func (r *CompetitionRepository) ReviewSubmission(ctx context.Context, competitionID, submissionID uuid.UUID, status string, reason *string, adminID *uuid.UUID, audit models.AuditEntry) error {
 	return r.inTx(ctx, func(tx pgx.Tx) error {
-		var attemptID uuid.UUID
+		var attemptID, customerID uuid.UUID
+		var score int64
+		var wasAccepted bool
 		err := tx.QueryRow(ctx, `
 			update competition.score_submissions s
 			set validation_status = $3, review_reason = $4, reviewed_by_admin_id = $5, reviewed_at = now()
-			from competition.competitions c
-			where s.id = $2 and s.competition_id = $1 and c.id = s.competition_id
+			from competition.competitions c, competition.score_submissions old
+			where s.id = $2 and s.competition_id = $1 and c.id = s.competition_id and old.id = s.id
 			  and c.status in ('live', 'closed', 'frozen')
 			  and s.validation_status in ('pending', 'manual_review', 'accepted')
-			returning s.attempt_id`, competitionID, submissionID, status, reason, adminID).Scan(&attemptID)
+			returning s.attempt_id, s.customer_id, s.score, old.validation_status = 'accepted'`,
+			competitionID, submissionID, status, reason, adminID).Scan(&attemptID, &customerID, &score, &wasAccepted)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrSubmissionNotFound
 		}
@@ -868,6 +878,12 @@ func (r *CompetitionRepository) ReviewSubmission(ctx context.Context, competitio
 			update competition.competition_attempts set status = $2, updated_at = now() where id = $1`,
 			attemptID, status); err != nil {
 			return err
+		}
+		// A held score approved now counts like one accepted straight away.
+		if status == "accepted" && !wasAccepted {
+			if err := queueOvertaken(ctx, tx, competitionID, customerID, submissionID, score); err != nil {
+				return err
+			}
 		}
 		return insertAudit(ctx, tx, audit)
 	})

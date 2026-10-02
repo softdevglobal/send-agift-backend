@@ -121,8 +121,11 @@ type roundOpts struct {
 // clock had reached it.
 func (f *prizeFixture) liveRound(o roundOpts) *models.Competition {
 	f.t.Helper()
-	if o.maxPlays == 0 {
+	switch o.maxPlays {
+	case 0:
 		o.maxPlays = 100
+	case -1: // no limit
+		o.maxPlays = 0
 	}
 	if o.winners == 0 {
 		o.winners = 1
@@ -1140,6 +1143,25 @@ func TestCompetitionAnnouncementPush(t *testing.T) {
 	if a := view.Announcement; a.Queued != 2 || a.Sent != 1 || a.Skipped != 1 || a.Pending != 0 {
 		t.Fatalf("announcement stats: %+v", a)
 	}
+
+	// The inbox has it even for the customer no push could reach.
+	inbox, err := push.Inbox(f.ctx, noPhone, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Items) != 1 || inbox.Unread != 1 || inbox.Items[0].Data["competition_id"] != c.ID.String() {
+		t.Fatalf("inbox: %+v", inbox)
+	}
+	if err := push.MarkRead(f.ctx, noPhone, nil); err != nil {
+		t.Fatal(err)
+	}
+	if inbox, _ = push.Inbox(f.ctx, noPhone, 0); inbox.Unread != 0 || inbox.Items[0].ReadAt == nil {
+		t.Fatalf("after marking read: %+v", inbox)
+	}
+	// Nobody else's inbox is touched.
+	if other, _ := push.Inbox(f.ctx, withPhone, 0); other.Unread != 1 {
+		t.Fatalf("another customer's unread count changed: %d", other.Unread)
+	}
 }
 
 // Any admin can set up a draft; changing a published competition — which
@@ -1217,5 +1239,143 @@ func TestPublishRightNow(t *testing.T) {
 	}
 	if c.StartsAt.Before(before) || f.svc.status(c) != "live" {
 		t.Fatalf("should open now: starts %v, status %s", c.StartsAt, f.svc.status(c))
+	}
+}
+
+// A notification that found no phone goes out as soon as one registers —
+// signing in delivers what arrived while signed out.
+func TestPushAfterSignIn(t *testing.T) {
+	f := newPrizeFixture(t)
+	sender := &fakePushSender{sent: map[string]models.PushMessage{}, dead: map[string]bool{}}
+	push := NewPushService(repository.NewPushRepository(f.pool), sender)
+
+	player := f.customer(0)
+	c := f.liveRound(roundOpts{start: 100})
+	if _, err := push.DeliverDue(f.ctx, 1000); err != nil {
+		t.Fatal(err)
+	}
+	status := func() string {
+		var s string
+		if err := f.pool.QueryRow(f.ctx, `select status from core.push_notifications
+			where competition_id = $1 and customer_id = $2`, c.ID, player).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if status() != "skipped" {
+		t.Fatalf("with no phone it should be skipped, is %s", status())
+	}
+
+	phone := uuid.NewString()
+	if err := push.RegisterDevice(f.ctx, player, PushDeviceInput{Token: phone, Platform: "android"}); err != nil {
+		t.Fatal(err)
+	}
+	if status() != "pending" {
+		t.Fatalf("signing in should requeue it, is %s", status())
+	}
+	if _, err := push.DeliverDue(f.ctx, 1000); err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := sender.sent[phone]
+	if !ok || status() != "sent" || msg.Data["notification_id"] == "" {
+		t.Fatalf("the new phone should get it: sent=%v status=%s data=%v", ok, status(), msg.Data)
+	}
+}
+
+// Entering needs no date of birth, age or identity check.
+func TestNoAgeCheckToPlay(t *testing.T) {
+	f := newPrizeFixture(t)
+	c := f.liveRound(roundOpts{start: 100})
+	var id uuid.UUID
+	if err := f.pool.QueryRow(f.ctx, `
+		insert into customer.customers (country_id, email, password_hash, display_name)
+		values ($1, $2, 'x', 'Unverified') returning id`, f.country, uuid.NewString()+"@example.test").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	cust, err := f.svc.customer(f.ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, reason, err := f.svc.eligibility(f.ctx, c, cust, capabilityCache{})
+	if err != nil || !ok {
+		t.Fatalf("an unverified player should be able to enter: %v %q", err, reason)
+	}
+}
+
+// With no play limit, a player plays as long as their points last.
+func TestUnlimitedPlays(t *testing.T) {
+	f := newPrizeFixture(t)
+	c := f.liveRound(roundOpts{start: 100, cost: 1, maxPlays: -1})
+	player := f.customer(5)
+	for i := 0; i < 5; i++ {
+		if _, err := f.play(c, player, uuid.NewString()); err != nil {
+			t.Fatalf("play %d: %v", i+1, err)
+		}
+	}
+	if _, err := f.play(c, player, uuid.NewString()); err == nil {
+		t.Fatal("a sixth play with no points left should be refused")
+	}
+	view, err := f.svc.GetCompetition(f.ctx, c.ID, SocialActor{CustomerID: player.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Me == nil || !view.Me.PlaysUnlimited || view.Me.AttemptsRemaining != -1 {
+		t.Fatalf("plays should be unlimited: %+v", view.Me)
+	}
+}
+
+// When a score passes other players' best, each of them is told to play
+// again; players already behind hear nothing.
+func TestOvertakenNotifications(t *testing.T) {
+	f := newPrizeFixture(t)
+	c := f.liveRound(roundOpts{start: 5000, cost: 1, game: "quiz", maxPlays: -1, quiz: []games.QuizQuestion{
+		{Prompt: "2 + 2?", Options: []string{"3", "4"}, CorrectIndex: 1, TimeLimitSeconds: 10},
+		{Prompt: "Largest ocean?", Options: []string{"Atlantic", "Pacific", "Indian"}, CorrectIndex: 1, TimeLimitSeconds: 10},
+	}})
+	score := func(p uuid.UUID, moves []string) {
+		t.Helper()
+		v, err := f.play(c, p, uuid.NewString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.pool.Exec(f.ctx, `update competition.game_sessions set started_at = now() - interval '30 seconds' where id = $1`,
+			v.Session.SessionID); err != nil {
+			t.Fatal(err)
+		}
+		s, _ := f.svc.games.GetSession(f.ctx, v.Session.SessionID)
+		res, err := f.svc.SubmitOfficial(f.ctx, s, SubmitScoreInput{Moves: moves})
+		if err != nil || !res.Accepted {
+			t.Fatalf("submit: %v %+v", err, res)
+		}
+	}
+	beaten := func(p uuid.UUID) int64 {
+		return f.count(`select count(*) from core.push_notifications
+			where kind = 'competition_overtaken' and competition_id = $1 and customer_id = $2`, c.ID, p)
+	}
+
+	alice, bob, carol := f.customer(10), f.customer(10), f.customer(10)
+	score(alice, []string{"0:1:0", "1:-1:10000"}) // one right: 150
+	score(carol, []string{"0:0:1000", "1:-1:10000"}) // none right: 0
+	if beaten(alice) != 0 || beaten(carol) != 0 {
+		t.Fatal("a lower score beats nobody")
+	}
+
+	score(bob, []string{"0:1:0", "1:1:5000"}) // both right: 275
+	if beaten(alice) != 1 || beaten(carol) != 1 {
+		t.Fatalf("bob passed alice and carol: alice %d, carol %d", beaten(alice), beaten(carol))
+	}
+	var title, body string
+	if err := f.pool.QueryRow(f.ctx, `select title, body from core.push_notifications
+		where kind = 'competition_overtaken' and customer_id = $1`, alice).Scan(&title, &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(title, "beat your score") || !strings.Contains(body, "your best of 150") {
+		t.Fatalf("notification: %q / %q", title, body)
+	}
+
+	// Bob playing again passes nobody new: everyone was already behind him.
+	score(bob, []string{"0:1:0", "1:1:5000"})
+	if beaten(alice) != 1 || beaten(carol) != 1 {
+		t.Fatal("players already behind should not be told again")
 	}
 }

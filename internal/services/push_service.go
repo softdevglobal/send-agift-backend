@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"myapp/internal/models"
 	"myapp/internal/repository"
 )
 
@@ -25,12 +26,14 @@ const maxPushAttempts = 5
 type PushService struct {
 	repo   *repository.PushRepository
 	sender PushSender
+	// wake asks the delivery loop to run now rather than at its next tick.
+	wake chan struct{}
 }
 
 // NewPushService builds the service. sender may be nil while push is not
 // configured: devices still register, and notifications wait in the queue.
 func NewPushService(repo *repository.PushRepository, sender PushSender) *PushService {
-	return &PushService{repo: repo, sender: sender}
+	return &PushService{repo: repo, sender: sender, wake: make(chan struct{}, 1)}
 }
 
 // Enabled reports whether notifications can actually be sent.
@@ -50,7 +53,26 @@ func (s *PushService) RegisterDevice(ctx context.Context, customerID uuid.UUID, 
 	if token == "" || len(token) > 4096 || (platform != "android" && platform != "ios") {
 		return ErrInvalidPushDevice
 	}
-	return s.repo.UpsertDevice(ctx, customerID, token, platform, in.AppVersion)
+	if err := s.repo.UpsertDevice(ctx, customerID, token, platform, in.AppVersion); err != nil {
+		return err
+	}
+	// Anything that arrived while they were signed out goes to this phone now.
+	n, err := s.repo.RequeueMissed(ctx, customerID)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		s.Wake()
+	}
+	return nil
+}
+
+// Wake runs the delivery loop now instead of waiting for its next tick.
+func (s *PushService) Wake() {
+	select {
+	case s.wake <- struct{}{}:
+	default: // a run is already due
+	}
 }
 
 // UnregisterDevice stops notifications to an install, on sign-out.
@@ -62,6 +84,22 @@ func (s *PushService) UnregisterDevice(ctx context.Context, customerID uuid.UUID
 	return s.repo.DeleteDevice(ctx, customerID, token)
 }
 
+// Inbox lists the customer's notifications, newest first.
+func (s *PushService) Inbox(ctx context.Context, customerID uuid.UUID, limit int) (*models.NotificationInbox, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	return s.repo.Inbox(ctx, customerID, limit)
+}
+
+// MarkRead marks notifications read; no ids means all of them.
+func (s *PushService) MarkRead(ctx context.Context, customerID uuid.UUID, ids []uuid.UUID) error {
+	if ids == nil {
+		ids = []uuid.UUID{}
+	}
+	return s.repo.MarkRead(ctx, customerID, ids)
+}
+
 // RunDeliveryLoop sends due notifications on a timer until ctx ends. With
 // several API servers, only the one holding the lock sends.
 func (s *PushService) RunDeliveryLoop(ctx context.Context, every time.Duration, exclusive Exclusive) {
@@ -71,17 +109,18 @@ func (s *PushService) RunDeliveryLoop(ctx context.Context, every time.Duration, 
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.wake:
 		case <-ticker.C:
-			if _, err := exclusive.run(ctx, func(ctx context.Context) error {
-				for {
-					n, err := s.DeliverDue(ctx, 200)
-					if err != nil || n < 200 {
-						return err
-					}
+		}
+		if _, err := exclusive.run(ctx, func(ctx context.Context) error {
+			for {
+				n, err := s.DeliverDue(ctx, 200)
+				if err != nil || n < 200 {
+					return err
 				}
-			}); err != nil {
-				log.Printf("push delivery: %v", err)
 			}
+		}); err != nil {
+			log.Printf("push delivery: %v", err)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -80,4 +81,42 @@ func (h *PushHandler) writeError(w http.ResponseWriter, err error, fallback stri
 	}
 	log.Printf("%s: %v", fallback, err)
 	utils.Error(w, http.StatusInternalServerError, fallback)
+}
+
+// Inbox handles GET /customers/me/notifications?limit=50.
+func (h *PushHandler) Inbox(w http.ResponseWriter, r *http.Request) {
+	customerID, ok := pushCustomer(w, r)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	inbox, err := h.push.Inbox(r.Context(), customerID, limit)
+	if err != nil {
+		h.writeError(w, err, "could not load notifications")
+		return
+	}
+	utils.JSON(w, http.StatusOK, inbox)
+}
+
+// MarkRead handles POST /customers/me/notifications/read with
+// {"ids": ["..."]}, or an empty body to mark everything read.
+func (h *PushHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
+	customerID, ok := pushCustomer(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		IDs []uuid.UUID `json:"ids"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			utils.Error(w, http.StatusBadRequest, "ids must be a list of notification ids")
+			return
+		}
+	}
+	if err := h.push.MarkRead(r.Context(), customerID, in.IDs); err != nil {
+		h.writeError(w, err, "could not mark notifications read")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -12,11 +12,15 @@ import (
 //
 //	POST   /customers/me/push-devices — register this device's Firebase token
 //	DELETE /customers/me/push-devices — forget it, on sign-out
+//	GET    /customers/me/notifications — the in-app inbox, with the unread count
+//	POST   /customers/me/notifications/read — mark some (ids) or all read
 func RegisterPushRoutes(r chi.Router, push *handlers.PushHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("customer"))
 		r.Post("/customers/me/push-devices", push.RegisterDevice)
 		r.Delete("/customers/me/push-devices", push.UnregisterDevice)
+		r.Get("/customers/me/notifications", push.Inbox)
+		r.Post("/customers/me/notifications/read", push.MarkRead)
 	})
 }

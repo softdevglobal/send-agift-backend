@@ -223,9 +223,9 @@ func (s *CompetitionService) capability(ctx context.Context, countryID uuid.UUID
 }
 
 // eligibility checks a customer against a competition's published rules:
-// one of its countries, that country's skill-competition gate, 18+ with verified age, and identity
-// verification when the rules require it (§13.5). The returned reason is
-// written for the player.
+// an active account in one of its countries, and that country's gates
+// (skill competitions, growing prizes, chance games, points usage). The
+// returned reason is written for the player.
 func (s *CompetitionService) eligibility(ctx context.Context, c *models.Competition, cust *models.Customer, cache capabilityCache) (bool, string, error) {
 	if cust.Status != "active" {
 		return false, "Your account is not active.", nil
@@ -250,18 +250,8 @@ func (s *CompetitionService) eligibility(ctx context.Context, c *models.Competit
 	if c.PointsPerAttempt > 0 && !cc.PointsUsageEnabled {
 		return false, "Points cannot be spent in your country yet.", nil
 	}
-	if cust.DateOfBirth == nil {
-		return false, "Add your date of birth to your profile to enter.", nil
-	}
-	if ageOn(*cust.DateOfBirth, s.now()) < c.MinAge {
-		return false, fmt.Sprintf("You must be %d or older to enter.", c.MinAge), nil
-	}
-	if cust.AgeVerifiedAt == nil {
-		return false, "Verify your age to enter.", nil
-	}
-	if c.RequiresIdentityVerification && cust.IdentityVerifiedAt == nil {
-		return false, "Verify your identity to enter.", nil
-	}
+	// No date-of-birth, age or identity check: any active customer in one
+	// of the competition's countries can play.
 	return true, "", nil
 }
 
@@ -271,6 +261,18 @@ func (s *CompetitionService) customer(ctx context.Context, id uuid.UUID) (*model
 		return nil, ErrCustomerRequired
 	}
 	return cust, err
+}
+
+// playsLeft is how many plays a customer has left in a round, or -1 when
+// the round has no limit (max 0) and only their points balance counts.
+func playsLeft(max, used int) int {
+	if max == 0 {
+		return -1
+	}
+	if used >= max {
+		return 0
+	}
+	return max - used
 }
 
 // ─── Customer views ───────────────────────────────────────────────────────
@@ -326,10 +328,7 @@ func (s *CompetitionService) me(ctx context.Context, c *models.Competition, cust
 	if err != nil {
 		return nil, err
 	}
-	remaining := c.MaxAttemptsPerCustomer - stat.AttemptsUsed
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := playsLeft(c.MaxAttemptsPerCustomer, stat.AttemptsUsed)
 	balance, err := s.points.Balance(ctx, cust.ID)
 	if err != nil {
 		return nil, err
@@ -337,6 +336,7 @@ func (s *CompetitionService) me(ctx context.Context, c *models.Competition, cust
 	me := &models.CompetitionMe{
 		AttemptsUsed:      stat.AttemptsUsed,
 		AttemptsRemaining: remaining,
+		PlaysUnlimited:    c.MaxAttemptsPerCustomer == 0,
 		BestScore:         stat.BestScore,
 		Eligible:          eligible,
 		IneligibleReason:  reason,
@@ -667,10 +667,7 @@ func (s *CompetitionService) Play(ctx context.Context, id uuid.UUID, actor Socia
 	}
 
 	a := outcome.Attempt
-	remaining := c.MaxAttemptsPerCustomer - outcome.AttemptsUsed
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := playsLeft(c.MaxAttemptsPerCustomer, outcome.AttemptsUsed)
 	status := "COMPLETED"
 	if a.Status == "voided" {
 		status = "VOIDED"
@@ -878,10 +875,7 @@ func (s *CompetitionService) officialView(ctx context.Context, sub *models.Score
 	if st.BestScore != nil {
 		best = *st.BestScore
 	}
-	remaining := c.MaxAttemptsPerCustomer - st.AttemptsUsed
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := playsLeft(c.MaxAttemptsPerCustomer, st.AttemptsUsed)
 	accepted := sub.ValidationStatus == "accepted"
 	competitionID := sub.CompetitionID
 
@@ -1112,11 +1106,9 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return invalid("timezone is not a valid IANA zone")
 	}
-	if in.MaxAttemptsPerCustomer == 0 {
-		in.MaxAttemptsPerCustomer = 3
-	}
-	if in.MaxAttemptsPerCustomer < 1 || in.MaxAttemptsPerCustomer > 10000 {
-		return invalid("max_attempts_per_customer must be 1 to 10000")
+	// 0 means no limit: players play as often as their points allow.
+	if in.MaxAttemptsPerCustomer < 0 || in.MaxAttemptsPerCustomer > 10000 {
+		return invalid("max_attempts_per_customer must be 0 (no limit) to 10000")
 	}
 	if in.MinAge == 0 {
 		in.MinAge = 18
@@ -1211,7 +1203,8 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	if in.DailyPlayLimit != nil && (*in.DailyPlayLimit < 1 || *in.DailyPlayLimit > 10000) {
 		return invalid("daily_play_limit must be 1 to 10000")
 	}
-	if in.MinPlaysToWin != nil && (*in.MinPlaysToWin < 1 || *in.MinPlaysToWin > in.MaxAttemptsPerCustomer) {
+	if in.MinPlaysToWin != nil && (*in.MinPlaysToWin < 1 ||
+		(in.MaxAttemptsPerCustomer > 0 && *in.MinPlaysToWin > in.MaxAttemptsPerCustomer)) {
 		return invalid("min_plays_to_win must be 1 to max_attempts_per_customer")
 	}
 	continueAtCap := true
@@ -1269,7 +1262,7 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 		return err
 	}
 
-	requiresID := true
+	requiresID := false
 	if in.RequiresIdentityVerification != nil {
 		requiresID = *in.RequiresIdentityVerification
 	}

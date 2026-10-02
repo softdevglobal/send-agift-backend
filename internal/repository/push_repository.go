@@ -34,6 +34,24 @@ func (r *PushRepository) UpsertDevice(ctx context.Context, customerID uuid.UUID,
 	return err
 }
 
+// RequeueMissed puts back in the queue the customer's unread notifications
+// that never reached a phone — they had none registered, or only dead ones
+// — while their competition is still open. Called when a device registers,
+// so signing in delivers what arrived while signed out. Returns how many.
+func (r *PushRepository) RequeueMissed(ctx context.Context, customerID uuid.UUID) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
+		update core.push_notifications n
+		set status = 'pending', next_attempt_at = now(), last_error = null
+		from competition.competitions c
+		where n.customer_id = $1 and n.read_at is null and n.status = 'skipped'
+		  and c.id = n.competition_id and c.status in ('scheduled', 'live') and c.ends_at > now()`,
+		customerID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeleteDevice forgets an install, on sign-out. Only the customer it belongs
 // to can remove it.
 func (r *PushRepository) DeleteDevice(ctx context.Context, customerID uuid.UUID, token string) error {
@@ -68,12 +86,57 @@ func queueCompetitionAnnouncement(ctx context.Context, q querier, competitionID 
 		inner join competition.competition_countries cc
 		        on cc.country_id = cu.country_id and cc.competition_id = $1
 		where cu.status = 'active'
-		on conflict (kind, competition_id, customer_id) do nothing`,
+		on conflict (kind, competition_id, customer_id) where kind = 'competition_announced' do nothing`,
 		competitionID, msg.Title, msg.Body, data)
 	if err != nil {
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// queueOvertaken tells every player whose best score the beater just passed
+// that they have been beaten, so they come back and play again. It runs in
+// the transaction that accepts the beater's score. "Passed" means the
+// player's best was at least the beater's previous best and is now below the
+// new score; players already behind the beater hear nothing. Someone who
+// already has an unread "beaten" notice for this competition from the last
+// 15 minutes is not sent another, so a run of plays is one notification.
+func queueOvertaken(ctx context.Context, q querier, competitionID, beaterID, submissionID uuid.UUID, score int64) error {
+	_, err := q.Exec(ctx, `
+		with mine as (
+			select coalesce(max(score) filter (where id <> $3), -1) as old_best
+			from competition.score_submissions
+			where competition_id = $1 and customer_id = $2 and validation_status = 'accepted'
+		), others as (
+			select customer_id, max(score) as best
+			from competition.score_submissions
+			where competition_id = $1 and customer_id <> $2 and validation_status = 'accepted'
+			group by customer_id
+		), beaten as (
+			select o.customer_id, o.best
+			from others o, mine m
+			where o.best < $4 and o.best >= m.old_best
+		), beater as (
+			select coalesce(nullif(split_part(trim(coalesce(display_name, '')), ' ', 1), ''), 'Another player') as name
+			from customer.customers where id = $2
+		)
+		insert into core.push_notifications (customer_id, kind, competition_id, title, body, data)
+		select b.customer_id, 'competition_overtaken', $1,
+		       format('%s beat your score!', bt.name),
+		       format('%s scored %s in %s, beating your best of %s. Play again to take the lead!',
+		              bt.name, $4::bigint, c.title, b.best),
+		       jsonb_build_object('type', 'competition', 'competition_id', $1::text)
+		from beaten b
+		cross join beater bt
+		inner join competition.competitions c on c.id = $1
+		inner join customer.customers cu on cu.id = b.customer_id and cu.status = 'active'
+		where not exists (
+			select 1 from core.push_notifications p
+			where p.customer_id = b.customer_id and p.kind = 'competition_overtaken'
+			  and p.competition_id = $1 and p.read_at is null
+			  and p.created_at > now() - interval '15 minutes')`,
+		competitionID, beaterID, submissionID, score)
+	return err
 }
 
 // PendingPush is one queued notification with the devices to send it to.
@@ -118,6 +181,11 @@ func (r *PushRepository) DuePushes(ctx context.Context, limit int) ([]PendingPus
 		if err := json.Unmarshal(data, &p.Message.Data); err != nil {
 			return nil, err
 		}
+		if p.Message.Data == nil {
+			p.Message.Data = map[string]string{}
+		}
+		// Lets the app tell a push apart from the inbox entry it matches.
+		p.Message.Data["notification_id"] = p.ID.String()
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -148,4 +216,53 @@ func AnnouncementStats(ctx context.Context, q querier, competitionID uuid.UUID) 
 		where kind = 'competition_announced' and competition_id = $1`, competitionID).
 		Scan(&st.Queued, &st.Pending, &st.Sent, &st.Skipped, &st.Failed)
 	return st, err
+}
+
+// Inbox returns a customer's newest notifications and how many are unread.
+// Announcements for competitions that were cancelled are left out.
+func (r *PushRepository) Inbox(ctx context.Context, customerID uuid.UUID, limit int) (*models.NotificationInbox, error) {
+	rows, err := r.db.Query(ctx, `
+		select n.id, n.kind, n.title, n.body, n.data, n.created_at, n.read_at
+		from core.push_notifications n
+		left join competition.competitions c on c.id = n.competition_id
+		where n.customer_id = $1 and coalesce(c.status, '') <> 'cancelled'
+		order by n.created_at desc
+		limit $2`, customerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	inbox := &models.NotificationInbox{Items: make([]models.InboxNotification, 0)}
+	for rows.Next() {
+		var n models.InboxNotification
+		var data []byte
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Title, &n.Body, &data, &n.CreatedAt, &n.ReadAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &n.Data); err != nil {
+			return nil, err
+		}
+		inbox.Items = append(inbox.Items, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	err = r.db.QueryRow(ctx, `
+		select count(*)
+		from core.push_notifications n
+		left join competition.competitions c on c.id = n.competition_id
+		where n.customer_id = $1 and n.read_at is null and coalesce(c.status, '') <> 'cancelled'`,
+		customerID).Scan(&inbox.Unread)
+	return inbox, err
+}
+
+// MarkRead marks the given notifications read, or all of them when ids is
+// empty. Only the customer's own notifications are touched.
+func (r *PushRepository) MarkRead(ctx context.Context, customerID uuid.UUID, ids []uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		update core.push_notifications set read_at = now()
+		where customer_id = $1 and read_at is null
+		  and (cardinality($2::uuid[]) = 0 or id = any($2::uuid[]))`, customerID, ids)
+	return err
 }

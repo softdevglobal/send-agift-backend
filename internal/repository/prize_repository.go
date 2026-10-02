@@ -325,7 +325,8 @@ func (r *CompetitionRepository) StartPlay(ctx context.Context, in PlayInput) (*P
 			in.CompetitionID, in.CustomerID, dayStart).Scan(&active, &total, &today); err != nil {
 			return err
 		}
-		if active >= round.MaxAttempts {
+		// 0 is no limit: only the points balance counts.
+		if round.MaxAttempts > 0 && active >= round.MaxAttempts {
 			return &PlayLimitError{Kind: "round", Limit: round.MaxAttempts}
 		}
 		if round.DailyLimit != nil && today >= *round.DailyLimit {

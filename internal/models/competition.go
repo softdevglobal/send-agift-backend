@@ -298,8 +298,10 @@ type CompetitionView struct {
 
 // CompetitionMe is the signed-in customer's position in one competition.
 type CompetitionMe struct {
-	AttemptsUsed      int `json:"attempts_used"`
-	AttemptsRemaining int `json:"attempts_remaining"`
+	AttemptsUsed int `json:"attempts_used"`
+	// -1 when the round has no play limit (see PlaysUnlimited).
+	AttemptsRemaining int  `json:"attempts_remaining"`
+	PlaysUnlimited    bool `json:"plays_unlimited"`
 	// Plays left today under the daily limit, when the round has one, and
 	// when the next day's plays open.
 	PlaysLeftToday   *int       `json:"plays_left_today,omitempty"`
