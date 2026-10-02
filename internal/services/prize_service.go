@@ -286,13 +286,12 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 	continueAtCap := src.ContinueAtCap
 	c := &models.Competition{}
 	if err := s.apply(ctx, c, CompetitionInput{
-		CountryID:                    src.CountryID.String(),
+		CountryIDs:                   countryIDStrings(src),
 		GameSlug:                     src.GameSlug,
 		Title:                        title,
 		StartsAt:                     in.StartsAt,
 		EndsAt:                       in.EndsAt,
 		Timezone:                     src.Timezone,
-		PointsPerAttempt:             src.PointsPerAttempt,
 		MaxAttemptsPerCustomer:       src.MaxAttemptsPerCustomer,
 		MinAge:                       src.MinAge,
 		RequiresIdentityVerification: &requiresID,

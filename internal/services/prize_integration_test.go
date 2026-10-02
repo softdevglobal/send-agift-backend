@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -136,14 +137,15 @@ func (f *prizeFixture) liveRound(o roundOpts) *models.Competition {
 	rules := "Highest score wins."
 	continueAtCap := o.continueAtCap
 	in := CompetitionInput{
-		CountryID: f.country.String(), GameSlug: o.game, Title: "Prize engine test",
+		CountryIDs: []string{f.country.String()}, GameSlug: o.game, Title: "Prize engine test",
 		StartsAt: time.Now().Add(time.Hour), EndsAt: time.Now().Add(48 * time.Hour), Timezone: "UTC",
-		PointsPerAttempt: o.cost, MaxAttemptsPerCustomer: o.maxPlays, NumberOfWinners: o.winners,
+		MaxAttemptsPerCustomer: o.maxPlays, NumberOfWinners: o.winners,
 		PrizeDescription: "Cash prize", PrizeCurrency: &f.currency, OfficialRules: &rules,
 		PrizeGrowthEnabled: o.increment > 0, StartPrizeCents: &o.start, IncrementPerPlayCents: o.increment,
 		MaxPrizeCents: o.max, DailyPlayLimit: o.daily, ContinueAtCap: &continueAtCap,
 		WinOdds: o.winOdds, QuizQuestions: o.quiz,
 	}
+	f.gameCost(o.game, o.cost)
 	view, err := f.svc.CreateCompetition(f.ctx, f.admin, in)
 	if err != nil {
 		f.t.Fatalf("create: %v", err)
@@ -174,6 +176,24 @@ func (f *prizeFixture) liveRound(o roundOpts) *models.Competition {
 		f.t.Fatalf("round should be live, is %s", f.svc.status(c))
 	}
 	return c
+}
+
+// gameCost sets what one play of a game costs, which a competition takes
+// as its price per play, and puts the old price back after the test.
+func (f *prizeFixture) gameCost(slug string, points int) {
+	f.t.Helper()
+	var before int
+	if err := f.pool.QueryRow(f.ctx, `
+		update competition.games g set play_cost_points = $2
+		from competition.games old
+		where g.slug = $1 and old.id = g.id
+		returning old.play_cost_points`, slug, points).Scan(&before); err != nil {
+		f.t.Fatalf("game cost: %v", err)
+	}
+	f.t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(),
+			`update competition.games set play_cost_points = $2 where slug = $1`, slug, before)
+	})
 }
 
 func (f *prizeFixture) play(c *models.Competition, customer uuid.UUID, key string) (*models.AttemptStartView, error) {
@@ -793,7 +813,7 @@ func TestPrizeChanceGate(t *testing.T) {
 	rules := "r"
 	one := 1
 	if _, err := f.svc.CreateCompetition(f.ctx, f.admin, CompetitionInput{
-		CountryID: f.country.String(), GameSlug: "instant-win", Title: "No odds",
+		CountryIDs: []string{f.country.String()}, GameSlug: "instant-win", Title: "No odds",
 		StartsAt: time.Now().Add(time.Hour), EndsAt: time.Now().Add(2 * time.Hour), Timezone: "UTC",
 		PrizeDescription: "x", OfficialRules: &rules, NumberOfWinners: 1, MaxAttemptsPerCustomer: one,
 	}); !errors.Is(err, ErrInvalidCompetition) {
@@ -919,10 +939,109 @@ func TestPrizeQuiz(t *testing.T) {
 	// A quiz needs valid questions.
 	rules := "r"
 	if _, err := f.svc.CreateCompetition(f.ctx, f.admin, CompetitionInput{
-		CountryID: f.country.String(), GameSlug: "quiz", Title: "Empty quiz",
+		CountryIDs: []string{f.country.String()}, GameSlug: "quiz", Title: "Empty quiz",
 		StartsAt: time.Now().Add(time.Hour), EndsAt: time.Now().Add(2 * time.Hour), Timezone: "UTC",
 		PrizeDescription: "x", OfficialRules: &rules, NumberOfWinners: 1, MaxAttemptsPerCustomer: 1,
 	}); !errors.Is(err, ErrInvalidCompetition) {
 		t.Fatalf("a quiz without questions must be refused: %v", err)
+	}
+}
+
+// A round can run in several countries: each must pass its own gates, the
+// prize is in one of their currencies, and players from any of them can enter.
+func TestCompetitionCountries(t *testing.T) {
+	f := newPrizeFixture(t)
+	newCountry := func(currency string) (uuid.UUID, string) {
+		iso := "T" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:10])
+		var id uuid.UUID
+		if err := f.pool.QueryRow(f.ctx, `
+			insert into core.countries (iso_code, name, default_currency, default_timezone)
+			values ($1, $2, $3, 'UTC') returning id`, iso, "Otherland "+iso, currency).Scan(&id); err != nil {
+			t.Fatalf("country: %v", err)
+		}
+		return id, "Otherland " + iso
+	}
+	// Free plays, so the second country needs no points-usage gate.
+	f.gameCost("2048", 0)
+	other, otherName := newCountry("EUR")
+	outside, _ := newCountry("USD")
+
+	rules := "Highest score wins."
+	start := int64(100)
+	in := CompetitionInput{
+		CountryIDs: []string{f.country.String(), other.String(), other.String()},
+		GameSlug:   "2048", Title: "Two countries",
+		StartsAt: time.Now().Add(time.Hour), EndsAt: time.Now().Add(48 * time.Hour), Timezone: "UTC",
+		MaxAttemptsPerCustomer: 3, NumberOfWinners: 1, PrizeDescription: "Cash prize",
+		OfficialRules: &rules, StartPrizeCents: &start,
+	}
+	if _, err := f.svc.CreateCompetition(f.ctx, f.admin, in); !errors.Is(err, ErrInvalidCompetition) {
+		t.Fatalf("mixed currencies need an explicit prize currency: %v", err)
+	}
+	gbp := "GBP"
+	in.PrizeCurrency = &gbp
+	if _, err := f.svc.CreateCompetition(f.ctx, f.admin, in); !errors.Is(err, ErrInvalidCompetition) {
+		t.Fatalf("the prize currency must be one of the countries': %v", err)
+	}
+	in.PrizeCurrency = &f.currency
+	view, err := f.svc.CreateCompetition(f.ctx, f.admin, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(view.Countries) != 2 {
+		t.Fatalf("want 2 countries, got %d", len(view.Countries))
+	}
+	if !slices.ContainsFunc(view.ScheduleBlockers, func(b string) bool {
+		return strings.Contains(b, "skill competitions are not enabled for "+otherName)
+	}) {
+		t.Fatalf("an ungated country should block scheduling: %v", view.ScheduleBlockers)
+	}
+
+	if _, err := f.pool.Exec(f.ctx, `
+		insert into core.country_capabilities (country_id, skill_competitions_enabled)
+		values ($1, true)`, other); err != nil {
+		t.Fatal(err)
+	}
+	c, err := f.svc.load(f.ctx, view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	player := func(country uuid.UUID) *models.Customer {
+		var id uuid.UUID
+		if err := f.pool.QueryRow(f.ctx, `
+			insert into customer.customers
+				(country_id, email, password_hash, display_name, date_of_birth, age_verified_at, identity_verified_at)
+			values ($1, $2, 'x', 'Test Player', '1990-01-01', now(), now()) returning id`,
+			country, uuid.NewString()+"@example.test").Scan(&id); err != nil {
+			t.Fatalf("customer: %v", err)
+		}
+		cust, err := f.svc.customer(f.ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cust
+	}
+	for _, tc := range []struct {
+		country uuid.UUID
+		want    bool
+	}{{f.country, true}, {other, true}, {outside, false}} {
+		ok, reason, err := f.svc.eligibility(f.ctx, c, player(tc.country), capabilityCache{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok != tc.want {
+			t.Fatalf("country %s: eligible = %v (%s), want %v", tc.country, ok, reason, tc.want)
+		}
+	}
+
+	// Editing down to one country drops the other.
+	in.CountryIDs = []string{other.String()}
+	in.PrizeCurrency = nil
+	edited, err := f.svc.UpdateCompetition(f.ctx, f.admin, view.ID, in)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if len(edited.Countries) != 1 || edited.Countries[0].ID != other || *edited.PrizeCurrency != "EUR" {
+		t.Fatalf("want only %s in EUR, got %+v %v", otherName, edited.Countries, *edited.PrizeCurrency)
 	}
 }

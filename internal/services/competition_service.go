@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -216,23 +218,19 @@ func (s *CompetitionService) capability(ctx context.Context, countryID uuid.UUID
 	return cc, nil
 }
 
-func (s *CompetitionService) competitionsEnabled(ctx context.Context, countryID uuid.UUID, cache capabilityCache) (bool, error) {
-	cc, err := s.capability(ctx, countryID, cache)
-	return cc != nil && cc.SkillCompetitionsEnabled, err
-}
-
 // eligibility checks a customer against a competition's published rules:
-// country, the skill-competition gate, 18+ with verified age, and identity
+// one of its countries, that country's skill-competition gate, 18+ with verified age, and identity
 // verification when the rules require it (§13.5). The returned reason is
 // written for the player.
 func (s *CompetitionService) eligibility(ctx context.Context, c *models.Competition, cust *models.Customer, cache capabilityCache) (bool, string, error) {
 	if cust.Status != "active" {
 		return false, "Your account is not active.", nil
 	}
-	if cust.CountryID != c.CountryID {
-		return false, fmt.Sprintf("This competition is only open to players in %s.", c.CountryName), nil
+	if !c.HasCountry(cust.CountryID) {
+		return false, fmt.Sprintf("This competition is only open to players in %s.", c.CountryNames()), nil
 	}
-	cc, err := s.capability(ctx, c.CountryID, cache)
+	// Each country's own gates apply to its players.
+	cc, err := s.capability(ctx, cust.CountryID, cache)
 	if err != nil {
 		return false, "", err
 	}
@@ -283,8 +281,9 @@ func (s *CompetitionService) toView(c *models.Competition) models.CompetitionVie
 		GameType:                     c.GameType,
 		WinnerMethod:                 c.WinnerMethod,
 		WinOdds:                      c.WinOdds,
-		CountryCode:                  c.CountryCode,
-		CountryName:                  c.CountryName,
+		Countries:                    c.Countries,
+		CountryCode:                  c.CountryCodes(),
+		CountryName:                  c.CountryNames(),
 		StartsAt:                     c.StartsAt,
 		EndsAt:                       c.EndsAt,
 		Timezone:                     c.Timezone,
@@ -358,7 +357,7 @@ func (s *CompetitionService) me(ctx context.Context, c *models.Competition, cust
 }
 
 // ListCompetitions returns competitions for the app. Signed-in customers see
-// their own country's competitions with their attempts and eligibility;
+// the competitions open in their country with their attempts and eligibility;
 // guests see everything that has been published.
 func (s *CompetitionService) ListCompetitions(ctx context.Context, actor SocialActor) ([]models.CompetitionView, error) {
 	if err := s.repo.SyncStatuses(ctx); err != nil {
@@ -976,13 +975,14 @@ func (s *CompetitionService) ClaimPrize(ctx context.Context, id uuid.UUID, actor
 // CompetitionInput is what an admin sets when creating or editing a
 // competition. The server seed is never taken from input.
 type CompetitionInput struct {
-	CountryID                    string    `json:"country_id"`
+	// The countries the competition runs in; players from any of them may
+	// enter once each country's gates allow it.
+	CountryIDs                   []string  `json:"country_ids"`
 	GameSlug                     string    `json:"game_slug"`
 	Title                        string    `json:"title"`
 	StartsAt                     time.Time `json:"starts_at"`
 	EndsAt                       time.Time `json:"ends_at"`
 	Timezone                     string    `json:"timezone"`
-	PointsPerAttempt             int       `json:"points_per_attempt"`
 	MaxAttemptsPerCustomer       int       `json:"max_attempts_per_customer"`
 	MinAge                       int       `json:"min_age"`
 	RequiresIdentityVerification *bool     `json:"requires_identity_verification"`
@@ -1019,17 +1019,80 @@ var prizeTypes = map[string]bool{"cash": true, "product": true, "voucher": true,
 
 func invalid(msg string) error { return fmt.Errorf("%w: %s", ErrInvalidCompetition, msg) }
 
+// competitionCountries resolves the chosen country IDs, dropping repeats.
+func (s *CompetitionService) competitionCountries(ctx context.Context, ids []string) ([]models.CompetitionCountry, error) {
+	seen := make(map[uuid.UUID]bool, len(ids))
+	out := make([]models.CompetitionCountry, 0, len(ids))
+	for _, raw := range ids {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, invalid("country_ids must be country IDs")
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		co, err := s.countries.GetByID(ctx, id.String())
+		if err != nil {
+			if errors.Is(err, repository.ErrCountryNotFound) {
+				return nil, invalid("country " + id.String() + " does not exist")
+			}
+			return nil, err
+		}
+		out = append(out, models.CompetitionCountry{
+			ID:              co.ID,
+			IsoCode:         co.ISOCode,
+			Name:            co.Name,
+			DefaultCurrency: strings.ToUpper(strings.TrimSpace(co.DefaultCurrency)),
+		})
+	}
+	if len(out) == 0 {
+		return nil, invalid("choose at least one country")
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// countryIDStrings lists a competition's country IDs as input strings.
+func countryIDStrings(c *models.Competition) []string {
+	out := make([]string, len(c.Countries))
+	for i, co := range c.Countries {
+		out[i] = co.ID.String()
+	}
+	return out
+}
+
+// prizeCurrency picks the money prize's currency: one of the chosen
+// countries' currencies. It can be left out when they all share one.
+func prizeCurrency(countries []models.CompetitionCountry, requested *string) (string, error) {
+	var allowed []string
+	for _, co := range countries {
+		if co.DefaultCurrency == "" {
+			return "", invalid(co.Name + " has no currency")
+		}
+		if !slices.Contains(allowed, co.DefaultCurrency) {
+			allowed = append(allowed, co.DefaultCurrency)
+		}
+	}
+	if requested == nil || strings.TrimSpace(*requested) == "" {
+		if len(allowed) > 1 {
+			return "", invalid("the chosen countries use different currencies (" +
+				strings.Join(allowed, ", ") + "); choose prize_currency")
+		}
+		return allowed[0], nil
+	}
+	cur := strings.ToUpper(strings.TrimSpace(*requested))
+	if !slices.Contains(allowed, cur) {
+		return "", invalid("prize_currency must be the currency of one of the chosen countries (" +
+			strings.Join(allowed, ", ") + ")")
+	}
+	return cur, nil
+}
+
 // apply validates the input onto a competition.
 func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, in CompetitionInput) error {
-	countryID, err := uuid.Parse(in.CountryID)
+	countries, err := s.competitionCountries(ctx, in.CountryIDs)
 	if err != nil {
-		return invalid("country_id is required")
-	}
-	country, err := s.countries.GetByID(ctx, countryID.String())
-	if err != nil {
-		if errors.Is(err, repository.ErrCountryNotFound) {
-			return invalid("country_id does not exist")
-		}
 		return err
 	}
 	title := strings.TrimSpace(in.Title)
@@ -1044,9 +1107,6 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	}
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return invalid("timezone is not a valid IANA zone")
-	}
-	if in.PointsPerAttempt < 0 {
-		return invalid("points_per_attempt cannot be negative")
 	}
 	if in.MaxAttemptsPerCustomer == 0 {
 		in.MaxAttemptsPerCustomer = 3
@@ -1155,18 +1215,12 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 		continueAtCap = *in.ContinueAtCap
 	}
 	var currency *string
-	countryCurrency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
 	if in.PrizeType != "points" {
-		if countryCurrency == "" {
-			return invalid("the selected country has no currency")
+		cur, err := prizeCurrency(countries, in.PrizeCurrency)
+		if err != nil {
+			return err
 		}
-		currency = &countryCurrency
-		if in.PrizeCurrency != nil && strings.TrimSpace(*in.PrizeCurrency) != "" {
-			cur := strings.ToUpper(strings.TrimSpace(*in.PrizeCurrency))
-			if cur != countryCurrency {
-				return invalid("prize_currency must be the country's currency (" + countryCurrency + ")")
-			}
-		}
+		currency = &cur
 	} else if in.PrizeCurrency != nil && strings.TrimSpace(*in.PrizeCurrency) != "" {
 		cur := strings.ToUpper(strings.TrimSpace(*in.PrizeCurrency))
 		if len(cur) != 3 {
@@ -1216,13 +1270,14 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 		requiresID = *in.RequiresIdentityVerification
 	}
 
-	c.CountryID = countryID
+	c.Countries = countries
 	c.GameVersionID = pg.Version.ID
 	c.Title = title
 	c.StartsAt = in.StartsAt
 	c.EndsAt = in.EndsAt
 	c.Timezone = in.Timezone
-	c.PointsPerAttempt = in.PointsPerAttempt
+	// A play costs what the game costs everywhere else, set on the game.
+	c.PointsPerAttempt = int(pg.Game.PlayCostPoints)
 	c.MaxAttemptsPerCustomer = in.MaxAttemptsPerCustomer
 	c.MinAge = in.MinAge
 	c.RequiresIdentityVerification = requiresID
@@ -1268,7 +1323,7 @@ func (s *CompetitionService) CreateCompetition(ctx context.Context, admin AdminA
 	audit := admin.audit("competition.created", uuid.Nil, nil)
 	if err := s.repo.Create(ctx, c, audit); err != nil {
 		if isForeignKeyViolation(err) {
-			return nil, invalid("country_id does not exist")
+			return nil, invalid("a chosen country does not exist")
 		}
 		return nil, err
 	}
@@ -1301,7 +1356,7 @@ func (s *CompetitionService) UpdateCompetition(ctx context.Context, admin AdminA
 		case errors.Is(err, repository.ErrConfigVersionConflict):
 			return nil, ErrConfigConflict
 		case isForeignKeyViolation(err):
-			return nil, invalid("country_id does not exist")
+			return nil, invalid("a chosen country does not exist")
 		}
 		return nil, err
 	}
@@ -1327,16 +1382,11 @@ func (s *CompetitionService) SetReserve(ctx context.Context, admin AdminActor, i
 		return nil, ErrCompetitionLocked
 	}
 	cur := strings.ToUpper(strings.TrimSpace(in.Currency))
-	country, err := s.countries.GetByID(ctx, c.CountryID.String())
-	if err != nil {
-		if errors.Is(err, repository.ErrCountryNotFound) {
-			return nil, fmt.Errorf("%w: country_id does not exist", ErrInvalidReserve)
-		}
-		return nil, err
+	if c.PrizeCurrency == nil {
+		return nil, fmt.Errorf("%w: the competition has no prize currency", ErrInvalidReserve)
 	}
-	countryCurrency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
-	if in.ReserveAmount <= 0 || cur == "" || cur != countryCurrency {
-		return nil, fmt.Errorf("%w: reserve_amount must be positive and currency must be the country's currency (%s)", ErrInvalidReserve, countryCurrency)
+	if in.ReserveAmount <= 0 || cur != *c.PrizeCurrency {
+		return nil, fmt.Errorf("%w: reserve_amount must be positive and currency must be the prize currency (%s)", ErrInvalidReserve, *c.PrizeCurrency)
 	}
 	if in.FundingSource != "sendagift" && in.FundingSource != "approved_sponsor" {
 		return nil, fmt.Errorf("%w: funding_source must be sendagift or approved_sponsor", ErrInvalidReserve)
@@ -1383,12 +1433,8 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	if c.GameVersionStatus != "approved" {
 		blockers = append(blockers, "the game version is no longer approved")
 	}
-	enabled, err := s.competitionsEnabled(ctx, c.CountryID, capabilityCache{})
-	if err != nil {
-		return nil, err
-	}
-	if !enabled {
-		blockers = append(blockers, "skill competitions are not enabled for "+c.CountryName)
+	if len(c.Countries) == 0 {
+		blockers = append(blockers, "choose at least one country")
 	}
 	if c.OfficialRules == nil || strings.TrimSpace(*c.OfficialRules) == "" {
 		blockers = append(blockers, "official rules must be published")
@@ -1397,25 +1443,30 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	if c.PrizeType != "points" && (c.PrizeValueAmount == nil || c.PrizeCurrency == nil) {
 		blockers = append(blockers, "prize value and currency are required")
 	}
-	cc, err := s.capability(ctx, c.CountryID, capabilityCache{})
-	if err != nil {
-		return nil, err
-	}
-	if c.PrizeGrowthEnabled {
-		if cc == nil || !cc.ProgressivePrizesEnabled {
-			blockers = append(blockers, "progressive prizes are not approved for "+c.CountryName+
+	// Every country the round runs in must pass its own gates.
+	cache := capabilityCache{}
+	for _, co := range c.Countries {
+		cc, err := s.capability(ctx, co.ID, cache)
+		if err != nil {
+			return nil, err
+		}
+		if cc == nil || !cc.SkillCompetitionsEnabled {
+			blockers = append(blockers, "skill competitions are not enabled for "+co.Name)
+		}
+		if c.PrizeGrowthEnabled && (cc == nil || !cc.ProgressivePrizesEnabled) {
+			blockers = append(blockers, "progressive prizes are not approved for "+co.Name+
 				" (needs legal sign-off, then the country's progressive_prizes_enabled gate)")
 		}
-		if c.MaxPrizeCents == nil {
-			blockers = append(blockers, "a growing prize needs a maximum prize, so the funded reserve can cover it")
+		if c.PointsPerAttempt > 0 && (cc == nil || !cc.PointsUsageEnabled) {
+			blockers = append(blockers, "points usage is not enabled for "+co.Name)
+		}
+		if c.GameType == "chance" && (cc == nil || !cc.ChanceGamesEnabled) {
+			blockers = append(blockers, "games of chance are not approved for "+co.Name+
+				" (needs legal sign-off, then the country's chance_games_enabled gate)")
 		}
 	}
-	if c.PointsPerAttempt > 0 && (cc == nil || !cc.PointsUsageEnabled) {
-		blockers = append(blockers, "points usage is not enabled for "+c.CountryName)
-	}
-	if c.GameType == "chance" && (cc == nil || !cc.ChanceGamesEnabled) {
-		blockers = append(blockers, "games of chance are not approved for "+c.CountryName+
-			" (needs legal sign-off, then the country's chance_games_enabled gate)")
+	if c.PrizeGrowthEnabled && c.MaxPrizeCents == nil {
+		blockers = append(blockers, "a growing prize needs a maximum prize, so the funded reserve can cover it")
 	}
 	if c.WinnerMethod == "instant" && c.WinOdds == nil {
 		blockers = append(blockers, "an instant-win round needs its win odds")
@@ -1445,8 +1496,8 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	return blockers, nil
 }
 
-// ScheduleCompetition publishes a draft once every gate passes: country
-// enabled, rules published, prize reserve funded and covering the prize.
+// ScheduleCompetition publishes a draft once every gate passes: every
+// country enabled, rules published, prize reserve funded and covering the prize.
 func (s *CompetitionService) ScheduleCompetition(ctx context.Context, admin AdminActor, id uuid.UUID) (*models.AdminCompetitionView, error) {
 	c, err := s.load(ctx, id)
 	if err != nil {
