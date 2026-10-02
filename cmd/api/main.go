@@ -83,11 +83,15 @@ func main() {
 	pointsService := services.NewPointsService(pointsRepo)
 	// Prize reconciliation (Progressive Prize spec §9): every round whose
 	// money can still move is re-derived from its ledger on a schedule.
-	go competitionService.RunReconciliation(context.Background(), 15*time.Minute)
+	// With several API servers running, an advisory lock gives each round
+	// to only one of them.
+	go competitionService.RunReconciliation(context.Background(), 15*time.Minute,
+		database.Exclusive(pool, database.LockPrizeReconciliation))
 	// Points earning: delivered orders, refunds and sign-up bonuses, by each
 	// country's rule, plus product rewards and gift points riding on orders.
 	// Idempotent, so it simply runs on a timer.
-	go pointsService.RunEarningLoop(context.Background(), time.Minute)
+	go pointsService.RunEarningLoop(context.Background(), time.Minute,
+		database.Exclusive(pool, database.LockPointsEarning))
 	// Sellers buying points: the provider only starts a payment; points are
 	// credited when the webhook or an admin confirms it.
 	pointsProvider, err := services.NewPointsPaymentProvider(cfg.PointsPaymentProvider)
