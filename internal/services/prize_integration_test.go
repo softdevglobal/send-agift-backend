@@ -1379,3 +1379,52 @@ func TestOvertakenNotifications(t *testing.T) {
 		t.Fatal("players already behind should not be told again")
 	}
 }
+
+// Customers are only shown live competitions.
+func TestCustomersSeeOnlyLive(t *testing.T) {
+	f := newPrizeFixture(t)
+	live := f.liveRound(roundOpts{start: 100})
+
+	rules := "Highest score wins."
+	start := int64(100)
+	soon, err := f.svc.CreateCompetition(f.ctx, f.admin, CompetitionInput{
+		CountryIDs: []string{f.country.String()}, GameSlug: "2048", Title: "Coming soon",
+		StartsAt: time.Now().Add(24 * time.Hour), EndsAt: time.Now().Add(48 * time.Hour), Timezone: "UTC",
+		NumberOfWinners: 1, PrizeDescription: "Cash", PrizeCurrency: &f.currency,
+		OfficialRules: &rules, StartPrizeCents: &start,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.SetReserve(f.ctx, f.admin, soon.ID, ReserveInput{
+		ReserveAmount: start, Currency: f.currency, FundingSource: "sendagift"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.FundReserve(f.ctx, f.admin, soon.ID, "escrow #1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.ScheduleCompetition(f.ctx, f.admin, soon.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := f.svc.ListCompetitions(f.ctx, SocialActor{CustomerID: f.customer(0).String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawLive bool
+	for _, c := range list {
+		if c.ID == soon.ID {
+			t.Fatal("a competition that has not started should not be listed")
+		}
+		if c.ID == live.ID {
+			sawLive = true
+		}
+	}
+	if !sawLive {
+		t.Fatal("the live competition should be listed")
+	}
+	// It can still be opened directly, from a notification.
+	if _, err := f.svc.GetCompetition(f.ctx, soon.ID, SocialActor{}); err != nil {
+		t.Fatalf("opening it directly: %v", err)
+	}
+}

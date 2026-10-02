@@ -360,8 +360,9 @@ func (s *CompetitionService) me(ctx context.Context, c *models.Competition, cust
 	return me, nil
 }
 
-// ListCompetitions returns competitions for the app. Signed-in customers see
-// the competitions open in their country with their attempts and eligibility;
+// ListCompetitions returns the live competitions for the app, plus any a
+// signed-in customer has won and not yet claimed, so a prize is never out
+// of reach. Signed-in customers see the ones open in their country with their attempts and eligibility;
 // guests see everything that has been published.
 func (s *CompetitionService) ListCompetitions(ctx context.Context, actor SocialActor) ([]models.CompetitionView, error) {
 	if err := s.repo.SyncStatuses(ctx); err != nil {
@@ -407,9 +408,24 @@ func (s *CompetitionService) ListCompetitions(ctx context.Context, actor SocialA
 				return nil, err
 			}
 		}
+		if view.Status != "live" && !unclaimedWin(view.Me) {
+			continue
+		}
 		out = append(out, view)
 	}
 	return out, nil
+}
+
+// unclaimedWin reports a win whose prize the customer has yet to claim.
+func unclaimedWin(me *models.CompetitionMe) bool {
+	if me == nil || me.Win == nil {
+		return false
+	}
+	w := me.Win
+	if w.Status != "pending_validation" && w.Status != "validated" {
+		return false
+	}
+	return w.ClaimStatus == nil || *w.ClaimStatus == "pending"
 }
 
 // GetCompetition returns one competition with its rules and disclosures, the
