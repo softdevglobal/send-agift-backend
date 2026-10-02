@@ -233,7 +233,10 @@ func (s *CompetitionService) ReconcileAll(ctx context.Context) {
 }
 
 // RunReconciliation runs ReconcileAll on an interval until ctx ends.
-func (s *CompetitionService) RunReconciliation(ctx context.Context, every time.Duration) {
+//
+// exclusive decides whether this server takes each round: with several API
+// servers running, only one reconciles at a time. nil runs every round.
+func (s *CompetitionService) RunReconciliation(ctx context.Context, every time.Duration, exclusive Exclusive) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -241,7 +244,12 @@ func (s *CompetitionService) RunReconciliation(ctx context.Context, every time.D
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.ReconcileAll(ctx)
+			if _, err := exclusive.run(ctx, func(ctx context.Context) error {
+				s.ReconcileAll(ctx)
+				return nil
+			}); err != nil {
+				log.Printf("prize reconciliation: %v", err)
+			}
 		}
 	}
 }
@@ -628,7 +636,9 @@ func (s *PointsService) RunEarning(ctx context.Context) (*models.EarningRunResul
 }
 
 // RunEarningLoop runs the earning job on an interval until ctx ends.
-func (s *PointsService) RunEarningLoop(ctx context.Context, every time.Duration) {
+// exclusive decides whether this server takes each round: with several API
+// servers running, only one runs the job at a time. nil runs every round.
+func (s *PointsService) RunEarningLoop(ctx context.Context, every time.Duration, exclusive Exclusive) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -636,14 +646,31 @@ func (s *PointsService) RunEarningLoop(ctx context.Context, every time.Duration)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			res, err := s.points.RunEarning(ctx, 500)
-			if err != nil {
+			if _, err := exclusive.run(ctx, func(ctx context.Context) error {
+				res, err := s.points.RunEarning(ctx, 500)
+				if err != nil {
+					return err
+				}
+				if res.Anything() {
+					log.Printf("points earning: %+v", *res)
+				}
+				return nil
+			}); err != nil {
 				log.Printf("points earning: %v", err)
-				continue
-			}
-			if res.Anything() {
-				log.Printf("points earning: %+v", *res)
 			}
 		}
 	}
+}
+
+// Exclusive runs fn only when no other API server is already running the
+// same job, and reports whether it ran. database.Exclusive builds one from an
+// advisory lock.
+type Exclusive func(ctx context.Context, fn func(context.Context) error) (bool, error)
+
+// run calls fn through the gate, or directly when there is none.
+func (e Exclusive) run(ctx context.Context, fn func(context.Context) error) (bool, error) {
+	if e == nil {
+		return true, fn(ctx)
+	}
+	return e(ctx, fn)
 }

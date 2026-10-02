@@ -22,10 +22,12 @@ type Config struct {
 	JWTExpiry       time.Duration
 	BootstrapSecret string
 	AWSRegion       string
-	AWSAccessKeyID  string
-	AWSSecretKey    string
-	S3Bucket        string
-	GoogleMapsKey   string
+	// Optional static keys for local development. Leave both empty on AWS:
+	// the task role supplies credentials there.
+	AWSAccessKeyID string
+	AWSSecretKey   string
+	S3Bucket       string
+	GoogleMapsKey  string
 
 	// Seller points purchases. PointsCentsPerPoint is what one point costs in
 	// minor units of PointsCurrency (10 = $0.10 a point). The provider is
@@ -79,8 +81,12 @@ func Load() (*Config, error) {
 	if cfg.DBUser == "" || cfg.DBName == "" {
 		return nil, fmt.Errorf("DB_USER and DB_NAME are required")
 	}
-	if cfg.S3Bucket == "" || cfg.AWSAccessKeyID == "" || cfg.AWSSecretKey == "" {
-		return nil, fmt.Errorf("S3_BUCKET, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
+	if cfg.S3Bucket == "" {
+		return nil, fmt.Errorf("S3_BUCKET is required")
+	}
+	// Keys come as a pair or not at all; one alone is a typo, not a choice.
+	if (cfg.AWSAccessKeyID == "") != (cfg.AWSSecretKey == "") {
+		return nil, fmt.Errorf("set both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or neither to use the AWS default credentials (the task role on ECS)")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")

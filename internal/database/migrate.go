@@ -17,7 +17,17 @@ var migrationFS embed.FS
 
 // MigrateUp applies all pending *.up.sql files in order.
 // Other developers pull these files from Git, then run the API (or cmd/migrate).
+//
+// It holds an advisory lock while it works, so when several servers start at
+// once (or cmd/migrate runs beside a starting API) one applies the
+// migrations and the others wait, then find nothing left to do.
 func MigrateUp(ctx context.Context, pool *pgxpool.Pool) error {
+	return WithLock(ctx, pool, LockMigrations, func(ctx context.Context) error {
+		return migrateUp(ctx, pool)
+	})
+}
+
+func migrateUp(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version text PRIMARY KEY,
