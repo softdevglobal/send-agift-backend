@@ -234,12 +234,12 @@ func (r *SellerRepository) DeleteAddress(ctx context.Context, sellerID, addressI
 func (r *SellerRepository) CreateShop(ctx context.Context, s *models.Shop) error {
 	err := r.db.QueryRow(ctx, `
 		insert into seller.shops (
-			seller_id, name, slug, description,
+			seller_id, country_id, name, slug, description,
 			customer_visible_location, status, address_id, return_address_id, image_url,
 			latitude, longitude
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		returning id, status, created_at, updated_at`,
-		s.SellerID, s.Name, s.Slug, s.Description,
+		s.SellerID, s.CountryID, s.Name, s.Slug, s.Description,
 		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ReturnAddressID, s.ImageURL,
 		s.Latitude, s.Longitude,
 	).Scan(&s.ID, &s.Status, &s.CreatedAt, &s.UpdatedAt)
@@ -259,12 +259,13 @@ func (r *SellerRepository) UpdateShop(ctx context.Context, s *models.Shop) error
 		    image_url = $10,
 		    latitude = $11,
 		    longitude = $12,
+		    country_id = $13,
 		    updated_at = now()
 		where id = $1 and seller_id = $2
 		returning updated_at`,
 		s.ID, s.SellerID, s.Name, s.Slug, s.Description,
 		s.CustomerVisibleLocation, s.Status, s.AddressID, s.ReturnAddressID, s.ImageURL,
-		s.Latitude, s.Longitude,
+		s.Latitude, s.Longitude, s.CountryID,
 	).Scan(&s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrShopNotFound
@@ -286,7 +287,7 @@ func (r *SellerRepository) DeleteShop(ctx context.Context, sellerID, shopID stri
 
 func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
-		select id, seller_id, name, slug, description,
+		select id, seller_id, country_id, name, slug, description,
 		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
 		       latitude, longitude
 		from seller.shops
@@ -301,7 +302,7 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 	for rows.Next() {
 		var s models.Shop
 		if err := rows.Scan(
-			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+			&s.ID, &s.SellerID, &s.CountryID, &s.Name, &s.Slug, &s.Description,
 			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 			&s.Latitude, &s.Longitude,
 		); err != nil {
@@ -325,7 +326,7 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 // Used by customer-facing marketplace browsing.
 func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
-		select id, seller_id, name, slug, description,
+		select id, seller_id, country_id, name, slug, description,
 		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
 		       latitude, longitude
 		from seller.shops
@@ -340,7 +341,7 @@ func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, 
 	for rows.Next() {
 		var s models.Shop
 		if err := rows.Scan(
-			&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+			&s.ID, &s.SellerID, &s.CountryID, &s.Name, &s.Slug, &s.Description,
 			&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 			&s.Latitude, &s.Longitude,
 		); err != nil {
@@ -363,13 +364,13 @@ func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, 
 func (r *SellerRepository) GetActiveShopByID(ctx context.Context, shopID string) (*models.Shop, error) {
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
-		select id, seller_id, name, slug, description,
+		select id, seller_id, country_id, name, slug, description,
 		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
 		       latitude, longitude
 		from seller.shops
 		where id = $1 and status = 'active'`, shopID,
 	).Scan(
-		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+		&s.ID, &s.SellerID, &s.CountryID, &s.Name, &s.Slug, &s.Description,
 		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 		&s.Latitude, &s.Longitude,
 	)
@@ -388,13 +389,13 @@ func (r *SellerRepository) GetActiveShopByID(ctx context.Context, shopID string)
 func (r *SellerRepository) GetShopByID(ctx context.Context, sellerID, shopID string) (*models.Shop, error) {
 	s := &models.Shop{}
 	err := r.db.QueryRow(ctx, `
-		select id, seller_id, name, slug, description,
+		select id, seller_id, country_id, name, slug, description,
 		       customer_visible_location, status, address_id, return_address_id, created_at, updated_at, image_url,
 		       latitude, longitude
 		from seller.shops
 		where id = $1 and seller_id = $2`, shopID, sellerID,
 	).Scan(
-		&s.ID, &s.SellerID, &s.Name, &s.Slug, &s.Description,
+		&s.ID, &s.SellerID, &s.CountryID, &s.Name, &s.Slug, &s.Description,
 		&s.CustomerVisibleLocation, &s.Status, &s.AddressID, &s.ReturnAddressID, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 		&s.Latitude, &s.Longitude,
 	)

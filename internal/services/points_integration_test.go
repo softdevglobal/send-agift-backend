@@ -104,8 +104,8 @@ func (f *pointsFixture) product(seller uuid.UUID, reward int) uuid.UUID {
 	f.scan(&addr, `insert into seller.seller_addresses (seller_id, country_id, line1, city, latitude, longitude)
 		values ($1, $2, '1 Test Road', 'Colombo', 6.9000, 79.8550) returning id`, seller, f.country)
 	slug := "shop-" + uuid.NewString()[:8]
-	f.scan(&shop, `insert into seller.shops (seller_id, name, slug, address_id, latitude, longitude, status)
-		values ($1, $2, $2, $3, 6.9000, 79.8550, 'active') returning id`, seller, slug, addr)
+	f.scan(&shop, `insert into seller.shops (seller_id, country_id, name, slug, address_id, latitude, longitude, status)
+		values ($1, $2, $3, $3, $4, 6.9000, 79.8550, 'active') returning id`, seller, f.country, slug, addr)
 	f.exec(`insert into seller.shop_delivery_zones (shop_id, max_km, price_amount, currency, estimated_days)
 		values ($1, 100, 0, 'USD', 1)`, shop)
 	f.scan(&product, `insert into seller.products (shop_id, name, slug, price_amount, currency, status, reward_points)

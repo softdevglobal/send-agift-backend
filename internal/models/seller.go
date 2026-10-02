@@ -44,9 +44,10 @@ type SellerAddress struct {
 
 // Shop maps to seller.shops.
 type Shop struct {
-	ID                      uuid.UUID  `json:"id"`
-	SellerID                uuid.UUID  `json:"seller_id"`
-	Name                    string     `json:"name"`
+	ID                      uuid.UUID          `json:"id"`
+	SellerID                uuid.UUID          `json:"seller_id"`
+	CountryID               uuid.UUID          `json:"country_id"`
+	Name                    string             `json:"name"`
 	Slug                    string     `json:"slug"`
 	Description             *string    `json:"description,omitempty"`
 	CustomerVisibleLocation *string    `json:"customer_visible_location,omitempty"`

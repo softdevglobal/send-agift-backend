@@ -76,7 +76,8 @@ func newPrizeFixture(t *testing.T) *prizeFixture {
 	competitions := repository.NewCompetitionRepository(pool)
 	pointsRepo := repository.NewPointsRepository(pool)
 	f.svc = NewCompetitionService(competitions, repository.NewGameRepository(pool),
-		repository.NewCustomerRepository(pool), repository.NewCountryCapabilityRepository(pool), pointsRepo)
+		repository.NewCustomerRepository(pool), repository.NewCountryCapabilityRepository(pool),
+		repository.NewCountryRepository(pool), pointsRepo)
 	f.points = NewPointsService(pointsRepo)
 	return f
 }
