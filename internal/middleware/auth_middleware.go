@@ -28,7 +28,7 @@ func RequireAuth(secret string) func(http.Handler) http.Handler {
 	// return the middleware function that wraps the next handler
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := r.Header.Get("Authorization") // get the authorization header from the request
+			header := r.Header.Get("Authorization")    // get the authorization header from the request
 			if !strings.HasPrefix(header, "Bearer ") { // if the authorization header does not have the bearer token, return an error
 				utils.Error(w, http.StatusUnauthorized, "missing bearer token")
 				return // return the error
@@ -43,8 +43,8 @@ func RequireAuth(secret string) func(http.Handler) http.Handler {
 
 			ctx := context.WithValue(r.Context(), AdminIDContextKey, claims.Subject) // add the admin ID to the context
 			ctx = context.WithValue(ctx, UserIDContextKey, claims.Subject)           // add the user ID to the context
-			ctx = context.WithValue(ctx, RoleContextKey, claims.Role)               // add the role to the context
-			next.ServeHTTP(w, r.WithContext(ctx))                                   // serve the request with the context
+			ctx = context.WithValue(ctx, RoleContextKey, claims.Role)                // add the role to the context
+			next.ServeHTTP(w, r.WithContext(ctx))                                    // serve the request with the context
 		}) // return the next handler
 	} // return the middleware function
 }

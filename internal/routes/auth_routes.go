@@ -20,9 +20,9 @@ func RegisterAuthRoutes(r chi.Router, auth *handlers.AuthHandler, jwtSecret stri
 		r.Post("/admin/reauth", auth.Reauth)
 	})
 
-	r.Post("/auth/login", auth.Login) // login for admin
+	r.Post("/auth/login", auth.Login)      // login for admin
 	r.Post("/customers/login", auth.Login) // login for customer
-	r.Post("/sellers/login", auth.Login) // login for seller	
+	r.Post("/sellers/login", auth.Login)   // login for seller
 }
 
 // POST

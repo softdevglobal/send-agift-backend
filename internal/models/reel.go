@@ -14,15 +14,15 @@ type Reel struct {
 	ShopID           uuid.UUID  `json:"shop_id"`
 	ProductID        *uuid.UUID `json:"product_id,omitempty"`
 	ThumbnailMediaID *uuid.UUID `json:"thumbnail_media_id,omitempty"`
-	ReelType         string     `json:"reel_type"`  // video | photo
+	ReelType         string     `json:"reel_type"` // video | photo
 	Caption          *string    `json:"caption,omitempty"`
 	Hashtags         []string   `json:"hashtags"`
 	Visibility       string     `json:"visibility"` // public | private
 	Status           string     `json:"status"`     // draft | published | archived
 	DurationMs       *int       `json:"duration_ms,omitempty"`
 	ViewCount        int64      `json:"view_count"`
-	LikeCount        int64      `json:"like_count"`       // denormalized; social.reel_likes
-	CommentCount     int64      `json:"comment_count"`    // denormalized; social.reel_comments
+	LikeCount        int64      `json:"like_count"`    // denormalized; social.reel_likes
+	CommentCount     int64      `json:"comment_count"` // denormalized; social.reel_comments
 	PublishedAt      *time.Time `json:"published_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`

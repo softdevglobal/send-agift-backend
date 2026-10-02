@@ -10,9 +10,9 @@ const DoodleSlug = "doodle-jump"
 
 // DoodleConfig is the Doodle Jump rule set, versioned like every game.
 type DoodleConfig struct {
-	Lanes             int `json:"lanes"`
-	Platforms         int `json:"platforms"`
-	SpringEvery       int `json:"spring_every"`
+	Lanes       int `json:"lanes"`
+	Platforms   int `json:"platforms"`
+	SpringEvery int `json:"spring_every"`
 	// SpringLift is how many ledges a spring carries the player, counting the
 	// spring itself: 1 is no boost at all, 3 throws them two clear of it.
 	SpringLift        int `json:"spring_lift"`

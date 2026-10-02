@@ -6,7 +6,7 @@ import (
 	"time"    // pagination cursor (*time.Time "before") for ListMessages
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"        // pgx.ErrNoRows for "not found" mapping
+	"github.com/jackc/pgx/v5"         // pgx.ErrNoRows for "not found" mapping
 	"github.com/jackc/pgx/v5/pgxpool" // connection pool shared across the API
 
 	"myapp/internal/models"
@@ -23,6 +23,7 @@ var (
 //   - messaging.conversation_participants
 //   - messaging.messages
 //   - support.cases
+//
 // It has no business rules — just SQL + row scanning.
 type MessagingRepository struct {
 	db *pgxpool.Pool

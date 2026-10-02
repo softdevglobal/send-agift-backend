@@ -29,12 +29,12 @@ var (
 ) // error for the service
 
 type CustomerService struct {
-	customers      *repository.CustomerRepository // repository for the service
-	countries      *repository.CountryRepository  // repository for the service
-	capabilities   *CountryCapabilityService
-	products       *repository.ProductRepository  // for validating product_id on saved gifts
-	jwtSecret      string                         // secret for the JWT
-	jwtExpiry      time.Duration                  // expiry for the JWT
+	customers    *repository.CustomerRepository // repository for the service
+	countries    *repository.CountryRepository  // repository for the service
+	capabilities *CountryCapabilityService
+	products     *repository.ProductRepository // for validating product_id on saved gifts
+	jwtSecret    string                        // secret for the JWT
+	jwtExpiry    time.Duration                 // expiry for the JWT
 }
 
 func NewCustomerService(
@@ -395,8 +395,6 @@ func (s *CustomerService) DeleteSavedGift(ctx context.Context, customerID, saved
 	}
 	return err
 }
-
-
 
 func (s *CustomerService) buildAddress(customerID uuid.UUID, in AddressInput) (*models.CustomerAddress, error) { // buildAddress is a function that builds an address
 	in.Line1 = strings.TrimSpace(in.Line1)

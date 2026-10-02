@@ -96,36 +96,36 @@ type SharedSource struct {
 
 // CompetitionAnalytics is the Super Admin dashboard for one round (spec §10).
 type CompetitionAnalytics struct {
-	CompetitionID           uuid.UUID        `json:"competition_id"`
-	Currency                *string          `json:"currency,omitempty"`
-	CurrentPrizeCents       int64            `json:"current_prize_cents"`
-	StartPrizeCents         int64            `json:"start_prize_cents"`
-	PrizeGrowthCents        int64            `json:"prize_growth_cents"`
-	MaxPrizeCents           *int64           `json:"max_prize_cents,omitempty"`
-	MaxPossibleLiability    *int64           `json:"max_possible_liability_cents,omitempty"`
-	ValidPlays              int64            `json:"valid_plays"`
-	VoidedPlays             int64            `json:"voided_plays"`
-	UniquePlayers           int64            `json:"unique_players"`
-	RepeatPlayers           int64            `json:"repeat_players"`
-	RepeatPlayRate          float64          `json:"repeat_play_rate"`
-	PointsSpent             int64            `json:"points_spent"`
-	PointsRefunded          int64            `json:"points_refunded"`
-	NetPointsConsumed       int64            `json:"net_points_consumed"`
-	IncrementsCents         int64            `json:"increments_cents"`
-	AdjustmentsCents        int64            `json:"adjustments_cents"`
-	ReversalsCents          int64            `json:"reversals_cents"`
-	CorrectionsCents        int64            `json:"corrections_cents"`
-	SettledCents            int64            `json:"settled_cents"`
-	RejectedByReason        map[string]int64 `json:"rejected_by_reason"`
-	UniqueViewers           int64            `json:"unique_viewers"`
-	ViewToPlayRate          float64          `json:"view_to_play_rate"`
-	TopPlayers              []PlayerActivity `json:"top_players"`
-	VelocityAlerts          []PlayerActivity `json:"velocity_alerts"`
+	CompetitionID        uuid.UUID        `json:"competition_id"`
+	Currency             *string          `json:"currency,omitempty"`
+	CurrentPrizeCents    int64            `json:"current_prize_cents"`
+	StartPrizeCents      int64            `json:"start_prize_cents"`
+	PrizeGrowthCents     int64            `json:"prize_growth_cents"`
+	MaxPrizeCents        *int64           `json:"max_prize_cents,omitempty"`
+	MaxPossibleLiability *int64           `json:"max_possible_liability_cents,omitempty"`
+	ValidPlays           int64            `json:"valid_plays"`
+	VoidedPlays          int64            `json:"voided_plays"`
+	UniquePlayers        int64            `json:"unique_players"`
+	RepeatPlayers        int64            `json:"repeat_players"`
+	RepeatPlayRate       float64          `json:"repeat_play_rate"`
+	PointsSpent          int64            `json:"points_spent"`
+	PointsRefunded       int64            `json:"points_refunded"`
+	NetPointsConsumed    int64            `json:"net_points_consumed"`
+	IncrementsCents      int64            `json:"increments_cents"`
+	AdjustmentsCents     int64            `json:"adjustments_cents"`
+	ReversalsCents       int64            `json:"reversals_cents"`
+	CorrectionsCents     int64            `json:"corrections_cents"`
+	SettledCents         int64            `json:"settled_cents"`
+	RejectedByReason     map[string]int64 `json:"rejected_by_reason"`
+	UniqueViewers        int64            `json:"unique_viewers"`
+	ViewToPlayRate       float64          `json:"view_to_play_rate"`
+	TopPlayers           []PlayerActivity `json:"top_players"`
+	VelocityAlerts       []PlayerActivity `json:"velocity_alerts"`
 	// Several accounts playing from one device or one network (spec §10).
-	SharedDevices  []SharedSource `json:"shared_devices"`
-	SharedNetworks []SharedSource `json:"shared_networks"`
-	ReconciliationStatus    string           `json:"reconciliation_status"`
-	ReconciliationCheckedAt *time.Time       `json:"reconciliation_checked_at,omitempty"`
+	SharedDevices           []SharedSource `json:"shared_devices"`
+	SharedNetworks          []SharedSource `json:"shared_networks"`
+	ReconciliationStatus    string         `json:"reconciliation_status"`
+	ReconciliationCheckedAt *time.Time     `json:"reconciliation_checked_at,omitempty"`
 }
 
 // PrizeEvent is one live update for a round (spec §5.4), read from the

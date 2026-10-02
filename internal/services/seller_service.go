@@ -16,21 +16,21 @@ import (
 )
 
 var (
-	ErrSellerNotFound = errors.New("seller not found")	// return an error if the seller is not found			
-	ErrSellerConflict = errors.New("seller already exists")	// return an error if the seller already exists
-	ErrShopNotFound   = errors.New("shop not found")	// return an error if the shop is not found
-	ErrShopConflict   = errors.New("shop already exists")	// return an error if the shop already exists
-	ErrSellerAddrNotFound = errors.New("seller address not found")	// return an error if the seller address is not found
-	ErrInvalidShop    = errors.New("invalid shop")	// return an error if the shop is invalid
+	ErrSellerNotFound     = errors.New("seller not found")         // return an error if the seller is not found
+	ErrSellerConflict     = errors.New("seller already exists")    // return an error if the seller already exists
+	ErrShopNotFound       = errors.New("shop not found")           // return an error if the shop is not found
+	ErrShopConflict       = errors.New("shop already exists")      // return an error if the shop already exists
+	ErrSellerAddrNotFound = errors.New("seller address not found") // return an error if the seller address is not found
+	ErrInvalidShop        = errors.New("invalid shop")             // return an error if the shop is invalid
 )
 
-var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)	// return a regular expression that matches any non-alphanumeric character
+var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`) // return a regular expression that matches any non-alphanumeric character
 
 type SellerService struct {
-	sellers      *repository.SellerRepository // repository for the seller
+	sellers      *repository.SellerRepository  // repository for the seller
 	countries    *repository.CountryRepository // repository for the country
 	capabilities *CountryCapabilityService
-	jwtSecret    string // secret for the JWT
+	jwtSecret    string        // secret for the JWT
 	jwtExpiry    time.Duration // expiry for the JWT
 }
 
@@ -44,56 +44,56 @@ func NewSellerService(
 	return &SellerService{sellers: sellers, countries: countries, capabilities: capabilities, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry} // return a new SellerService
 }
 
-type SellerRegisterInput struct {	// SellerRegisterInput is a struct that contains the input for the seller register
-	CountryID   string	// country ID for the seller
+type SellerRegisterInput struct { // SellerRegisterInput is a struct that contains the input for the seller register
+	CountryID   string // country ID for the seller
 	SellerType  string
-	LegalName   string	// legal name for the seller
-	TradingName *string	// trading name for the seller
-	Email       string	// email for the seller
-	Password    string	// password for the seller
-	Phone       *string	// phone for the seller	
+	LegalName   string  // legal name for the seller
+	TradingName *string // trading name for the seller
+	Email       string  // email for the seller
+	Password    string  // password for the seller
+	Phone       *string // phone for the seller
 	ImageURL    *string
-	Addresses   []SellerAddressInput	// addresses for the seller
-	Shop        *ShopInput // nil / omitted = blank (no shop)
+	Addresses   []SellerAddressInput // addresses for the seller
+	Shop        *ShopInput           // nil / omitted = blank (no shop)
 }
 
-type SellerUpdateInput struct {	// SellerUpdateInput is a struct that contains the input for the seller update		
-	CountryID   string	// country ID for the seller
-	SellerType  string	// seller type for the seller
-	LegalName   string	// legal name for the seller
-	TradingName *string	// trading name for the seller
-	Phone       *string	// phone for the seller
+type SellerUpdateInput struct { // SellerUpdateInput is a struct that contains the input for the seller update
+	CountryID   string  // country ID for the seller
+	SellerType  string  // seller type for the seller
+	LegalName   string  // legal name for the seller
+	TradingName *string // trading name for the seller
+	Phone       *string // phone for the seller
 	ImageURL    *string
 }
 
 type SellerAddressInput struct {
-	CountryID   string   `json:"country_id"`	// country ID for the seller address
-	Label       *string  `json:"label"`	// label for the seller address
-	AddressType string   `json:"address_type"`	// address type for the seller address
-	Line1       string   `json:"line1"`	// line1 for the seller address
-	Line2       *string  `json:"line2"`	// line2 for the seller address
-	City        string   `json:"city"`	// city for the seller address
-	Region      *string  `json:"region"`	// region for the seller address
-	PostalCode  *string  `json:"postal_code"`	// postal code for the seller address
-	Latitude    *float64 `json:"latitude"`	// latitude for the seller address
-	Longitude   *float64 `json:"longitude"`	// longitude for the seller address
-	IsDefault   bool     `json:"is_default"`	// is default for the seller address
+	CountryID   string   `json:"country_id"`   // country ID for the seller address
+	Label       *string  `json:"label"`        // label for the seller address
+	AddressType string   `json:"address_type"` // address type for the seller address
+	Line1       string   `json:"line1"`        // line1 for the seller address
+	Line2       *string  `json:"line2"`        // line2 for the seller address
+	City        string   `json:"city"`         // city for the seller address
+	Region      *string  `json:"region"`       // region for the seller address
+	PostalCode  *string  `json:"postal_code"`  // postal code for the seller address
+	Latitude    *float64 `json:"latitude"`     // latitude for the seller address
+	Longitude   *float64 `json:"longitude"`    // longitude for the seller address
+	IsDefault   bool     `json:"is_default"`   // is default for the seller address
 }
 
 type ShopInput struct {
-	Name                    string  `json:"name"`	// name for the shop		
-	Slug                    string  `json:"slug"`	// slug for the shop
-	Description             *string `json:"description"`	// description for the shop
-	CustomerVisibleLocation *string `json:"customer_visible_location"`	// customer visible location for the shop
-	Status                  string  `json:"status"`	// status for the shop
-	CountryID               string  `json:"country_id"`
-	AddressID               *string `json:"address_id"`
-	ReturnAddressID         *string `json:"return_address_id"`
-	ImageURL                *string              `json:"image_url"`
-	Latitude                *float64             `json:"latitude"`
-	Longitude               *float64             `json:"longitude"`
+	Name                    string              `json:"name"`                      // name for the shop
+	Slug                    string              `json:"slug"`                      // slug for the shop
+	Description             *string             `json:"description"`               // description for the shop
+	CustomerVisibleLocation *string             `json:"customer_visible_location"` // customer visible location for the shop
+	Status                  string              `json:"status"`                    // status for the shop
+	CountryID               string              `json:"country_id"`
+	AddressID               *string             `json:"address_id"`
+	ReturnAddressID         *string             `json:"return_address_id"`
+	ImageURL                *string             `json:"image_url"`
+	Latitude                *float64            `json:"latitude"`
+	Longitude               *float64            `json:"longitude"`
 	DeliveryZones           []DeliveryZoneInput `json:"delivery_zones"`
-}	// ShopInput is a struct that contains the input for the shop
+} // ShopInput is a struct that contains the input for the shop
 
 // DeliveryZoneInput is one local-delivery band. price_amount 0 = free.
 type DeliveryZoneInput struct {
@@ -109,29 +109,29 @@ type DeliveryZonesReplaceInput struct {
 }
 
 type SellerLoginResult struct {
-	Token string `json:"token"`	// token for the seller login	
+	Token string `json:"token"` // token for the seller login
 }
 
 func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*models.SellerDetails, error) {
 	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
-	in.LegalName = strings.TrimSpace(in.LegalName)	// legal name for the seller
-	in.SellerType = strings.TrimSpace(in.SellerType)	// seller type for the seller
+	in.LegalName = strings.TrimSpace(in.LegalName)   // legal name for the seller
+	in.SellerType = strings.TrimSpace(in.SellerType) // seller type for the seller
 	if in.SellerType == "" {
-		in.SellerType = "individual"	// seller type for the seller
+		in.SellerType = "individual" // seller type for the seller
 	}
 	if in.Email == "" || len(in.Password) < 8 || in.LegalName == "" {
-		return nil, ErrInvalidInput	// return an error if the input is invalid
+		return nil, ErrInvalidInput // return an error if the input is invalid
 	}
 
 	countryID, err := uuid.Parse(in.CountryID)
 	if err != nil {
-		return nil, ErrInvalidCountry	// return an error if the country is invalid
+		return nil, ErrInvalidCountry // return an error if the country is invalid
 	}
 	if _, err := s.countries.GetByID(ctx, countryID.String()); err != nil {
 		if errors.Is(err, repository.ErrCountryNotFound) {
-			return nil, ErrInvalidCountry	// return an error if the country is not found
+			return nil, ErrInvalidCountry // return an error if the country is not found
 		}
-		return nil, err	// return an error if the country is not found
+		return nil, err // return an error if the country is not found
 	}
 	if err := s.capabilities.EnsureSellerRegistrationAllowed(ctx, countryID.String()); err != nil {
 		return nil, err
@@ -139,7 +139,7 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 
 	hash, err := utils.HashPassword(in.Password)
 	if err != nil {
-		return nil, err	// return an error if the password is not hashed
+		return nil, err // return an error if the password is not hashed
 	}
 
 	seller := &models.Seller{
@@ -156,9 +156,9 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 	}
 	if err := s.sellers.Create(ctx, seller); err != nil {
 		if errors.Is(err, repository.ErrSellerDuplicate) {
-			return nil, ErrSellerConflict	// return an error if the seller already exists
+			return nil, ErrSellerConflict // return an error if the seller already exists
 		}
-		return nil, err	// return an error if the seller is not created
+		return nil, err // return an error if the seller is not created
 	}
 
 	addresses := make([]models.SellerAddress, 0, len(in.Addresses))
@@ -168,16 +168,16 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 		}
 		addr, err := s.buildAddress(seller.ID, addrIn)
 		if err != nil {
-			return nil, err	// return an error if the address is not built
+			return nil, err // return an error if the address is not built
 		}
 		if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
 			if errors.Is(err, repository.ErrCountryNotFound) {
-				return nil, ErrInvalidCountry	// return an error if the country is invalid					
+				return nil, ErrInvalidCountry // return an error if the country is invalid
 			}
-			return nil, err	// return an error if the country is not found
+			return nil, err // return an error if the country is not found
 		}
 		if err := s.sellers.CreateAddress(ctx, addr); err != nil {
-			return nil, err	// return an error if the address is not created
+			return nil, err // return an error if the address is not created
 		}
 		addresses = append(addresses, *addr)
 	}
@@ -186,53 +186,53 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 	if in.Shop != nil && strings.TrimSpace(in.Shop.Name) != "" {
 		shop, err := s.createShopForSeller(ctx, seller.ID, *in.Shop)
 		if err != nil {
-			return nil, err	// return an error if the shop is not created			
+			return nil, err // return an error if the shop is not created
 		}
 		shops = append(shops, *shop)
 	}
 
-	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil	// return the seller details
+	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil // return the seller details
 }
 
 func (s *SellerService) Login(ctx context.Context, email, password string) (*SellerLoginResult, error) { // Login is a function that logs in a seller
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "" || password == "" {
-		return nil, ErrInvalidCredentials	// return an error if the email or password is invalid	
+		return nil, ErrInvalidCredentials // return an error if the email or password is invalid
 	}
 	seller, err := s.sellers.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, repository.ErrSellerNotFound) {
-			return nil, ErrInvalidCredentials	// return an error if the seller is not found
+			return nil, ErrInvalidCredentials // return an error if the seller is not found
 		}
-		return nil, err	// return an error if the seller is not found
+		return nil, err // return an error if the seller is not found
 	}
 	if !utils.CheckPassword(password, seller.PasswordHash) {
-		return nil, ErrInvalidCredentials	// return an error if the password is invalid
+		return nil, ErrInvalidCredentials // return an error if the password is invalid
 	}
 	token, err := utils.GenerateJWT(seller.ID.String(), seller.Email, "seller", s.jwtSecret, s.jwtExpiry)
 	if err != nil {
-		return nil, err	// return an error if the token is not generated
+		return nil, err // return an error if the token is not generated
 	}
-	return &SellerLoginResult{Token: token}, nil	// return the seller login result
+	return &SellerLoginResult{Token: token}, nil // return the seller login result
 }
 
 func (s *SellerService) GetDetails(ctx context.Context, sellerID string) (*models.SellerDetails, error) { // GetDetails is a function that gets the details of a seller
 	seller, err := s.sellers.GetByID(ctx, sellerID)
 	if err != nil {
 		if errors.Is(err, repository.ErrSellerNotFound) {
-			return nil, ErrSellerNotFound	// return an error if the seller is not found
+			return nil, ErrSellerNotFound // return an error if the seller is not found
 		}
-		return nil, err	// return an error if the seller is not found
+		return nil, err // return an error if the seller is not found
 	}
 	addresses, err := s.sellers.ListAddresses(ctx, sellerID)
 	if err != nil {
-		return nil, err	// return an error if the addresses are not found
+		return nil, err // return an error if the addresses are not found
 	}
 	shops, err := s.sellers.ListShops(ctx, sellerID)
 	if err != nil {
-		return nil, err	// return an error if the shops are not found
+		return nil, err // return an error if the shops are not found
 	}
-	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil	// return the seller details
+	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil // return the seller details
 }
 
 // ListShops returns every shop owned by the seller, in any status.
@@ -240,81 +240,81 @@ func (s *SellerService) ListShops(ctx context.Context, sellerID string) ([]model
 	return s.sellers.ListShops(ctx, sellerID)
 }
 
-func (s *SellerService) Update(ctx context.Context, sellerID string, in SellerUpdateInput) (*models.Seller, error) { // Update is a function that updates a seller	
+func (s *SellerService) Update(ctx context.Context, sellerID string, in SellerUpdateInput) (*models.Seller, error) { // Update is a function that updates a seller
 	seller, err := s.sellers.GetByID(ctx, sellerID)
 	if err != nil {
 		if errors.Is(err, repository.ErrSellerNotFound) {
-			return nil, ErrSellerNotFound	// return an error if the seller is not found
+			return nil, ErrSellerNotFound // return an error if the seller is not found
 		}
-		return nil, err	// return an error if the seller is not found
+		return nil, err // return an error if the seller is not found
 	}
 	if in.CountryID != "" {
 		countryID, err := uuid.Parse(in.CountryID)
 		if err != nil {
-			return nil, ErrInvalidCountry	// return an error if the country is invalid
+			return nil, ErrInvalidCountry // return an error if the country is invalid
 		}
 		if _, err := s.countries.GetByID(ctx, countryID.String()); err != nil {
 			if errors.Is(err, repository.ErrCountryNotFound) {
-				return nil, ErrInvalidCountry	// return an error if the country is not found
+				return nil, ErrInvalidCountry // return an error if the country is not found
 			}
-			return nil, err	// return an error if the country is not found
+			return nil, err // return an error if the country is not found
 		}
 		seller.CountryID = countryID
 	}
 	if strings.TrimSpace(in.SellerType) != "" {
-		seller.SellerType = strings.TrimSpace(in.SellerType)	// seller type for the seller
+		seller.SellerType = strings.TrimSpace(in.SellerType) // seller type for the seller
 	}
 	if strings.TrimSpace(in.LegalName) != "" {
-		seller.LegalName = strings.TrimSpace(in.LegalName)	// legal name for the seller
+		seller.LegalName = strings.TrimSpace(in.LegalName) // legal name for the seller
 	}
 	if in.TradingName != nil {
-		seller.TradingName = in.TradingName	// trading name for the seller
+		seller.TradingName = in.TradingName // trading name for the seller
 	}
 	if in.Phone != nil {
-		seller.Phone = in.Phone	// phone for the seller
+		seller.Phone = in.Phone // phone for the seller
 	}
 	if in.ImageURL != nil {
 		seller.ImageURL = in.ImageURL
 	}
 	if err := s.sellers.Update(ctx, seller); err != nil {
-		return nil, err	// return an error if the seller is not updated
+		return nil, err // return an error if the seller is not updated
 	}
-	return seller, nil	// return the seller
+	return seller, nil // return the seller
 }
 
 func (s *SellerService) Delete(ctx context.Context, sellerID string) error { // Delete is a function that deletes a seller
 	err := s.sellers.SoftDeactivate(ctx, sellerID)
 	if errors.Is(err, repository.ErrSellerNotFound) {
-		return ErrSellerNotFound	// return an error if the seller is not found						
+		return ErrSellerNotFound // return an error if the seller is not found
 	}
-	return err	// return an error if the seller is not deleted
+	return err // return an error if the seller is not deleted
 }
 
 func (s *SellerService) AddAddress(ctx context.Context, sellerID string, in SellerAddressInput) (*models.SellerAddress, error) { // AddAddress is a function that adds an address to a seller
 	if _, err := s.sellers.GetByID(ctx, sellerID); err != nil {
 		if errors.Is(err, repository.ErrSellerNotFound) {
-			return nil, ErrSellerNotFound	// return an error if the seller is not found
+			return nil, ErrSellerNotFound // return an error if the seller is not found
 		}
-		return nil, err	// return an error if the seller is not found
+		return nil, err // return an error if the seller is not found
 	}
 	sid, err := uuid.Parse(sellerID)
 	if err != nil {
-		return nil, ErrSellerNotFound	// return an error if the seller is not found
+		return nil, ErrSellerNotFound // return an error if the seller is not found
 	}
 	addr, err := s.buildAddress(sid, in)
 	if err != nil {
-		return nil, err	// return an error if the address is not built
+		return nil, err // return an error if the address is not built
 	}
 	if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
 		if errors.Is(err, repository.ErrCountryNotFound) {
-			return nil, ErrInvalidCountry	// return an error if the country is invalid
+			return nil, ErrInvalidCountry // return an error if the country is invalid
 		}
-		return nil, err	// return an error if the country is not found
+		return nil, err // return an error if the country is not found
 	}
 	if err := s.sellers.CreateAddress(ctx, addr); err != nil {
-		return nil, err	// return an error if the address is not created
+		return nil, err // return an error if the address is not created
 	}
-	return addr, nil	// return the address
+	return addr, nil // return the address
 }
 
 func (s *SellerService) UpdateAddress(ctx context.Context, sellerID, addressID string, in SellerAddressInput) (*models.SellerAddress, error) {
@@ -355,9 +355,9 @@ func (s *SellerService) UpdateAddress(ctx context.Context, sellerID, addressID s
 func (s *SellerService) DeleteAddress(ctx context.Context, sellerID, addressID string) error { // DeleteAddress is a function that deletes an address from a seller
 	err := s.sellers.DeleteAddress(ctx, sellerID, addressID)
 	if errors.Is(err, repository.ErrSellerAddrNotFound) {
-		return ErrSellerAddrNotFound	// return an error if the seller address is not found
+		return ErrSellerAddrNotFound // return an error if the seller address is not found
 	}
-	return err	// return an error if the seller address is not deleted				
+	return err // return an error if the seller address is not deleted
 }
 
 func (s *SellerService) CreateShop(ctx context.Context, sellerID string, in ShopInput) (*models.Shop, error) {
@@ -371,7 +371,7 @@ func (s *SellerService) CreateShop(ctx context.Context, sellerID string, in Shop
 	if err != nil {
 		return nil, ErrSellerNotFound
 	}
-	return s.createShopForSeller(ctx, sid, in)	// return the shop
+	return s.createShopForSeller(ctx, sid, in) // return the shop
 }
 
 func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string, in ShopInput) (*models.Shop, error) {
@@ -384,7 +384,7 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 	}
 	if strings.TrimSpace(in.Name) == "" {
 		return nil, ErrInvalidShop
-	}	
+	}
 	shop.Name = strings.TrimSpace(in.Name)
 	shop.Slug = slugOrFromName(in.Slug, in.Name)
 	shop.Description = in.Description

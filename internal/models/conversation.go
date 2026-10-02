@@ -23,8 +23,8 @@ type Conversation struct {
 	ShopID          *uuid.UUID `json:"shop_id,omitempty"`
 	OrderID         *uuid.UUID `json:"order_id,omitempty"`
 	OrderItemID     *uuid.UUID `json:"order_item_id,omitempty"`
-	CreatedByUserID uuid.UUID  `json:"created_by_user_id"`          // who opened the thread
-	LastMessageAt   *time.Time `json:"last_message_at,omitempty"`   // bumped on every send; nil until first message
+	CreatedByUserID uuid.UUID  `json:"created_by_user_id"`        // who opened the thread
+	LastMessageAt   *time.Time `json:"last_message_at,omitempty"` // bumped on every send; nil until first message
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
@@ -40,9 +40,9 @@ type Conversation struct {
 type ConversationParticipant struct {
 	ID             uuid.UUID  `json:"id"`
 	ConversationID uuid.UUID  `json:"conversation_id"`
-	UserID         uuid.UUID  `json:"user_id"`                   // polymorphic: customer / seller / admin id
-	Role           string     `json:"role"`                      // customer | seller | admin
-	LastReadAt     *time.Time `json:"last_read_at,omitempty"`    // null = never opened / never marked read
+	UserID         uuid.UUID  `json:"user_id"`                // polymorphic: customer / seller / admin id
+	Role           string     `json:"role"`                   // customer | seller | admin
+	LastReadAt     *time.Time `json:"last_read_at,omitempty"` // null = never opened / never marked read
 	JoinedAt       time.Time  `json:"joined_at"`
 
 	// Read-only display fields, resolved from the table the role points at so a
@@ -58,8 +58,8 @@ type ConversationParticipant struct {
 type SupportCase struct {
 	ID                uuid.UUID `json:"id"`
 	ConversationID    uuid.UUID `json:"conversation_id"`     // 1:1 with messaging.conversations
-	OpenedByUserID    uuid.UUID `json:"opened_by_user_id"`  // who created the ticket
-	OpenedByRole      string    `json:"opened_by_role"`     // admin | customer | seller
+	OpenedByUserID    uuid.UUID `json:"opened_by_user_id"`   // who created the ticket
+	OpenedByRole      string    `json:"opened_by_role"`      // admin | customer | seller
 	CounterpartUserID uuid.UUID `json:"counterpart_user_id"` // the customer/seller the case is about
 	CounterpartRole   string    `json:"counterpart_role"`    // customer | seller
 	Subject           *string   `json:"subject,omitempty"`
@@ -87,22 +87,22 @@ type Message struct {
 
 // MessageAttachment is a file on a message, joined with media.media_assets for the client.
 type MessageAttachment struct {
-	ID           uuid.UUID `json:"id"`
-	MessageID    uuid.UUID `json:"message_id"`
-	MediaID      uuid.UUID `json:"media_id"`
-	AssetType    string    `json:"asset_type"` // image | document | ...
-	ObjectPath   string    `json:"object_path"`
-	CDNURL       *string   `json:"cdn_url,omitempty"`
-	MimeType     string    `json:"mime_type"`
-	SizeBytes    int64     `json:"size_bytes"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID         uuid.UUID `json:"id"`
+	MessageID  uuid.UUID `json:"message_id"`
+	MediaID    uuid.UUID `json:"media_id"`
+	AssetType  string    `json:"asset_type"` // image | document | ...
+	ObjectPath string    `json:"object_path"`
+	CDNURL     *string   `json:"cdn_url,omitempty"`
+	MimeType   string    `json:"mime_type"`
+	SizeBytes  int64     `json:"size_bytes"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ConversationSummary is a thread for inbox lists (includes unread for the viewer).
 // Embeds Conversation so all room fields are present, then adds inbox-only extras.
 type ConversationSummary struct {
 	Conversation
-	UnreadCount  int                       `json:"unread_count"`            // messages from others after my last_read_at
+	UnreadCount  int                       `json:"unread_count"` // messages from others after my last_read_at
 	Participants []ConversationParticipant `json:"participants"`
 	SupportCase  *SupportCase              `json:"support_case,omitempty"` // only when type=support
 }

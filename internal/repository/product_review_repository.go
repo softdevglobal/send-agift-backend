@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	ErrProductReviewNotFound      = errors.New("product review not found")
-	ErrProductReviewDuplicate     = errors.New("product review already exists for this order item")
-	ErrProductReviewVoteNotFound  = errors.New("product review vote not found")
+	ErrProductReviewNotFound     = errors.New("product review not found")
+	ErrProductReviewDuplicate    = errors.New("product review already exists for this order item")
+	ErrProductReviewVoteNotFound = errors.New("product review vote not found")
 )
 
 // ProductReviewRepository persists marketplace.product_reviews (+ media + votes).

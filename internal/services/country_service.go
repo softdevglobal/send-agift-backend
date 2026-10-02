@@ -2,17 +2,17 @@ package services
 
 import (
 	"context" // context for the service
-	"errors" // errors for the service
+	"errors"  // errors for the service
 	"strings" // strings for the service
 
-	"myapp/internal/models" // models for the service
+	"myapp/internal/models"     // models for the service
 	"myapp/internal/repository" // repository for the service
 )
 
-var ErrCountryNotFound = errors.New("country not found") // error for the service
+var ErrCountryNotFound = errors.New("country not found")      // error for the service
 var ErrCountryConflict = errors.New("country already exists") // error for the service
-var ErrInvalidCurrency = errors.New("invalid currency") // error for the service
-var ErrInvalidISOCode = errors.New("invalid iso code") // error for the service	
+var ErrInvalidCurrency = errors.New("invalid currency")       // error for the service
+var ErrInvalidISOCode = errors.New("invalid iso code")        // error for the service
 
 // knownCurrencies is a small ISO 4217 allow-list used for country defaults.
 var knownCurrencies = map[string]struct{}{
@@ -30,11 +30,11 @@ func NewCountryService(countries *repository.CountryRepository) *CountryService 
 }
 
 type CountryInput struct {
-	ISOCode         string	// ISO code for the country
-	Name            string	// Name for the country
-	DefaultCurrency string	// Default currency for the country
-	DefaultTimezone string	// Default timezone for the country
-	Status          string	// Status for the country
+	ISOCode         string // ISO code for the country
+	Name            string // Name for the country
+	DefaultCurrency string // Default currency for the country
+	DefaultTimezone string // Default timezone for the country
+	Status          string // Status for the country
 }
 
 func (s *CountryService) List(ctx context.Context) ([]models.Country, error) { // List is a function that lists all the countries
@@ -104,7 +104,7 @@ func (s *CountryService) Update(ctx context.Context, id string, in CountryInput)
 			return nil, err // return an error if the country is not updated
 		}
 	}
-	return existing, nil // return the country	
+	return existing, nil // return the country
 }
 
 func (s *CountryService) Delete(ctx context.Context, id string) error { // Delete is a function that deletes a country

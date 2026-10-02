@@ -23,12 +23,12 @@ type SellerDeliveryOption struct {
 	// Reason explains why Available is false (no zones, missing coordinates, too far).
 	Reason                string   `json:"reason,omitempty"`
 	DistanceKm            *float64 `json:"distance_km,omitempty"`
-	MaxKm                 float64  `json:"max_km,omitempty"`          // matched zone
-	FarthestKm            float64  `json:"farthest_km,omitempty"`     // shop's largest zone
-	PriceAmount           int      `json:"price_amount"`              // minor units; 0 = free
+	MaxKm                 float64  `json:"max_km,omitempty"`      // matched zone
+	FarthestKm            float64  `json:"farthest_km,omitempty"` // shop's largest zone
+	PriceAmount           int      `json:"price_amount"`          // minor units; 0 = free
 	Currency              string   `json:"currency,omitempty"`
 	IsFree                bool     `json:"is_free"`
-	EstimatedDays         int      `json:"estimated_days"`            // 0 = same day
+	EstimatedDays         int      `json:"estimated_days"`                    // 0 = same day
 	EstimatedDeliveryDate string   `json:"estimated_delivery_date,omitempty"` // YYYY-MM-DD
 }
 

@@ -25,9 +25,11 @@ type Recipient struct {
 
 // RecipientAddress maps to customer.recipient_addresses.
 // Managed via:
-//   POST   /customers/me/recipients/{id}/addresses
-//   PUT    /customers/me/recipients/{id}/addresses/{addressId}
-//   DELETE /customers/me/recipients/{id}/addresses/{addressId}
+//
+//	POST   /customers/me/recipients/{id}/addresses
+//	PUT    /customers/me/recipients/{id}/addresses/{addressId}
+//	DELETE /customers/me/recipients/{id}/addresses/{addressId}
+//
 // Deleting the default address clears recipients.default_address_id (ON DELETE SET NULL).
 type RecipientAddress struct {
 	ID          uuid.UUID `json:"id"`

@@ -22,15 +22,15 @@ func NewCustomerHandler(customers *services.CustomerService) *CustomerHandler {
 }
 
 type customerRegisterRequest struct {
-	CountryID    string                   `json:"country_id"`
-	Email        string                   `json:"email"`
-	Password     string                   `json:"password"`
-	Phone        *string                  `json:"phone"`
-	DisplayName  *string                  `json:"display_name"`
-	CustomerType string                   `json:"customer_type"`
-	DateOfBirth  string                   `json:"date_of_birth"`
-	Addresses    []services.AddressInput  `json:"addresses"`
-	ImageURL     *string                  `json:"image_url"`
+	CountryID    string                  `json:"country_id"`
+	Email        string                  `json:"email"`
+	Password     string                  `json:"password"`
+	Phone        *string                 `json:"phone"`
+	DisplayName  *string                 `json:"display_name"`
+	CustomerType string                  `json:"customer_type"`
+	DateOfBirth  string                  `json:"date_of_birth"`
+	Addresses    []services.AddressInput `json:"addresses"`
+	ImageURL     *string                 `json:"image_url"`
 }
 
 type customerUpdateRequest struct {
@@ -181,6 +181,7 @@ func (h *CustomerHandler) DeleteSavedGift(w http.ResponseWriter, r *http.Request
 	}
 	utils.JSON(w, http.StatusOK, map[string]string{"message": "saved gift deleted"})
 }
+
 // CreateRecipient: decode body -> call service -> 201 Created.
 func (h *CustomerHandler) CreateRecipient(w http.ResponseWriter, r *http.Request) {
 	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string) // set by auth middleware from the JWT
@@ -315,11 +316,11 @@ func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, f
 	case errors.Is(err, services.ErrSavedGiftNotFound):
 		utils.Error(w, http.StatusNotFound, "saved gift not found")
 	case errors.Is(err, services.ErrRecipientNotFound):
-			utils.Error(w, http.StatusNotFound, "recipient not found")
-		case errors.Is(err, services.ErrInvalidRecipient):
-			utils.Error(w, http.StatusBadRequest, "name is required; preferences must be valid JSON")
-		case errors.Is(err, services.ErrInvalidDefaultAddr):
-			utils.Error(w, http.StatusBadRequest, "default_address_id must belong to this recipient")
+		utils.Error(w, http.StatusNotFound, "recipient not found")
+	case errors.Is(err, services.ErrInvalidRecipient):
+		utils.Error(w, http.StatusBadRequest, "name is required; preferences must be valid JSON")
+	case errors.Is(err, services.ErrInvalidDefaultAddr):
+		utils.Error(w, http.StatusBadRequest, "default_address_id must belong to this recipient")
 	default:
 		log.Printf("customer handler error: %v", err)
 		utils.Error(w, http.StatusInternalServerError, fallback)

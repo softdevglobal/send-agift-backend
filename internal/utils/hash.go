@@ -2,7 +2,6 @@ package utils
 
 import "golang.org/x/crypto/bcrypt"
 
-
 // HashPassword uses bcrypt to securely hash a password
 func HashPassword(password string) (string, error) {
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -12,7 +11,6 @@ func HashPassword(password string) (string, error) {
 	// return the hashed password as a string
 	return string(hashedPassword), nil
 }
-
 
 // CheckPassword checks if a password matches a hash
 func CheckPassword(password, hash string) bool {

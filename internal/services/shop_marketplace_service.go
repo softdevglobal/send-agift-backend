@@ -81,4 +81,3 @@ func normalizeCustomerType(customerType string) (string, error) {
 	}
 	return customerType, nil
 }
-

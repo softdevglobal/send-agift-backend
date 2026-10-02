@@ -19,7 +19,7 @@ var (
 	ErrAddressNotFound    = errors.New("address not found")
 	ErrSavedGiftNotFound  = errors.New("saved gift not found")
 	ErrSavedGiftDuplicate = errors.New("product already saved")
-	ErrRecipientNotFound = errors.New("recipient not found")
+	ErrRecipientNotFound  = errors.New("recipient not found")
 )
 
 type CustomerRepository struct {

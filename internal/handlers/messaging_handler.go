@@ -79,6 +79,7 @@ func (h *MessagingHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Optional query params:
 //   - limit  — page size (service/repo clamp to a safe max)
 //   - before — RFC3339 timestamp; return messages strictly older than this (cursor pagination)
+//
 // Side effect: marks the conversation read for the viewer.
 func (h *MessagingHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	userID, role := h.actor(r)

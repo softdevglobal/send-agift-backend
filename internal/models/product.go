@@ -27,8 +27,8 @@ type Product struct {
 	// is zero when the seller does not hold enough points to pay it.
 	RewardPoints int       `json:"reward_points"`
 	PrepMinutes  int       `json:"prep_minutes"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 	// ImageURL is the cover thumbnail (list cards, order lines). Prefer Media for galleries.
 	ImageURL *string `json:"image_url,omitempty"`
 	// Shipping parcel used for delivery quotes / rates (seller form dims).

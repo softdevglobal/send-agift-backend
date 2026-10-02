@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 )
+
 // ReelLike maps to social.reel_likes — one like per reel + identity.
 type ReelLike struct {
 	ID         uuid.UUID  `json:"id"`
@@ -18,16 +19,16 @@ type ReelLike struct {
 // ReelComment maps to social.reel_comments.
 // Public JSON hides customer_id / guest_token; Author is built in the service.
 type ReelComment struct {
-	ID           uuid.UUID  `json:"id"`
-	ReelID       uuid.UUID  `json:"reel_id"`
-	CustomerID   *uuid.UUID `json:"-"`
-	GuestToken   *string    `json:"-"`
-	IsAnonymous  bool       `json:"is_anonymous"`
-	DisplayName  *string    `json:"-"` // raw DB value; use Author.DisplayName in API
-	Body         string     `json:"body"`
-	Status       string     `json:"status"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID          uuid.UUID  `json:"id"`
+	ReelID      uuid.UUID  `json:"reel_id"`
+	CustomerID  *uuid.UUID `json:"-"`
+	GuestToken  *string    `json:"-"`
+	IsAnonymous bool       `json:"is_anonymous"`
+	DisplayName *string    `json:"-"` // raw DB value; use Author.DisplayName in API
+	Body        string     `json:"body"`
+	Status      string     `json:"status"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 	// CustomerDisplayName is joined from customer.customers when not anonymous.
 	CustomerDisplayName *string `json:"-"`
 }

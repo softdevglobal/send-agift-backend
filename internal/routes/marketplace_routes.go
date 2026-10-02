@@ -23,4 +23,3 @@ func RegisterMarketplaceRoutes(r chi.Router, shops *handlers.ShopsHandler) {
 	r.Get("/shops/{shopId}/products", shops.ListShopProducts)
 	r.Get("/products/{productId}", shops.GetProduct)
 }
-

@@ -14,21 +14,22 @@ import (
 // Define custom errors for the authentication failures
 var (
 	ErrBootstrapForbidden = errors.New("bootstrap already completed") // if the bootstrap is already completed
-	ErrInvalidInput       = errors.New("invalid input") // if the input is invalid
-	ErrInvalidCredentials = errors.New("invalid email or password") // if the email or password is invalid
+	ErrInvalidInput       = errors.New("invalid input")               // if the input is invalid
+	ErrInvalidCredentials = errors.New("invalid email or password")   // if the email or password is invalid
 )
+
 // Authservice handles authentication for admins, customers and sellers
 type AuthService struct {
-	admins          *repository.AdminRepository // repository for admin operations
+	admins          *repository.AdminRepository    // repository for admin operations
 	customers       *repository.CustomerRepository // repository for customer operations
-	sellers         *repository.SellerRepository // repository for seller operations
-	jwtSecret       string // secret for the JWT
-	jwtExpiry       time.Duration // expiry for the JWT
-	bootstrapSecret string // secret for the bootstrap
+	sellers         *repository.SellerRepository   // repository for seller operations
+	jwtSecret       string                         // secret for the JWT
+	jwtExpiry       time.Duration                  // expiry for the JWT
+	bootstrapSecret string                         // secret for the bootstrap
 }
 
 // NewAuthService is a simple constructor for the AuthService
-func NewAuthService( 
+func NewAuthService(
 	admins *repository.AdminRepository, // repository for admin operations
 	customers *repository.CustomerRepository, // repository for customer operations
 	sellers *repository.SellerRepository, // repository for seller operations
@@ -36,14 +37,15 @@ func NewAuthService(
 	jwtExpiry time.Duration, // expiry for the JWT
 ) *AuthService {
 	return &AuthService{ // returns a new AuthService
-		admins:          admins, // repository for admin operations
-		customers:       customers, // repository for customer operations		
-		sellers:         sellers, // repository for seller operations
-		jwtSecret:       jwtSecret, // secret for the JWT
-		jwtExpiry:       jwtExpiry, // expiry for the JWT
+		admins:          admins,          // repository for admin operations
+		customers:       customers,       // repository for customer operations
+		sellers:         sellers,         // repository for seller operations
+		jwtSecret:       jwtSecret,       // secret for the JWT
+		jwtExpiry:       jwtExpiry,       // expiry for the JWT
 		bootstrapSecret: bootstrapSecret, // secret for the bootstrap
 	}
 }
+
 // BootstrapInput is the input for the bootstrap operation
 type BootstrapInput struct {
 	Email           string
@@ -97,7 +99,7 @@ func (s *AuthService) Bootstrap(ctx context.Context, in BootstrapInput) (*models
 		return nil, err // return an error if the admin is not created
 	}
 
-	return admin, nil // return the admin	
+	return admin, nil // return the admin
 }
 
 // Login checks admin, then customer, then seller with the same email + password.
@@ -184,4 +186,3 @@ func (s *AuthService) AdminReauth(ctx context.Context, adminID, password string)
 	}
 	return &ReauthResult{ReauthToken: token, ExpiresAt: time.Now().Add(ReauthTTL)}, nil
 }
-

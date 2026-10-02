@@ -67,15 +67,15 @@ const maxChatAttachments = 5
 // It's a single struct covering all three conversation types — fields relevant to
 // one type are simply left nil/omitted for the others.
 type StartConversationInput struct {
-	Type              string             `json:"type"`                // product_inquiry | order | support — determines which fields below are required
-	ProductID         *string            `json:"product_id"`          // required for product_inquiry
-	OrderItemID       *string            `json:"order_item_id"`       // required for order
-	CounterpartRole   *string            `json:"counterpart_role"`    // customer | seller — required when an admin opens a support case
-	CounterpartUserID *string            `json:"counterpart_user_id"` // target customer/seller id — required when an admin opens a support case
-	Subject           *string            `json:"subject"`             // optional free-text subject, support only
-	Priority          *string            `json:"priority"`            // low|normal|high|urgent, support only (admin-opened)
-	Body              *string            `json:"body"`                // optional first message text
-	Attachments       []ChatAttachmentInput `json:"attachments"`      // optional first-message files (already uploaded via presign)
+	Type              string                `json:"type"`                // product_inquiry | order | support — determines which fields below are required
+	ProductID         *string               `json:"product_id"`          // required for product_inquiry
+	OrderItemID       *string               `json:"order_item_id"`       // required for order
+	CounterpartRole   *string               `json:"counterpart_role"`    // customer | seller — required when an admin opens a support case
+	CounterpartUserID *string               `json:"counterpart_user_id"` // target customer/seller id — required when an admin opens a support case
+	Subject           *string               `json:"subject"`             // optional free-text subject, support only
+	Priority          *string               `json:"priority"`            // low|normal|high|urgent, support only (admin-opened)
+	Body              *string               `json:"body"`                // optional first message text
+	Attachments       []ChatAttachmentInput `json:"attachments"`         // optional first-message files (already uploaded via presign)
 }
 
 // ChatAttachmentInput is one already-uploaded file (via /media/presign-upload folder chat-image|chat-document).

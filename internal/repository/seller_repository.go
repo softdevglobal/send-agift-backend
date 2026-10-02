@@ -14,10 +14,10 @@ import (
 )
 
 var (
-	ErrSellerNotFound  = errors.New("seller not found")
-	ErrSellerDuplicate = errors.New("seller already exists")
-	ErrShopNotFound    = errors.New("shop not found")
-	ErrShopDuplicate   = errors.New("shop already exists")
+	ErrSellerNotFound     = errors.New("seller not found")
+	ErrSellerDuplicate    = errors.New("seller already exists")
+	ErrShopNotFound       = errors.New("shop not found")
+	ErrShopDuplicate      = errors.New("shop already exists")
 	ErrSellerAddrNotFound = errors.New("seller address not found")
 )
 
