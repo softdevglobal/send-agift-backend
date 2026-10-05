@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,7 @@ type ShopGiftAvailability struct {
 	Currency              string             `json:"currency,omitempty"`
 	IsFree                bool               `json:"is_free"`
 	EstimatedDays         int                `json:"estimated_days"`
+	CutoffTime            string             `json:"cutoff_time,omitempty"`
 	EstimatedDeliveryDate string             `json:"estimated_delivery_date,omitempty"`
 	ProductIDs            []string           `json:"product_ids"`
 	Products              []AvailableProduct `json:"products"`
@@ -86,7 +88,8 @@ func (s *AvailabilityService) Search(ctx context.Context, q GiftAvailabilityQuer
 	reachable := make([]repository.ShopForAvailability, 0, len(candidates))
 	reachableIDs := make([]uuid.UUID, 0, len(candidates))
 	for _, shop := range candidates {
-		if !zoneReaches(shop, q, now) {
+		// Cutoff and preparation are wall-clock times in the shop's timezone.
+		if !zoneReaches(shop, q, shopLocalNow(now, shop.Timezone)) {
 			continue
 		}
 		reachable = append(reachable, shop)
@@ -110,7 +113,7 @@ func (s *AvailabilityService) Search(ctx context.Context, q GiftAvailabilityQuer
 		Shops:        []ShopGiftAvailability{},
 	}
 	for _, shop := range reachable {
-		matched := shopAvailability(shop, byShop[shop.ID], q, now)
+		matched := shopAvailability(shop, byShop[shop.ID], q, shopLocalNow(now, shop.Timezone))
 		if matched != nil {
 			out.Shops = append(out.Shops, *matched)
 		}
@@ -149,7 +152,20 @@ func shopAvailability(shop repository.ShopForAvailability, gifts []repository.Gi
 	ids := make([]string, 0, len(gifts))
 	products := make([]AvailableProduct, 0, len(gifts))
 	for _, gift := range gifts {
-		if !giftCanBeSent(gift, on) {
+		// Same-day only if the gift is ready at or before the cutoff.
+		// ready = now + prep_minutes. A later ready time misses today.
+		arrival := arrivalWithPrep(now, opt, gift.PrepMinutes)
+		if q.DeliveryDate != "" && arrival > q.DeliveryDate {
+			continue
+		}
+		onGift := on
+		if arrival != "" {
+			onGift = arrival
+		}
+		if q.DeliveryDate != "" {
+			onGift = q.DeliveryDate
+		}
+		if !giftCanBeSent(gift, onGift) {
 			continue
 		}
 		ids = append(ids, gift.ID.String())
@@ -183,6 +199,7 @@ func shopAvailability(shop repository.ShopForAvailability, gifts []repository.Gi
 		Currency:              opt.Currency,
 		IsFree:                opt.IsFree,
 		EstimatedDays:         opt.EstimatedDays,
+		CutoffTime:            opt.CutoffTime,
 		EstimatedDeliveryDate: opt.EstimatedDeliveryDate,
 		ProductIDs:            ids,
 		Products:              products,
@@ -200,6 +217,40 @@ func lowStockLeft(gift repository.GiftStock) *int {
 	}
 	left := sellable
 	return &left
+}
+
+// shopLocalNow shifts an instant into the shop's IANA timezone.
+// An unknown zone keeps the clock that was passed in.
+func shopLocalNow(now time.Time, timezone string) time.Time {
+	loc, err := time.LoadLocation(strings.TrimSpace(timezone))
+	if err != nil || loc == nil {
+		return now
+	}
+	return now.In(loc)
+}
+
+// arrivalWithPrep is the earliest day a gift can arrive. On a same-day zone,
+// now + prep_minutes after the cutoff misses today, so the gift arrives the
+// next day the shop can still dispatch before that cutoff.
+func arrivalWithPrep(now time.Time, opt *SellerDeliveryOption, prepMinutes int) string {
+	if opt == nil || opt.EstimatedDeliveryDate == "" {
+		return ""
+	}
+	if opt.CutoffTime == "" || prepMinutes <= 0 {
+		return opt.EstimatedDeliveryDate
+	}
+	ready := now.Add(time.Duration(prepMinutes) * time.Minute)
+	for day := 0; day < 14; day++ {
+		date := now.AddDate(0, 0, day)
+		if ready.Format("2006-01-02") > date.Format("2006-01-02") {
+			continue
+		}
+		if date.Format("2006-01-02") == ready.Format("2006-01-02") && pastCutoff(ready, opt.CutoffTime) {
+			continue
+		}
+		return date.Format("2006-01-02")
+	}
+	return ready.Format("2006-01-02")
 }
 
 // giftCanBeSent is false when stock is gone or the day is marked unavailable.

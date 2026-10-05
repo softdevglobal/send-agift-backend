@@ -104,7 +104,7 @@ func (s *ShippingService) sellerDeliveryFor(ctx context.Context, sc *repository.
 	if err != nil {
 		return nil, err
 	}
-	return buildSellerDeliveryOption(sc.FromLat, sc.FromLng, sc.ToLat, sc.ToLng, zonesByShop[sc.ShopID], time.Now().UTC()), nil
+	return buildSellerDeliveryOption(sc.FromLat, sc.FromLng, sc.ToLat, sc.ToLng, zonesByShop[sc.ShopID], shopLocalNow(time.Now(), sc.ShopTimezone)), nil
 }
 
 func applyAgreedSellerDelivery(s *models.Shipment, sc *repository.ShippingContext) {
@@ -311,7 +311,7 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 	}
 	for _, shopID := range shopIDs {
 		from := froms[shopID]
-		sellerOpt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zonesByShop[shopID], now)
+		sellerOpt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zonesByShop[shopID], shopLocalNow(now, from.Timezone))
 		quote.Shops = append(quote.Shops, QuotedShopDelivery{
 			ShopID:         shopID.String(),
 			ShopName:       from.Name,

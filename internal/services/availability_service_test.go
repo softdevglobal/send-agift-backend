@@ -54,3 +54,37 @@ func TestShopAvailabilityUsesZoneAndDate(t *testing.T) {
 		t.Fatal("a point outside the zone must not be available")
 	}
 }
+
+func TestSameDayPrepMissesCutoff(t *testing.T) {
+	shopID := uuid.New()
+	quick := uuid.New()
+	slow := uuid.New()
+	cutoff := "14:00"
+	shop := repository.ShopForAvailability{
+		ID:        shopID,
+		Name:      "Same Day",
+		Latitude:  f64(6.9271),
+		Longitude: f64(79.8612),
+		Zones: []models.ShopDeliveryZone{
+			{MaxKm: 20, PriceAmount: 0, Currency: "LKR", EstimatedDays: 0, CutoffTime: &cutoff},
+		},
+	}
+	// 13:00 + 30 min is still before 14:00. 13:00 + 90 min is 14:30, after the cutoff.
+	now := time.Date(2026, 10, 2, 13, 0, 0, 0, time.UTC)
+	gifts := []repository.GiftStock{
+		{ID: quick, ShopID: shopID, PrepMinutes: 30},
+		{ID: slow, ShopID: shopID, PrepMinutes: 90},
+	}
+	q := GiftAvailabilityQuery{Latitude: 6.9271, Longitude: 79.8612, DeliveryDate: "2026-10-02"}
+
+	got := shopAvailability(shop, gifts, q, now)
+	if got == nil || len(got.ProductIDs) != 1 || got.ProductIDs[0] != quick.String() {
+		t.Fatalf("want only the gift that is ready before the cutoff, got %+v", got)
+	}
+
+	q.DeliveryDate = "2026-10-03"
+	got = shopAvailability(shop, gifts, q, now)
+	if got == nil || len(got.ProductIDs) != 2 {
+		t.Fatalf("the slow gift can still arrive the next day, got %+v", got)
+	}
+}
