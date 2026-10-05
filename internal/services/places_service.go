@@ -183,7 +183,7 @@ func (s *PlacesService) Autocomplete(ctx context.Context, params AutocompletePar
 	for _, item := range parsed.Suggestions {
 		p := item.PlacePrediction
 		if p.PlaceID == "" {
-			continue // query predictions carry no place id — nothing to resolve
+			continue // query predictions carry no place id. Nothing to resolve
 		}
 		suggestions = append(suggestions, PlaceSuggestion{
 			PlaceID:       p.PlaceID,

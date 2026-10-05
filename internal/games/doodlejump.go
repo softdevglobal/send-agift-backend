@@ -77,7 +77,7 @@ func (p DoodlePlatform) Has(lane int) bool {
 // lane each time. Reachable lanes are limited to the one under them and its
 // neighbours, so a ledge two lanes across is a miss and the round is over.
 // Springs throw the player several ledges up at once and pay a bonus, and every
-// tenth ledge pays a height bonus — so the climb rewards reading ahead.
+// tenth ledge pays a height bonus. So the climb rewards reading ahead.
 //
 // The tower is drawn from the seed, so the server replays the same ledges the
 // player was looking at. The Dart implementation in the mobile app mirrors
@@ -110,7 +110,7 @@ func NewDoodleGame(seed string, cfg DoodleConfig) (*DoodleGame, error) {
 			// Each rung's main ledge stays within one lane of the last, so the
 			// tower is always climbable. Drawing lanes freely would let two
 			// rungs sit four lanes apart, ending the run through no fault of
-			// the player — unwinnable, and unfair to score.
+			// the player. Unwinnable, and unfair to score.
 			step := rng.NextInt(3) - 1
 			lane += step
 			if lane < 0 {
@@ -191,7 +191,7 @@ func (g *DoodleGame) Hop(lane int) (bool, error) {
 		g.springs++
 		g.score += int64(g.cfg.SpringBonus)
 		// A spring carries the player clear over the ledges above it. Each
-		// one is skipped outright, so nothing there has to be landed on — it
+		// one is skipped outright, so nothing there has to be landed on. It
 		// is the reward for reaching the spring in the first place.
 		for lift := 1; lift < g.cfg.SpringLift && !g.Topped(); lift++ {
 			g.height++

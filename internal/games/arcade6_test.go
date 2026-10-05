@@ -8,7 +8,7 @@ import (
 
 // The six games added by migration 000032. Each one has to be deterministic
 // from its seed, reject a log that could not have been played, and score the
-// same way twice — those are the properties the whole server-side replay
+// same way twice. Those are the properties the whole server-side replay
 // rests on.
 
 const arcadeSeed = "1a2b3c4d"
@@ -120,7 +120,7 @@ func TestWhackHittingEveryMoleBeatsSpamming(t *testing.T) {
 
 	// The same taps with a wild swing in the middle must score less: the miss
 	// breaks the streak the bonus was building on. (A miss *before* any streak
-	// is free — the score floors at zero rather than going negative.)
+	// is free. The score floors at zero rather than going negative.)
 	half := len(clean) / 2
 	gapTick := g.Moles()[half].Down // between two moles, so nothing is up
 	noisy := make([]string, 0, len(clean)+1)
@@ -132,7 +132,7 @@ func TestWhackHittingEveryMoleBeatsSpamming(t *testing.T) {
 		t.Fatalf("replay noisy: %v", err)
 	}
 	if bad.Score >= good.Score {
-		t.Fatalf("spamming scored %d, clean play %d — spam must not pay", bad.Score, good.Score)
+		t.Fatalf("spamming scored %d, clean play %d. Spam must not pay", bad.Score, good.Score)
 	}
 }
 
@@ -174,7 +174,7 @@ func TestBubbleShotsLandInEmptyCells(t *testing.T) {
 		t.Fatalf("deal: %v", err)
 	}
 	// Sweep the whole range of aims. Every one has to come to rest somewhere
-	// empty — a shot landing on top of another bubble would overwrite it.
+	// empty. A shot landing on top of another bubble would overwrite it.
 	for dx := -bubbleMaxAim; dx <= bubbleMaxAim; dx += 137 {
 		row, col, ok := g.Trace(dx)
 		if !ok {
@@ -244,7 +244,7 @@ func TestBubbleSwapExchangesTheQueue(t *testing.T) {
 	if err := g.Swap(); err != nil {
 		t.Fatalf("swap: %v", err)
 	}
-	// A swap must only exchange the two — drawing a fresh colour here would
+	// A swap must only exchange the two. Drawing a fresh colour here would
 	// let a player keep swapping until the seed handed them one they liked.
 	if g.Next() != second || g.After() != first {
 		t.Fatalf("swap gave %d,%d, want %d,%d", g.Next(), g.After(), second, first)
@@ -328,7 +328,7 @@ func TestDoodleClimbFollowsTheSeededTower(t *testing.T) {
 		t.Fatalf("tower: %v", err)
 	}
 	// Climb by always hopping to the lane the next ledge is actually in,
-	// driving the real game rather than a second copy of its rules — a model
+	// driving the real game rather than a second copy of its rules. A model
 	// of the climb here would only have to be kept in step with the engine.
 	moves := []string{}
 	for i := 0; i < 12 && !(g.Fell() || g.Topped()); i++ {

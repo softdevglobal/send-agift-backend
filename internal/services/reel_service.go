@@ -73,7 +73,7 @@ type ReelInput struct {
 }
 
 // Create stores a new reel on one of the seller's shops.
-// Tagging a product is optional here — leave product_id empty for a shop-only reel.
+// Tagging a product is optional here. Leave product_id empty for a shop-only reel.
 func (s *ReelService) Create(ctx context.Context, sellerID, shopID string, in ReelInput) (*models.ReelDetails, error) {
 	shop, err := s.sellers.GetShopByID(ctx, sellerID, shopID)
 	if err != nil {

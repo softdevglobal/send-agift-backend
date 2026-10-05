@@ -128,7 +128,7 @@ func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.
 
 // applySellerPoints is applyPoints for a seller. Reserved points are still
 // the seller's, but a change can never take the balance below what is
-// promised — except by paying out that promise (ConsumeReserved).
+// promised. Except by paying out that promise (ConsumeReserved).
 func applySellerPoints(ctx context.Context, q querier, ch PointsChange) (uuid.UUID, int64, error) {
 	balance, reserved, err := lockSellerPointsAccount(ctx, q, *ch.SellerID)
 	if err != nil {
@@ -495,7 +495,7 @@ func (r *PointsRepository) RuleForCustomer(ctx context.Context, customerID uuid.
 
 // SetEarningRule saves a country's rule with its audit row. Switching earning
 // on starts the clock for which deliveries count; switching a sign-up bonus
-// on starts it for which sign-ups count — neither pays out the past.
+// on starts it for which sign-ups count. Neither pays out the past.
 func (r *PointsRepository) SetEarningRule(ctx context.Context, countryID uuid.UUID, enabled bool, perUnit, bonus int, adminID uuid.UUID, audit models.AuditEntry) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -532,7 +532,7 @@ func (r *PointsRepository) SetEarningRule(ctx context.Context, countryID uuid.UU
 // RunEarning is one pass of the earning job: points for newly delivered
 // orders, points taken back from refunded or cancelled ones, sign-up
 // bonuses, and the points that ride on orders (product rewards and gift
-// points — see points_rewards.go). Every award is keyed by what earned it, so a pass can be repeated
+// points. See points_rewards.go). Every award is keyed by what earned it, so a pass can be repeated
 // or overlap another without ever paying twice.
 func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.EarningRunResult, error) {
 	res := &models.EarningRunResult{}

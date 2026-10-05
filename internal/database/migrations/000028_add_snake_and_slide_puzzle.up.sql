@@ -4,7 +4,7 @@
 -- and fully replayable server-side.
 --   * Snake runs on fixed numbered ticks rather than frames, so a faster phone
 --     gives no advantage and the server can replay it tick for tick.
---   * Slide Puzzle is perfect-information — every tile is visible — and its
+--   * Slide Puzzle is perfect-information. Every tile is visible. And its
 --     scramble is built from legal moves, so every seed is solvable.
 --
 -- Memory-match style games were deliberately left out: their first flips are
@@ -24,7 +24,7 @@ VALUES
      'approved'),
     ('slide-puzzle',
      'Slide Puzzle',
-     'Slide the tiles back into order in as few moves as you can. Every tile is visible from the start — pure logic.',
+     'Slide the tiles back into order in as few moves as you can. Every tile is visible from the start. Pure logic.',
      'puzzle',
      'approved')
 ON CONFLICT (slug) DO NOTHING;

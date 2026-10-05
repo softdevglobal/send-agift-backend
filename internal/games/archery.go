@@ -72,7 +72,7 @@ type ArcheryArrow struct {
 // ArcheryGame is ten arrows at a target. The player aims by dragging and
 // shoots by letting go. Two things push the arrow off the aim:
 //
-//   - the sight sways in a fixed figure — a pure function of the tick — so
+//   - the sight sways in a fixed figure. A pure function of the tick. So
 //     releasing at a steady moment is the skill;
 //   - wind blows each arrow sideways. It is drawn from the seed and shown on
 //     screen before the shot, so everyone can compensate; with a shared

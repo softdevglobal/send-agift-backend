@@ -1,5 +1,5 @@
 -- Messaging: customer↔seller product inquiry and order chat (text-only MVP).
--- user_id / created_by_user_id are polymorphic (customer or seller UUID) — no single users table.
+-- user_id / created_by_user_id are polymorphic (customer or seller UUID). No single users table.
 CREATE SCHEMA IF NOT EXISTS messaging;
 -- Main conversation table: represents a chat thread either a product inquiry or an order
 CREATE TABLE IF NOT EXISTS messaging.conversations (
@@ -67,7 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_order_id
 -- Typically one customer + one seller for product/order chat (admin added later via 000024 for support).
 --
 -- How we identify customer vs seller:
---   user_id = their UUID from customer.customers / seller.sellers (polymorphic — no FK)
+--   user_id = their UUID from customer.customers / seller.sellers (polymorphic. No FK)
 --   role    = 'customer' | 'seller'  ← this is what tells you which side they are on
 --
 -- When a message is sent, messages.sender_user_id stores that same user_id;
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS messaging.conversation_participants (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     -- Which chat room this person belongs to
     conversation_id   uuid NOT NULL REFERENCES messaging.conversations (id) ON DELETE CASCADE,
-    -- Polymorphic person id (customer UUID or seller UUID — later also admin)
+    -- Polymorphic person id (customer UUID or seller UUID. Later also admin)
     user_id           uuid NOT NULL,
     -- Side of the chat: customer or seller (admin added in migration 000024)
     role              text NOT NULL
@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_conversation_participants_user
     ON messaging.conversation_participants (user_id, joined_at DESC);
 
 -- Individual chat bubbles within a conversation.
--- Both customer and seller writes go here — only sender_user_id differs.
+-- Both customer and seller writes go here. Only sender_user_id differs.
 -- There is NO role column: look up sender_user_id in conversation_participants to know who spoke.
 CREATE TABLE IF NOT EXISTS messaging.messages (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),

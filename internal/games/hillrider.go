@@ -100,7 +100,7 @@ func (c HillConfig) withDefaults() HillConfig {
 // cans along the way refill the tank.
 //
 // The hills are drawn from the seed and visible ahead of the car, and every
-// quantity — position, speed, height — is a whole number stepped on fixed
+// quantity. Position, speed, height. Is a whole number stepped on fixed
 // ticks, so the server replays the drive exactly. Positions and speeds are in
 // sixteenths of a unit; terrain heights are in whole units.
 //

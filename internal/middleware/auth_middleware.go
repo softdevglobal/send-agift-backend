@@ -73,7 +73,7 @@ func OptionalCustomerOrGuest(secret string, requireIdentity bool) func(http.Hand
 				// Invalid/non-customer JWT: fall through to guest token.
 			}
 
-			// Guest path — app-generated UUID stored on the device.
+			// Guest path. App-generated UUID stored on the device.
 			guest := strings.TrimSpace(r.Header.Get(GuestTokenHeader))
 			if guest != "" {
 				if _, err := uuid.Parse(guest); err != nil {

@@ -17,7 +17,7 @@ import (
 //
 // The constants are the Numerical Recipes LCG. They are chosen so the
 // multiplication stays below 2^53 (1664525 * 2^32 ≈ 7.15e15), which means Dart
-// on the web — where int is a float64 under the hood — still reproduces it
+// on the web. Where int is a float64 under the hood. Still reproduces it
 // exactly. Do not change these constants without shipping a new game version:
 // every previously recorded session replays against them.
 type DeterministicRNG struct {

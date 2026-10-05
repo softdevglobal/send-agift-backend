@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,25 +10,31 @@ import (
 	"myapp/internal/games"
 )
 
-// Competition maps to competition.competitions, joined with its country and
-// the game version it locks.
+// CompetitionCountry is one country a competition runs in.
+type CompetitionCountry struct {
+	ID              uuid.UUID `json:"id"`
+	IsoCode         string    `json:"iso_code"`
+	Name            string    `json:"name"`
+	DefaultCurrency string    `json:"default_currency"`
+}
+
+// Competition maps to competition.competitions, joined with the countries it
+// runs in and the game version it locks.
 type Competition struct {
-	ID                uuid.UUID       `json:"id"`
-	CountryID         uuid.UUID       `json:"country_id"`
-	CountryCode       string          `json:"country_code"`
-	CountryName       string          `json:"country_name"`
-	GameVersionID     uuid.UUID       `json:"game_version_id"`
-	GameVersionStatus string          `json:"game_version_status"`
-	GameSlug          string          `json:"game_slug"`
-	GameName          string          `json:"game_name"`
-	GameType          string          `json:"game_type"`
-	GameVersion       string          `json:"game_version"`
-	GameConfig        json.RawMessage `json:"-"`
-	Title             string          `json:"title"`
-	Status            string          `json:"status"`
-	StartsAt          time.Time       `json:"starts_at"`
-	EndsAt            time.Time       `json:"ends_at"`
-	Timezone          string          `json:"timezone"`
+	ID                uuid.UUID            `json:"id"`
+	Countries         []CompetitionCountry `json:"countries"`
+	GameVersionID     uuid.UUID            `json:"game_version_id"`
+	GameVersionStatus string               `json:"game_version_status"`
+	GameSlug          string               `json:"game_slug"`
+	GameName          string               `json:"game_name"`
+	GameType          string               `json:"game_type"`
+	GameVersion       string               `json:"game_version"`
+	GameConfig        json.RawMessage      `json:"-"`
+	Title             string               `json:"title"`
+	Status            string               `json:"status"`
+	StartsAt          time.Time            `json:"starts_at"`
+	EndsAt            time.Time            `json:"ends_at"`
+	Timezone          string               `json:"timezone"`
 	// Never serialised: it is only handed out with a live attempt, so nobody
 	// can study the board before the competition opens.
 	ServerSeed                   string     `json:"-"`
@@ -182,6 +189,43 @@ type CompetitionWinner struct {
 	SettledAt           *time.Time `json:"settled_at,omitempty"`
 }
 
+// HasCountry reports whether players from the country may enter.
+func (c *Competition) HasCountry(id uuid.UUID) bool {
+	for _, co := range c.Countries {
+		if co.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// CountryIDs lists the countries the competition runs in.
+func (c *Competition) CountryIDs() []uuid.UUID {
+	out := make([]uuid.UUID, len(c.Countries))
+	for i, co := range c.Countries {
+		out[i] = co.ID
+	}
+	return out
+}
+
+// CountryNames joins the country names with ", ".
+func (c *Competition) CountryNames() string {
+	names := make([]string, len(c.Countries))
+	for i, co := range c.Countries {
+		names[i] = co.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// CountryCodes joins the country ISO codes with ", ".
+func (c *Competition) CountryCodes() string {
+	codes := make([]string, len(c.Countries))
+	for i, co := range c.Countries {
+		codes[i] = co.IsoCode
+	}
+	return strings.Join(codes, ", ")
+}
+
 // AuditEntry is one row for admin.audit_log.
 type AuditEntry struct {
 	ActorType  string
@@ -201,14 +245,17 @@ type AuditEntry struct {
 // CompetitionView is what customers see. It carries the disclosures the rules
 // require (§13.10) and never the seed.
 type CompetitionView struct {
-	ID                           uuid.UUID      `json:"id"`
-	Title                        string         `json:"title"`
-	Status                       string         `json:"status"`
-	GameSlug                     string         `json:"game_slug"`
-	GameName                     string         `json:"game_name"`
-	GameType                     string         `json:"game_type"`
-	WinnerMethod                 string         `json:"winner_method"`
-	WinOdds                      *int           `json:"win_odds,omitempty"`
+	ID           uuid.UUID            `json:"id"`
+	Title        string               `json:"title"`
+	Status       string               `json:"status"`
+	GameSlug     string               `json:"game_slug"`
+	GameName     string               `json:"game_name"`
+	GameType     string               `json:"game_type"`
+	WinnerMethod string               `json:"winner_method"`
+	WinOdds      *int                 `json:"win_odds,omitempty"`
+	Countries    []CompetitionCountry `json:"countries"`
+	// The countries' codes and names joined with ", ", for screens that
+	// show them on one line.
 	CountryCode                  string         `json:"country_code"`
 	CountryName                  string         `json:"country_name"`
 	StartsAt                     time.Time      `json:"starts_at"`
@@ -251,8 +298,10 @@ type CompetitionView struct {
 
 // CompetitionMe is the signed-in customer's position in one competition.
 type CompetitionMe struct {
-	AttemptsUsed      int `json:"attempts_used"`
-	AttemptsRemaining int `json:"attempts_remaining"`
+	AttemptsUsed int `json:"attempts_used"`
+	// -1 when the round has no play limit (see PlaysUnlimited).
+	AttemptsRemaining int  `json:"attempts_remaining"`
+	PlaysUnlimited    bool `json:"plays_unlimited"`
 	// Plays left today under the daily limit, when the round has one, and
 	// when the next day's plays open.
 	PlaysLeftToday   *int       `json:"plays_left_today,omitempty"`
@@ -331,4 +380,15 @@ type AdminCompetitionView struct {
 	UnderReview     int           `json:"under_review"`
 	// Why the round cannot be scheduled yet, if anything; empty once it can.
 	ScheduleBlockers []string `json:"schedule_blockers"`
+	// The push announcement sent when it was published.
+	Announcement AnnouncementStats `json:"announcement"`
+}
+
+// AnnouncementStats counts a competition's push announcement by outcome.
+type AnnouncementStats struct {
+	Queued  int `json:"queued"`
+	Pending int `json:"pending"`
+	Sent    int `json:"sent"`
+	Skipped int `json:"skipped"`
+	Failed  int `json:"failed"`
 }

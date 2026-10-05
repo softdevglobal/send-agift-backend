@@ -17,8 +17,8 @@ import (
 
 // The progressive prize engine's storage (Progressive Prize spec §3–§4).
 //
-// One rule runs through every function here: anything that moves money —
-// points or prize — first locks the round's competition row. That makes all
+// One rule runs through every function here: anything that moves money.
+// points or prize. First locks the round's competition row. That makes all
 // changes to one round happen one at a time, so no increment is lost under
 // concurrency, the cap cannot be overshot, and every ledger balance is
 // computed from the one before it.
@@ -325,7 +325,8 @@ func (r *CompetitionRepository) StartPlay(ctx context.Context, in PlayInput) (*P
 			in.CompetitionID, in.CustomerID, dayStart).Scan(&active, &total, &today); err != nil {
 			return err
 		}
-		if active >= round.MaxAttempts {
+		// 0 is no limit: only the points balance counts.
+		if round.MaxAttempts > 0 && active >= round.MaxAttempts {
 			return &PlayLimitError{Kind: "round", Limit: round.MaxAttempts}
 		}
 		if round.DailyLimit != nil && today >= *round.DailyLimit {
@@ -647,7 +648,7 @@ func loadQuiz(ctx context.Context, q querier, id uuid.UUID) ([]games.QuizQuestio
 	return out, rows.Err()
 }
 
-// QuizQuestions returns a round's questions with their answers — for the
+// QuizQuestions returns a round's questions with their answers. For the
 // server's scoring and for admins, never for players.
 func (r *CompetitionRepository) QuizQuestions(ctx context.Context, id uuid.UUID) ([]games.QuizQuestion, error) {
 	return loadQuiz(ctx, r.db, id)
@@ -987,8 +988,8 @@ func (r *CompetitionRepository) FinaliseInstant(ctx context.Context, id uuid.UUI
 	})
 }
 
-// DrawEntries lists a prize draw's entries — every play that has not been
-// voided — in a fixed order, so the same list can be rebuilt to check a draw.
+// DrawEntries lists a prize draw's entries. Every play that has not been
+// voided. In a fixed order, so the same list can be rebuilt to check a draw.
 func (r *CompetitionRepository) DrawEntries(ctx context.Context, id uuid.UUID) ([]games.DrawEntry, error) {
 	return drawEntries(ctx, r.db, id)
 }

@@ -6,7 +6,7 @@
 -- server never disagree by a rounding error.
 --   * Memory Match: the grid is dealt from the seed, so everyone sharing a
 --     seed memorises the same layout.
---   * Whack-a-Mole: the whole run of moles — hole and up/down ticks — is
+--   * Whack-a-Mole: the whole run of moles. Hole and up/down ticks. Is
 --     drawn from the seed before the first tap.
 --   * Bubble Shooter: the opening wall and every queued colour come from the
 --     seed; pops cascade by dropping whatever the clear left unsupported.

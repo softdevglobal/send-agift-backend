@@ -121,7 +121,7 @@ func (g *WhackGame) Score() int64       { return g.score }
 func (g *WhackGame) Hits() int          { return g.hits }
 func (g *WhackGame) Moles() []WhackMole { return g.moles }
 
-// LastTick is when the final mole drops — the length of the whole round.
+// LastTick is when the final mole drops. The length of the whole round.
 func (g *WhackGame) LastTick() int {
 	if len(g.moles) == 0 {
 		return 0

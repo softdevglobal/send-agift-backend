@@ -10,10 +10,10 @@ import (
 // These endpoints are public (no JWT required) and only ever expose active shops
 // and published products.
 //
-//	GET /shops                       — all active shops
-//	GET /shops/{shopId}              — one shop (storefront header)
-//	GET /shops/{shopId}/products     — that shop's published products
-//	GET /products/{productId}        — one product + its shop (product page)
+//	GET /shops                      . All active shops
+//	GET /shops/{shopId}             . One shop (storefront header)
+//	GET /shops/{shopId}/products    . That shop's published products
+//	GET /products/{productId}       . One product + its shop (product page)
 //
 // The matching reel feeds (/shops/{shopId}/reels, /products/{productId}/reels)
 // are registered in RegisterReelRoutes.

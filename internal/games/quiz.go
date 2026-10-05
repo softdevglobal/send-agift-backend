@@ -24,7 +24,7 @@ type QuizQuestion struct {
 }
 
 // PublicQuizConfig is what a device is given for a quiz play: the prompts,
-// options and time limits — never the answers.
+// options and time limits. Never the answers.
 func PublicQuizConfig(questions []QuizQuestion, sessionTTLSeconds int) (json.RawMessage, error) {
 	type public struct {
 		Prompt      string   `json:"prompt"`

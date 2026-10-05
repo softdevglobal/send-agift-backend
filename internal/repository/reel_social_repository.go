@@ -83,7 +83,7 @@ func (r *ReelSocialRepository) PublicCounts(ctx context.Context, reelID string) 
 }
 
 // ListRecentLikers returns newest likers (type + display_name only; no ids/tokens).
-// Guests have no nickname on likes — shown as "Guest".
+// Guests have no nickname on likes. Shown as "Guest".
 func (r *ReelSocialRepository) ListRecentLikers(ctx context.Context, reelID string, limit int) ([]RecentLiker, error) {
 	m, err := r.ListRecentLikersForReels(ctx, []string{reelID}, limit)
 	if err != nil {
@@ -179,7 +179,7 @@ func (r *ReelSocialRepository) Like(ctx context.Context, reelID string, id Socia
 	}
 	defer tx.Rollback(ctx)
 
-	// Partial unique indexes (customer vs guest) — DO NOTHING if already liked.
+	// Partial unique indexes (customer vs guest). DO NOTHING if already liked.
 	var inserted uuid.UUID
 	err = tx.QueryRow(ctx, `
 		insert into social.reel_likes (reel_id, customer_id, guest_token)
@@ -193,7 +193,7 @@ func (r *ReelSocialRepository) Like(ctx context.Context, reelID string, id Socia
 		return false, 0, err
 	}
 	if err == nil {
-		// New like — bump denormalized counter on seller.reels.
+		// New like. Bump denormalized counter on seller.reels.
 		if _, err := tx.Exec(ctx, `
 			update seller.reels set like_count = like_count + 1, updated_at = now()
 			where id = $1`, reelID); err != nil {

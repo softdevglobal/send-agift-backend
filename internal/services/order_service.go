@@ -30,7 +30,7 @@ var (
 	ErrGiftPoints = errors.New("gift points cannot be sent")
 	// ErrOrderRewardSpent is cancelling an order whose reward points have
 	// already been spent.
-	ErrOrderRewardSpent = errors.New("this order's reward points have already been spent, so it can no longer be cancelled here — contact support")
+	ErrOrderRewardSpent = errors.New("this order's reward points have already been spent, so it can no longer be cancelled here. Contact support")
 	// ErrGiftPointsBalance is more points attached than the customer holds.
 	ErrGiftPointsBalance = errors.New("not enough points to attach to this gift")
 )
@@ -43,7 +43,11 @@ type OrderService struct {
 	customers *repository.CustomerRepository
 	countries *repository.CountryRepository
 	shipments *repository.ShipmentRepository
+	gifts     *GiftRecipientService
 }
+
+// NotifyWith sends order emails and gives gift recipients their accounts.
+func (s *OrderService) NotifyWith(gifts *GiftRecipientService) { s.gifts = gifts }
 
 func NewOrderService(
 	orders *repository.OrderRepository,
@@ -268,7 +272,16 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	if err != nil {
 		return nil, err
 	}
+	s.gifts.OrderPlaced(ctx, order.ID)
 	return &models.OrderDetails{Order: *order, Items: items, ShopDeliveries: shopDeliveries}, nil
+}
+
+// ReceivedGifts lists the delivered gifts other customers sent to this one.
+func (s *OrderService) ReceivedGifts(ctx context.Context, customerID string) ([]models.ReceivedGift, error) {
+	if s.gifts == nil {
+		return []models.ReceivedGift{}, nil
+	}
+	return s.gifts.ReceivedGifts(ctx, customerID)
 }
 
 // shopDeliveriesFromZones turns each shop's zone price into the rows saved on

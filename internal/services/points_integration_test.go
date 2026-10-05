@@ -23,8 +23,8 @@ import (
 
 // Integration tests for the points system: sellers buying points, product
 // rewards funded from them, gift points and points prizes. Run against a
-// real Postgres, because what is under test — row locks, one transaction,
-// unique keys, check constraints — lives in the database.
+// real Postgres, because what is under test. Row locks, one transaction,
+// unique keys, check constraints. Lives in the database.
 //
 //	TEST_DATABASE_URL=postgres://user:pass@localhost:5432/scratch_db?sslmode=disable \
 //	    go test ./internal/services -run Points -v
@@ -125,7 +125,7 @@ func (f *pointsFixture) customer(email string) uuid.UUID {
 	return id
 }
 
-// recipient makes a recipient with a deliverable address — a few km from
+// recipient makes a recipient with a deliverable address. A few km from
 // where product() places every shop, inside its delivery zone.
 func (f *pointsFixture) recipient(customer uuid.UUID, email *string) uuid.UUID {
 	f.t.Helper()
@@ -660,10 +660,11 @@ func TestPointsPrizeCreditedOnValidation(t *testing.T) {
 	rules := "Highest score wins."
 	start := int64(0)
 	prize := int64(250)
+	f.gameCost("2048", 5)
 	view, err := f.svc.CreateCompetition(f.ctx, f.admin, CompetitionInput{
-		CountryID: f.country.String(), GameSlug: "2048", Title: "Points prize round",
+		CountryIDs: []string{f.country.String()}, GameSlug: "2048", Title: "Points prize round",
 		StartsAt: time.Now().Add(time.Hour), EndsAt: time.Now().Add(48 * time.Hour), Timezone: "UTC",
-		PointsPerAttempt: 5, MaxAttemptsPerCustomer: 5, NumberOfWinners: 1,
+		MaxAttemptsPerCustomer: 5, NumberOfWinners: 1,
 		PrizeDescription: "250 points", OfficialRules: &rules, PrizeType: "points", PrizePoints: &prize,
 		StartPrizeCents: &start,
 	})

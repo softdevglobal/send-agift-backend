@@ -11,12 +11,12 @@ import (
 //
 // Customer (JWT + role=customer):
 //
-//	POST /customers/me/shipping/quote — price each shop from its delivery zones
+//	POST /customers/me/shipping/quote. Price each shop from its delivery zones
 //
 // Seller (JWT + role=seller), under /sellers/me/orders/{orderID}/shops/{shopID}:
 //
-//	POST .../shipping/local            — start shop delivery inside the zones
-//	POST .../shipping/local/delivered  — mark that hand-over complete
+//	POST .../shipping/local           . Start shop delivery inside the zones
+//	POST .../shipping/local/delivered . Mark that hand-over complete
 func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))

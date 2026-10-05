@@ -37,7 +37,7 @@ const (
 
 // PointsPaymentProvider takes the payment for a seller's points purchase.
 // It only ever starts a payment: the purchase is credited when the payment
-// is confirmed — by the provider's signed webhook, or by an admin — never on
+// is confirmed. By the provider's signed webhook, or by an admin. Never on
 // the seller's word.
 //
 // A real card provider (Stripe, PayHere, ...) is a new implementation of

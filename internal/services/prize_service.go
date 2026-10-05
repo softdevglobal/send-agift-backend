@@ -255,8 +255,8 @@ func (s *CompetitionService) RunReconciliation(ctx context.Context, every time.D
 }
 
 // DuplicateInput creates a new draft from an existing round's settings.
-// NextRound makes it the following round of the same game — round_no + 1,
-// linked to this one — which is how a game is "reset" without erasing the
+// NextRound makes it the following round of the same game. Round_no + 1,
+// linked to this one. Which is how a game is "reset" without erasing the
 // round before it (spec §2.1).
 type DuplicateInput struct {
 	StartsAt  time.Time `json:"starts_at"`
@@ -286,13 +286,12 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 	continueAtCap := src.ContinueAtCap
 	c := &models.Competition{}
 	if err := s.apply(ctx, c, CompetitionInput{
-		CountryID:                    src.CountryID.String(),
+		CountryIDs:                   countryIDStrings(src),
 		GameSlug:                     src.GameSlug,
 		Title:                        title,
 		StartsAt:                     in.StartsAt,
 		EndsAt:                       in.EndsAt,
 		Timezone:                     src.Timezone,
-		PointsPerAttempt:             src.PointsPerAttempt,
 		MaxAttemptsPerCustomer:       src.MaxAttemptsPerCustomer,
 		MinAge:                       src.MinAge,
 		RequiresIdentityVerification: &requiresID,
@@ -344,7 +343,7 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 // RunDraw draws a closed prize-draw round's winners (spec §7 "Random
 // outcomes"). Every play is one entry; entries are drawn at random without
 // replacement with the secure generator, a customer can win once, and a
-// drawn customer who no longer meets the rules is recorded as skipped — the
+// drawn customer who no longer meets the rules is recorded as skipped. The
 // draw moves on rather than re-drawing. The entry list, its hash, every
 // random value and every pick are stored, and the round is finalised with
 // its winners in the same transaction.

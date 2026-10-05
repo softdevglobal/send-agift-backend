@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// ReelLike maps to social.reel_likes — one like per reel + identity.
+// ReelLike maps to social.reel_likes. One like per reel + identity.
 type ReelLike struct {
 	ID         uuid.UUID  `json:"id"`
 	ReelID     uuid.UUID  `json:"reel_id"`

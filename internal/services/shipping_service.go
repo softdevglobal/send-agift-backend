@@ -1,4 +1,4 @@
-// Package services — shipping_service.go
+// Package services. Shipping_service.go
 //
 // Delivery is priced only from each shop's delivery zones. There is no carrier
 // quote. Checkout calls QuoteDelivery; place-order stores the zone price; the
@@ -77,7 +77,7 @@ func (s *ShippingService) shopLinesToShip(ctx context.Context, sellerID string, 
 		case "cancelled", "dispatched", "delivered":
 			continue
 		case "pending":
-			return nil, fmt.Errorf("%w: accept every product on this order before shipping — they leave as one parcel", ErrShippingNotReady)
+			return nil, fmt.Errorf("%w: accept every product on this order before shipping. They leave as one parcel", ErrShippingNotReady)
 		default:
 			if line.FulfilmentStatus != "accepted" && line.FulfilmentStatus != "preparing" && line.FulfilmentStatus != "ready" {
 				return nil, ErrShippingNotReady

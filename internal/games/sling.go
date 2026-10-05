@@ -74,7 +74,7 @@ const (
 )
 
 // slingTemplates are the structures, rows top to bottom: T target, W wood,
-// S stone. Their order is part of the rules — the seed picks one by index.
+// S stone. Their order is part of the rules. The seed picks one by index.
 var slingTemplates = [][]string{
 	{".T.", ".W.", "WWW"},
 	{"T.T", "W.W", "WSW"},
@@ -95,7 +95,7 @@ type SlingBlock struct {
 
 // SlingGame is Sling Shot: pull back the sling and knock the target blocks
 // off their structure. Wood breaks and slows the shot, stone stops it, and
-// anything left unsupported falls — far enough, and it breaks. Clear every
+// anything left unsupported falls. Far enough, and it breaks. Clear every
 // target to move up a level; unused shots are a bonus.
 //
 // The structures are drawn from the seed and fully visible before the first
@@ -188,7 +188,7 @@ func (g *SlingGame) ValidPull(dx, dy int) bool {
 	return dx >= 1 && absInt(dy) <= g.cfg.MaxPull && dx*dx+dy*dy <= g.cfg.MaxPull*g.cfg.MaxPull
 }
 
-// Shoot launches with velocity (dx, dy) — up is positive dy.
+// Shoot launches with velocity (dx, dy). Up is positive dy.
 func (g *SlingGame) Shoot(dx, dy int) error {
 	if g.over {
 		return fmt.Errorf("%w: shot after the game ended", ErrInvalidMove)

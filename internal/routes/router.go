@@ -66,6 +66,12 @@ func New(
 	shipping *handlers.ShippingHandler,
 	// Handler instance that checks which gifts can reach a searched address
 	availability *handlers.AvailabilityHandler,
+	// Handler instance that registers mobile devices for push notifications
+	push *handlers.PushHandler,
+	// Handler instance that confirms seller emails and serves the admin seller review queue
+	verification *handlers.VerificationHandler,
+	// Handler instance that signs customers in with Google and Facebook
+	social *handlers.SocialAuthHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -78,7 +84,7 @@ func New(
 	// These are applied to all routes in order
 
 	// CORS: needed for browser frontends (React/Vite on another port).
-	// Postman / curl do not use CORS — they already work without this.
+	// Postman / curl do not use CORS. They already work without this.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -136,7 +142,7 @@ func New(
 
 		// Register authentication routes (login, register, refresh token, etc)
 		// Example: POST /api/v1/login, POST /api/v1/register
-		RegisterAuthRoutes(r, auth, jwtSecret)
+		RegisterAuthRoutes(r, auth, social, jwtSecret)
 
 		// Register admin-only routes (requires valid JWT token)
 		// Example: GET /api/v1/admin/dashboard, DELETE /api/v1/admin/users/:id
@@ -151,7 +157,11 @@ func New(
 
 		// Register seller-related routes (requires valid JWT token)
 		// Example: GET /api/v1/sellers, POST /api/v1/sellers
-		RegisterSellerRoutes(r, sellers, sellerOrders, products, jwtSecret)
+		RegisterSellerRoutes(r, sellers, sellerOrders, products, verification.RequireApprovedSeller, jwtSecret)
+
+		// Seller email codes (public) + admin seller approval
+		// Example: POST /api/v1/sellers/verify-email, PATCH /api/v1/admin/sellers/{id}/verification
+		RegisterVerificationRoutes(r, verification, jwtSecret)
 
 		// Public reel feed (no JWT) + seller reel CRUD (seller JWT)
 		// Example: GET /api/v1/reels, POST /api/v1/sellers/me/shops/{shopID}/reels
@@ -192,6 +202,10 @@ func New(
 		// Find gifts: which published gifts a delivery zone can reach
 		// Example: GET /api/v1/availability?latitude=6.9&longitude=79.8&delivery_date=2026-10-05
 		RegisterAvailabilityRoutes(r, availability)
+
+		// Push notifications: the app registers its Firebase token after sign-in
+		// Example: POST /api/v1/customers/me/push-devices
+		RegisterPushRoutes(r, push, jwtSecret)
 	})
 
 	// Return the fully configured router

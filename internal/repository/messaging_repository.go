@@ -24,7 +24,7 @@ var (
 //   - messaging.messages
 //   - support.cases
 //
-// It has no business rules — just SQL + row scanning.
+// It has no business rules. Just SQL + row scanning.
 type MessagingRepository struct {
 	db *pgxpool.Pool
 }
@@ -138,7 +138,7 @@ func (r *MessagingRepository) GetForParticipant(ctx context.Context, conversatio
 		&c.CreatedByUserID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Either the conversation doesn't exist OR the user isn't in it — both look like "not found"
+		// Either the conversation doesn't exist OR the user isn't in it. Both look like "not found"
 		return nil, ErrConversationNotFound
 	}
 	return c, err
@@ -466,7 +466,7 @@ func (r *MessagingRepository) CloseConversation(ctx context.Context, conversatio
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		// Either missing or already closed — caller should have verified participancy first.
+		// Either missing or already closed. Caller should have verified participancy first.
 		var exists bool
 		_ = tx.QueryRow(ctx, `select exists(select 1 from messaging.conversations where id = $1)`, conversationID).Scan(&exists)
 		if !exists {
@@ -587,7 +587,7 @@ func (r *MessagingRepository) CreateSupportConversation(
 }
 
 // FindOpenSupportForCounterpart returns the active support conversation for a customer/seller.
-// "Active" = support.cases.status in (open, in_progress) — matches idx_support_cases_counterpart_open.
+// "Active" = support.cases.status in (open, in_progress). Matches idx_support_cases_counterpart_open.
 func (r *MessagingRepository) FindOpenSupportForCounterpart(ctx context.Context, counterpartRole, counterpartUserID string) (*models.Conversation, *models.SupportCase, error) {
 	c := &models.Conversation{}
 	sc := &models.SupportCase{}

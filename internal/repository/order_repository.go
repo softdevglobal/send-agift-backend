@@ -272,8 +272,8 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 
 func (r *OrderRepository) ListItems(ctx context.Context, orderID string) ([]models.OrderItem, error) {
 	// Each line carries its shipment so the customer can follow the parcel.
-	// A line can have more than one shipment row — a pending quote is written
-	// when the seller asks for rates, before any label exists — so the lateral
+	// A line can have more than one shipment row. A pending quote is written
+	// when the seller asks for rates, before any label exists. So the lateral
 	// picks the real one: anything past 'pending', most recent first.
 	rows, err := r.db.Query(ctx, `
 		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
@@ -471,7 +471,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 	// buyer themselves) leaves o.recipient_id NULL, so the LEFT JOINs return
 	// an all-NULL row for r.* and ra.*. Recipient and RecipientAddress model
 	// their required columns (id, name, created_at, ...) as non-nullable Go
-	// types, which pgx cannot scan a NULL into — so every recipient/address
+	// types, which pgx cannot scan a NULL into. So every recipient/address
 	// column is scanned into a nullable holder here and the structs are only
 	// built when a recipient actually exists.
 	var (

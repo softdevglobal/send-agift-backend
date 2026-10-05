@@ -20,7 +20,7 @@ func NewAdminRepository(db *pgxpool.Pool) *AdminRepository {
 	return &AdminRepository{db: db}
 }
 
-// CountAdmins tells us whether any admin exists yet — the bootstrap
+// CountAdmins tells us whether any admin exists yet. The bootstrap
 // endpoint uses this to only allow creating the FIRST superadmin for free.
 func (r *AdminRepository) CountAdmins(ctx context.Context) (int, error) {
 	var count int

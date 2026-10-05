@@ -129,7 +129,7 @@ type winnerCandidate struct {
 // planWinners assigns prize positions down the final ranking.
 //
 // Ineligible players are recorded as disqualified with their reason and the
-// next eligible player takes the position — no random selection (§19.3).
+// next eligible player takes the position. No random selection (§19.3).
 //
 // A tie that decides who gets which prize cannot be settled by chance or by
 // who submitted first (§14.4). It needs a skill playoff; the admin passes the

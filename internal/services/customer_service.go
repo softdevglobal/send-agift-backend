@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -35,7 +36,11 @@ type CustomerService struct {
 	products     *repository.ProductRepository // for validating product_id on saved gifts
 	jwtSecret    string                        // secret for the JWT
 	jwtExpiry    time.Duration                 // expiry for the JWT
+	email        *EmailService                 // welcome emails; nil sends none
 }
+
+// SendEmailsWith turns on the welcome email for new customers.
+func (s *CustomerService) SendEmailsWith(email *EmailService) { s.email = email }
 
 func NewCustomerService(
 	customers *repository.CustomerRepository,
@@ -114,7 +119,7 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 	if in.CustomerType == "" {
 		in.CustomerType = "individual"
 	}
-	if in.Email == "" || len(in.Password) < 8 {
+	if in.Email == "" || len(in.Password) < 8 || in.Phone == nil || strings.TrimSpace(*in.Phone) == "" {
 		return nil, ErrInvalidInput // return an error if the input is invalid
 	}
 
@@ -160,10 +165,18 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 		ImageURL:     in.ImageURL,
 	}
 	if err := s.customers.Create(ctx, customer); err != nil {
-		if errors.Is(err, repository.ErrCustomerDuplicate) {
+		if !errors.Is(err, repository.ErrCustomerDuplicate) {
+			return nil, err // return an error if the customer is not created
+		}
+		// An account made for a gift recipient that nobody has signed in to
+		// yet is theirs to claim: it takes the details they just entered.
+		claimed, claimErr := s.customers.ClaimGiftAccount(ctx, customer)
+		if claimErr != nil {
+			return nil, claimErr
+		}
+		if !claimed {
 			return nil, ErrCustomerConflict // return an error if the customer already exists
 		}
-		return nil, err // return an error if the customer is not created
 	}
 
 	addresses := make([]models.CustomerAddress, 0, len(in.Addresses)) // create a new slice of customer addresses
@@ -187,7 +200,50 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 		addresses = append(addresses, *addr) // append the address to the slice of customer addresses
 	}
 
+	if err := s.email.SendCustomerWelcome(ctx, customer); err != nil {
+		log.Printf("customer %s welcome email: %v", customer.ID, err)
+	}
+
 	return &models.CustomerDetails{Customer: *customer, Addresses: addresses}, nil // return the customer details
+}
+
+// ErrWrongPassword is a password change whose current password is wrong.
+var ErrWrongPassword = errors.New("current password is incorrect")
+
+// ChangePasswordInput is the body of PUT /customers/me/password.
+type ChangePasswordInput struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// ChangePassword replaces the customer's password after checking the
+// current one. It also clears the prompt shown to gift recipients still on
+// their default password.
+func (s *CustomerService) ChangePassword(ctx context.Context, customerID string, in ChangePasswordInput) error {
+	if len(in.NewPassword) < 8 || in.NewPassword == GiftRecipientDefaultPassword {
+		return ErrInvalidInput
+	}
+	customer, err := s.customers.GetByID(ctx, customerID)
+	if err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return ErrCustomerNotFound
+		}
+		return err
+	}
+	if !utils.CheckPassword(in.CurrentPassword, customer.PasswordHash) {
+		return ErrWrongPassword
+	}
+	hash, err := utils.HashPassword(in.NewPassword)
+	if err != nil {
+		return err
+	}
+	if err := s.customers.UpdatePassword(ctx, customerID, hash); err != nil {
+		if errors.Is(err, repository.ErrCustomerNotFound) {
+			return ErrCustomerNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *CustomerService) Login(ctx context.Context, email, password string) (*CustomerLoginResult, error) { // Login is a function that logs in a customer

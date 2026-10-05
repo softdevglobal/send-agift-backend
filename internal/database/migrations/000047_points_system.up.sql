@@ -13,7 +13,7 @@
 --     the rate the purchase was quoted at (the rate itself is configuration).
 --   * A product's reward points are reserved from the seller when the order
 --     is placed, paid to the customer when the line is delivered, and given
---     back to the seller if the line is cancelled — so a seller can never
+--     back to the seller if the line is cancelled. So a seller can never
 --     promise points they have not bought.
 --   * Points a customer attaches to a gift leave their balance when the
 --     order is placed and reach the recipient's account on delivery, or go

@@ -16,7 +16,7 @@ import (
 )
 
 // MessagingHandler is the HTTP adapter for chat.
-// It does NOT contain business rules — it only:
+// It does NOT contain business rules. It only:
 //  1. reads the authenticated actor from the request context
 //  2. parses path/query/body input
 //  3. calls MessagingService
@@ -45,7 +45,7 @@ func (h *MessagingHandler) Start(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err, "could not start conversation")
 		return
 	}
-	// 201 Created — even when an existing thread was reused, the client asked to "start"
+	// 201 Created. Even when an existing thread was reused, the client asked to "start"
 	utils.JSON(w, http.StatusCreated, details)
 }
 
@@ -77,8 +77,8 @@ func (h *MessagingHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // ListMessages handles GET /conversations/{id}/messages.
 // Optional query params:
-//   - limit  — page size (service/repo clamp to a safe max)
-//   - before — RFC3339 timestamp; return messages strictly older than this (cursor pagination)
+//   - limit . Page size (service/repo clamp to a safe max)
+//   - before. RFC3339 timestamp; return messages strictly older than this (cursor pagination)
 //
 // Side effect: marks the conversation read for the viewer.
 func (h *MessagingHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +142,7 @@ func (h *MessagingHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 }
 
 // Close handles POST /conversations/{id}/close.
-// Optional freeze — not automatic. Recommended: use for support when resolved;
+// Optional freeze. Not automatic. Recommended: use for support when resolved;
 // product/order chats usually stay open (AliExpress-like) unless a party chooses to close.
 func (h *MessagingHandler) Close(w http.ResponseWriter, r *http.Request) {
 	userID, role := h.actor(r)
@@ -156,7 +156,7 @@ func (h *MessagingHandler) Close(w http.ResponseWriter, r *http.Request) {
 }
 
 // Reopen handles POST /conversations/{id}/reopen.
-// Optional — opens a closed thread again so messaging can continue.
+// Optional. Opens a closed thread again so messaging can continue.
 func (h *MessagingHandler) Reopen(w http.ResponseWriter, r *http.Request) {
 	userID, role := h.actor(r)
 	id := chi.URLParam(r, "id")
@@ -197,7 +197,7 @@ func (h *MessagingHandler) writeError(w http.ResponseWriter, err error, fallback
 		// Counterpart customer/seller missing, or no active admin to assign a ticket to
 		utils.Error(w, http.StatusNotFound, "customer, seller, or admin not found")
 	case errors.Is(err, services.ErrConversationNotFound), errors.Is(err, services.ErrNotParticipant):
-		// Hide "exists but you're not in it" vs "doesn't exist" — both look like 404
+		// Hide "exists but you're not in it" vs "doesn't exist". Both look like 404
 		utils.Error(w, http.StatusNotFound, "conversation not found")
 	default:
 		log.Printf("messaging handler error: %v", err)

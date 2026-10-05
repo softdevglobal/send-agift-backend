@@ -72,7 +72,7 @@ func (c BubbleConfig) withDefaults() BubbleConfig {
 const (
 	bubbleScale = 1000 // fixed-point units per cell
 	bubbleStep  = 100  // units travelled per simulation step
-	// The steepest shot allowed, as sideways units per 1000 units of rise —
+	// The steepest shot allowed, as sideways units per 1000 units of rise.
 	// about 76 degrees off vertical. Flatter than this and a shot can ping
 	// between the walls almost indefinitely.
 	bubbleMaxAim = 4000
@@ -84,7 +84,7 @@ const (
 // across the board and fires, and the bubble flies until it hits the wall of
 // bubbles or the ceiling, bouncing off the sides on the way. Landing it
 // against enough of its own colour pops the whole connected cluster, and
-// anything left unsupported above the pop falls too — which is where the big
+// anything left unsupported above the pop falls too. Which is where the big
 // chains come from. A bubble reaching the floor row ends the round.
 //
 // Two colours are queued at a time and the player may swap them, so a shot
@@ -312,7 +312,7 @@ func (g *BubbleGame) dropFloaters() int {
 }
 
 // Swap exchanges the loaded colour with the one behind it. It draws nothing
-// new from the seed, so it can never be used to fish for a better colour —
+// new from the seed, so it can never be used to fish for a better colour.
 // it only lets the player choose which of the two to spend now.
 func (g *BubbleGame) Swap() error {
 	switch {
@@ -374,7 +374,7 @@ func (g *BubbleGame) Shoot(dx int) (int, error) {
 }
 
 // ReplayBubble replays a Bubble Shooter log. Each entry is either the aim of
-// a shot — sideways units per 1000 of rise — or "s" for a swap of the two
+// a shot. Sideways units per 1000 of rise. Or "s" for a swap of the two
 // queued colours.
 func ReplayBubble(seed string, cfg BubbleConfig, moves []string) (*Result, error) {
 	cfg = cfg.withDefaults()

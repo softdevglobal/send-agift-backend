@@ -10,8 +10,8 @@ import (
 // ReauthHeader carries the token from POST /admin/reauth.
 const ReauthHeader = "X-Reauth-Token"
 
-// RequireReauth guards high-risk admin actions — moving prize money or
-// points, voiding, settling, cancelling, drawing — behind a password
+// RequireReauth guards high-risk admin actions. Moving prize money or
+// points, voiding, settling, cancelling, drawing. Behind a password
 // confirmed in the last few minutes (Progressive Prize spec §7). Use after
 // RequireAuth and RequireRole. The token must belong to the same admin as
 // the session making the request.

@@ -32,8 +32,8 @@ func DefaultSnakeConfig() SnakeConfig {
 		GridSize:    15,
 		StartLength: 3,
 		// A round opens at a stroll, slow enough to place the first few
-		// turns without hurrying. Scoring is what winds it up — every gift
-		// takes a good bite out of the tick — with a slight drift underneath
+		// turns without hurrying. Scoring is what winds it up. Every gift
+		// takes a good bite out of the tick. With a slight drift underneath
 		// so a long round still tightens when the player is not finding any.
 		TickMs:            300,
 		MinTickMs:         70,
@@ -83,7 +83,7 @@ func (c SnakeConfig) withDefaults() SnakeConfig {
 // Why ticks: a real-time game scored on frames would reward whoever has the
 // smoothest phone, and could not be replayed exactly. Here the board only
 // changes on numbered ticks, the client logs which tick each turn landed on,
-// and the server replays the same ticks — so the outcome depends on the
+// and the server replays the same ticks. So the outcome depends on the
 // player's decisions, not their hardware.
 //
 // The Dart implementation in the mobile app mirrors this file exactly.

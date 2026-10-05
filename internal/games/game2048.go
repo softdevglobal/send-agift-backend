@@ -187,7 +187,7 @@ func (g *Game2048) writeLine(dir string, index int, values []int) {
 
 // collapse slides a single line towards index 0 and merges equal neighbours.
 // Each tile may merge at most once per move, and merging is resolved from the
-// leading edge inwards — the standard 2048 rule.
+// leading edge inwards. The standard 2048 rule.
 func collapse(in []int, score *int64) []int {
 	size := len(in)
 

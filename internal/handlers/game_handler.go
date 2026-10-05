@@ -26,7 +26,7 @@ func NewGameHandler(gameService *services.GameService) *GameHandler {
 	return &GameHandler{games: gameService}
 }
 
-// ListGames handles GET /games — the game collection screen. Public.
+// ListGames handles GET /games. The game collection screen. Public.
 func (h *GameHandler) ListGames(w http.ResponseWriter, r *http.Request) {
 	list, err := h.games.ListGames(r.Context())
 	if err != nil {
@@ -36,7 +36,7 @@ func (h *GameHandler) ListGames(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, map[string]any{"items": list})
 }
 
-// GetGame handles GET /games/{slug} — game details and rules. Public.
+// GetGame handles GET /games/{slug}. Game details and rules. Public.
 func (h *GameHandler) GetGame(w http.ResponseWriter, r *http.Request) {
 	game, err := h.games.GetGame(r.Context(), chi.URLParam(r, "slug"))
 	if err != nil {
@@ -50,7 +50,7 @@ func (h *GameHandler) GetGame(w http.ResponseWriter, r *http.Request) {
 // Returns the server seed the client must use to generate its tiles.
 //
 // An optional ?level= scales up the difficulty for games that support level
-// progression (currently Memory Match) — the harder config it produces is
+// progression (currently Memory Match). The harder config it produces is
 // baked into the session at creation time, so replay never has to know a
 // level was involved.
 func (h *GameHandler) StartSession(w http.ResponseWriter, r *http.Request) {

@@ -23,6 +23,9 @@ type Customer struct {
 	UpdatedAt          time.Time  `json:"updated_at"`
 	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
 	ImageURL           *string    `json:"image_url,omitempty"`
+	// True for an account made for a gift recipient, until they replace the
+	// default password it started with.
+	PasswordChangeRequired bool `json:"password_change_required"`
 }
 
 // CustomerAddress maps to customer.customer_addresses.

@@ -15,24 +15,25 @@ import (
 // Public (optional customer JWT adds the caller's plays, eligibility, points
 // and rank):
 //
-//	GET  /competitions                       — published rounds with their live prize
-//	GET  /competitions/{id}                  — rules, prize, disclosures, winners
-//	GET  /competitions/{id}/leaderboard      — live board (+ my row)
-//	GET  /competitions/{id}/events           — live prize stream (Server-Sent Events)
+//	GET  /competitions                      . Published rounds with their live prize
+//	GET  /competitions/{id}                 . Rules, prize, disclosures, winners
+//	GET  /competitions/{id}/leaderboard     . Live board (+ my row)
+//	GET  /competitions/{id}/events          . Live prize stream (Server-Sent Events)
 //
 // Customer JWT:
 //
-//	POST /competitions/{id}/plays            — one idempotent play (Idempotency-Key header)
-//	POST /competitions/{id}/attempts         — the same, for older app builds
-//	POST /competitions/{id}/claim            — winner accepts terms and picks a delivery address
+//	POST /competitions/{id}/plays           . One idempotent play (Idempotency-Key header)
+//	POST /competitions/{id}/attempts        . The same, for older app builds
+//	POST /competitions/{id}/claim           . Winner accepts terms and picks a delivery address
 //
 // Official scores are submitted through POST /games/sessions/{sessionID}/submit.
 //
-// Admin JWT (support, view only): lists, ledger, plays, analytics, boards,
-// the score review queue and the leaderboard freeze.
+// Admin JWT (support): lists, ledger, plays, analytics, boards, the score
+// review queue and the leaderboard freeze, plus creating, duplicating and
+// editing drafts.
 //
-// Superadmin JWT: everything that changes prize economics or pays out —
-// rules, reserve, publishing, pause/resume/close/cancel, prize adjustments,
+// Superadmin JWT: everything that changes prize economics or pays out.
+// editing a published competition, reserve, publishing, pause/resume/close/cancel, prize adjustments,
 // voids and refunds, finalising, draws, winners, claims, settlement and
 // points (spec §2, AC-13). Every one is audited, and the ones that move money
 // also need a fresh password confirmation (X-Reauth-Token).
@@ -54,8 +55,8 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 
 		r.Group(func(r chi.Router) {
 			// A person tapping Play cannot manage these; a script can. Per
-			// account, per device, and — set high, so a shared network is
-			// not blocked for one account — per address (spec §7).
+			// account, per device, and. Set high, so a shared network is
+			// not blocked for one account. Per address (spec §7).
 			r.Use(middleware.RateLimitByUser(20, time.Minute))
 			r.Use(middleware.RateLimitByDevice(20, time.Minute))
 			r.Use(middleware.RateLimitPlaysByIP(120, time.Minute))
@@ -71,6 +72,13 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 
 		r.Get("/admin/competitions", c.AdminList)
 		r.Get("/admin/competitions/{id}", c.AdminGet)
+		// Any admin may set up drafts: nothing moves money and no player
+		// sees one until a Super Admin funds and publishes it. Editing a
+		// published competition is Super Admin only, checked in the service.
+		r.Post("/admin/competitions", c.Create)
+		r.Put("/admin/competitions/{id}", c.Update)
+		r.Patch("/admin/competitions/{id}", c.Update)
+		r.Post("/admin/competitions/{id}/duplicate", c.Duplicate)
 		r.Get("/admin/competitions/{id}/ledger", c.Ledger)
 		r.Get("/admin/competitions/{id}/plays", c.Plays)
 		r.Get("/admin/competitions/{id}/analytics", c.Analytics)
@@ -90,11 +98,6 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("superadmin"))
-
-		r.Post("/admin/competitions", c.Create)
-		r.Put("/admin/competitions/{id}", c.Update)
-		r.Patch("/admin/competitions/{id}", c.Update)
-		r.Post("/admin/competitions/{id}/duplicate", c.Duplicate)
 
 		r.Put("/admin/competitions/{id}/prize-reserve", c.SetReserve)
 		r.Post("/admin/competitions/{id}/prize-reserve/fund", c.FundReserve)

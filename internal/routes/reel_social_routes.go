@@ -15,19 +15,19 @@ import (
 //
 // Likes (separate from comments):
 //
-//	GET    /reels/{id}/likes                 — PUBLIC (like_count + recent_likers)
-//	POST   /reels/{id}/likes                 — like (JWT or guest)
-//	DELETE /reels/{id}/likes                 — unlike
-//	GET    /reels/{id}/likes/me              — did I like? (JWT or guest)
+//	GET    /reels/{id}/likes                . PUBLIC (like_count + recent_likers)
+//	POST   /reels/{id}/likes                . Like (JWT or guest)
+//	DELETE /reels/{id}/likes                . Unlike
+//	GET    /reels/{id}/likes/me             . Did I like? (JWT or guest)
 //
 // Comments:
 //
-//	GET    /reels/{id}/comments              — public list
-//	POST   /reels/{id}/comments              — create (JWT or guest)
-//	PUT    /reels/{id}/comments/{commentId}  — edit own
-//	DELETE /reels/{id}/comments/{commentId}  — delete own
+//	GET    /reels/{id}/comments             . Public list
+//	POST   /reels/{id}/comments             . Create (JWT or guest)
+//	PUT    /reels/{id}/comments/{commentId} . Edit own
+//	DELETE /reels/{id}/comments/{commentId} . Delete own
 func RegisterReelSocialRoutes(r chi.Router, social *handlers.ReelSocialHandler, jwtSecret string) {
-	// Fully public — no auth required (recent_likers + like_count).
+	// Fully public. No auth required (recent_likers + like_count).
 	r.Get("/reels/{id}/likes", social.GetLikes)
 	r.Get("/reels/{id}/comments", social.ListComments)
 

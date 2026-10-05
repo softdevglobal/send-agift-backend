@@ -10,8 +10,8 @@ import (
 // RegisterMessagingRoutes mounts product/order chat and admin support chat under /api/v1.
 //
 // Auth stack for every route below:
-//  1. RequireAuth     — valid JWT required; puts user_id + role on context
-//  2. RequireRole     — customer | seller | admin (superadmin passes as admin)
+//  1. RequireAuth    . Valid JWT required; puts user_id + role on context
+//  2. RequireRole    . Customer | seller | admin (superadmin passes as admin)
 //
 // Product rules (AliExpress-like):
 //   - product_inquiry / order: stay open by default; close is optional; order Start auto-reopens if closed
@@ -20,19 +20,19 @@ import (
 //
 // Endpoints:
 //
-//	POST   /conversations                      — start (or reuse) a thread
-//	GET    /conversations                      — inbox with unread counts
-//	GET    /conversations/{id}                 — one thread + participants
-//	GET    /conversations/{id}/messages        — messages (marks read)
-//	POST   /conversations/{id}/messages        — send text and/or attachments
-//	POST   /conversations/{id}/read            — mark read without fetching
-//	POST   /conversations/{id}/close           — optional freeze (recommended for support resolve)
-//	POST   /conversations/{id}/reopen          — optional reopen after close
+//	POST   /conversations                     . Start (or reuse) a thread
+//	GET    /conversations                     . Inbox with unread counts
+//	GET    /conversations/{id}                . One thread + participants
+//	GET    /conversations/{id}/messages       . Messages (marks read)
+//	POST   /conversations/{id}/messages       . Send text and/or attachments
+//	POST   /conversations/{id}/read           . Mark read without fetching
+//	POST   /conversations/{id}/close          . Optional freeze (recommended for support resolve)
+//	POST   /conversations/{id}/reopen         . Optional reopen after close
 //
 // Conversation types (POST body "type"):
-//   - product_inquiry — customer only; needs product_id
-//   - order           — customer or seller; needs order_item_id
-//   - support         — admin→user (counterpart_*) or user→admin help ticket
+//   - product_inquiry. Customer only; needs product_id
+//   - order          . Customer or seller; needs order_item_id
+//   - support        . Admin→user (counterpart_*) or user→admin help ticket
 //
 // Attachments (damage photos, PDFs):
 //  1. POST /media/presign-upload with folder "chat-image" or "chat-document"

@@ -167,7 +167,7 @@ func TestReplaySnakeReportsAMinimumDuration(t *testing.T) {
 
 // snakeGoldenLog was produced by a food-chasing bot. The Flutter engine
 // replays the same log in send-agift-mobile/test/snake_game_test.dart and must
-// land on the same numbers — if either side drifts, both fail.
+// land on the same numbers. If either side drifts, both fail.
 var snakeGoldenLog = strings.Split("0:down,1:left,6:down,12:right,14:up,16:left,19:up,21:right,31:up,35:left,46:up,51:right,54:down,66:right,77:up,87:left,93:down,100:right,104:up,106:left,110:down,115:left,121:up,122:right,131:up,139:left,144:down,154:right,162:up,163:left,177:up,185:right,197:down,202:right,204:up,206:left,207:up,211:left,221:up,223:right,226:down,227:left,230:end", ",")
 
 func TestSnakeCrossLanguageGolden(t *testing.T) {

@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS support.cases (
     opened_by_user_id     uuid NOT NULL,
     opened_by_role        text NOT NULL
                           CHECK (opened_by_role IN ('admin', 'customer', 'seller')),
-    -- Who the ticket is ABOUT (always a customer or seller — never an admin)
+    -- Who the ticket is ABOUT (always a customer or seller. Never an admin)
     counterpart_user_id   uuid NOT NULL,
     counterpart_role      text NOT NULL
                           CHECK (counterpart_role IN ('customer', 'seller')),
