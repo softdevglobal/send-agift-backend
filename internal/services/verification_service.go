@@ -64,7 +64,11 @@ type SellerVerificationService struct {
 	email     *EmailService
 	jwtSecret string
 	jwtExpiry time.Duration
+	documents *S3Service
 }
+
+// StoreDocumentsIn keeps sellers' business documents in this bucket.
+func (s *SellerVerificationService) StoreDocumentsIn(s3 *S3Service) { s.documents = s3 }
 
 func NewSellerVerificationService(
 	sellers *repository.SellerRepository,
@@ -205,8 +209,9 @@ func (s *SellerVerificationService) AdminList(ctx context.Context, status, query
 	return &AdminSellerList{Sellers: sellers, Total: total, Counts: counts}, nil
 }
 
-// AdminGet is a seller's full profile. Addresses and shops. For review.
-func (s *SellerVerificationService) AdminGet(ctx context.Context, sellerID string) (*models.SellerDetails, error) {
+// AdminGet is a seller's full profile. Addresses, shops and their
+// application. For review.
+func (s *SellerVerificationService) AdminGet(ctx context.Context, sellerID string) (*models.AdminSellerDetails, error) {
 	if _, err := uuid.Parse(sellerID); err != nil {
 		return nil, ErrSellerNotFound
 	}
@@ -225,7 +230,17 @@ func (s *SellerVerificationService) AdminGet(ctx context.Context, sellerID strin
 	if err != nil {
 		return nil, err
 	}
-	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil
+	application, err := s.sellers.GetApplication(ctx, seller.ID)
+	if errors.Is(err, repository.ErrSellerApplicationNotFound) {
+		application, err = nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &models.AdminSellerDetails{
+		SellerDetails: models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops},
+		Application:   application,
+	}, nil
 }
 
 // SellerReviewInput is an admin's decision on a seller account.

@@ -60,6 +60,10 @@ type SellerRegisterInput struct { // SellerRegisterInput is a struct that contai
 	ImageURL    *string
 	Addresses   []SellerAddressInput // addresses for the seller
 	Shop        *ShopInput           // nil / omitted = blank (no shop)
+	// Application is the seller's full application for admin review. When
+	// sent, the legal name, seller type, trading name and addresses come
+	// from it, and a phone number is required.
+	Application *models.SellerApplication
 }
 
 type SellerUpdateInput struct { // SellerUpdateInput is a struct that contains the input for the seller update
@@ -132,7 +136,8 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 	if err != nil {
 		return nil, ErrInvalidCountry // return an error if the country is invalid
 	}
-	if _, err := s.countries.GetByID(ctx, countryID.String()); err != nil {
+	country, err := s.countries.GetByID(ctx, countryID.String())
+	if err != nil {
 		if errors.Is(err, repository.ErrCountryNotFound) {
 			return nil, ErrInvalidCountry // return an error if the country is not found
 		}
@@ -140,6 +145,11 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 	}
 	if err := s.capabilities.EnsureSellerRegistrationAllowed(ctx, countryID.String()); err != nil {
 		return nil, err
+	}
+	if in.Application != nil {
+		if err := applyApplication(&in, countryID, strings.ToUpper(country.ISOCode)); err != nil {
+			return nil, err
+		}
 	}
 
 	hash, err := utils.HashPassword(in.Password)
@@ -164,6 +174,13 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 			return nil, ErrSellerConflict // return an error if the seller already exists
 		}
 		return nil, err // return an error if the seller is not created
+	}
+
+	if in.Application != nil {
+		in.Application.SellerID = seller.ID
+		if err := s.sellers.CreateApplication(ctx, in.Application); err != nil {
+			return nil, err
+		}
 	}
 
 	addresses := make([]models.SellerAddress, 0, len(in.Addresses))

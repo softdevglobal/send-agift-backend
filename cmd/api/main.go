@@ -128,6 +128,7 @@ func main() {
 	orderService.NotifyWith(giftRecipientService)
 	go giftRecipientService.RunDeliveredNotices(context.Background(), time.Minute,
 		database.Exclusive(pool, database.LockGiftDeliveryNotices))
+	verificationService.StoreDocumentsIn(s3Service)
 	verificationHandler := handlers.NewVerificationHandler(verificationService)
 	// Customer sign-in with Google and Facebook. A provider without keys
 	// answers 503, so its button can be shown or hidden by configuration.

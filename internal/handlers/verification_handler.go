@@ -98,6 +98,33 @@ func (h *VerificationHandler) AdminReview(w http.ResponseWriter, r *http.Request
 	utils.JSON(w, http.StatusOK, seller)
 }
 
+// AttachDocument handles PUT /sellers/me/application/document: the seller's
+// uploaded business registration evidence.
+func (h *VerificationHandler) AttachDocument(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	var req services.SellerDocumentInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.verification.AttachDocument(r.Context(), sellerID, req); err != nil {
+		h.writeError(w, err, "could not save the document")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]string{"message": "document saved"})
+}
+
+// AdminDocument handles GET /admin/sellers/{id}/document: a short-lived link
+// to the seller's business document.
+func (h *VerificationHandler) AdminDocument(w http.ResponseWriter, r *http.Request) {
+	url, err := h.verification.AdminDocumentURL(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		h.writeError(w, err, "could not open the document")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
 // RequireApprovedSeller lets a request through only for a seller an admin
 // has approved. Use after RequireAuth and RequireRole("seller").
 func (h *VerificationHandler) RequireApprovedSeller(next http.Handler) http.Handler {
@@ -139,6 +166,12 @@ func (h *VerificationHandler) writeError(w http.ResponseWriter, err error, fallb
 		utils.Error(w, http.StatusBadRequest, "status must be unverified, pending, verified or rejected")
 	case errors.Is(err, services.ErrSellerNotFound):
 		utils.Error(w, http.StatusNotFound, "seller not found")
+	case errors.Is(err, services.ErrInvalidSellerDocument):
+		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrNoSellerApplication), errors.Is(err, services.ErrNoSellerDocument):
+		utils.Error(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, services.ErrDocumentsUnavailable):
+		utils.Error(w, http.StatusServiceUnavailable, err.Error())
 	default:
 		log.Printf("verification handler error: %v", err)
 		utils.Error(w, http.StatusInternalServerError, fallback)

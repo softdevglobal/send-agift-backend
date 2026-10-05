@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/middleware"
+	"myapp/internal/models"
 	"myapp/internal/services"
 	"myapp/internal/utils"
 )
@@ -32,6 +33,7 @@ type sellerRegisterRequest struct {
 	ImageURL    *string                       `json:"image_url"`
 	Addresses   []services.SellerAddressInput `json:"addresses"`
 	Shop        *services.ShopInput           `json:"shop"`
+	Application *models.SellerApplication     `json:"application"`
 }
 
 type sellerUpdateRequest struct {
@@ -60,6 +62,7 @@ func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		ImageURL:    req.ImageURL,
 		Addresses:   req.Addresses,
 		Shop:        req.Shop,
+		Application: req.Application,
 	})
 	if err != nil {
 		h.writeError(w, err, "could not register seller")
@@ -230,7 +233,10 @@ func (h *SellerHandler) ReplaceDeliveryZones(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *SellerHandler) writeError(w http.ResponseWriter, err error, fallback string) {
+	var appErr *services.ApplicationError
 	switch {
+	case errors.As(err, &appErr):
+		utils.JSON(w, http.StatusBadRequest, map[string]string{"error": appErr.Message, "field": appErr.Field})
 	case errors.Is(err, services.ErrInvalidInput):
 		utils.Error(w, http.StatusBadRequest, "legal_name, email required; password must be at least 8 characters")
 	case errors.Is(err, services.ErrInvalidCountry):
