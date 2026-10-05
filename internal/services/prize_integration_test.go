@@ -1354,7 +1354,7 @@ func TestOvertakenNotifications(t *testing.T) {
 	}
 
 	alice, bob, carol := f.customer(10), f.customer(10), f.customer(10)
-	score(alice, []string{"0:1:0", "1:-1:10000"}) // one right: 150
+	score(alice, []string{"0:1:0", "1:-1:10000"})    // one right: 150
 	score(carol, []string{"0:0:1000", "1:-1:10000"}) // none right: 0
 	if beaten(alice) != 0 || beaten(carol) != 0 {
 		t.Fatal("a lower score beats nobody")
