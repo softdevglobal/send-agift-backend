@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"myapp/internal/models"
 	"myapp/internal/repository"
 )
@@ -98,63 +96,6 @@ func (s *EmailService) SendCustomerWelcome(ctx context.Context, c *models.Custom
 		return err
 	}
 	return s.queue(ctx, "customer_welcome", "customer_welcome:"+c.ID.String(), c.Email, name, content)
-}
-
-// SendSellerEmailCode sends a seller the 6-digit code that confirms their
-// email. Every code is its own email, so a resend is never deduplicated away.
-func (s *EmailService) SendSellerEmailCode(ctx context.Context, sellerID uuid.UUID, email, name, code string, ttl time.Duration) error {
-	if s == nil {
-		return nil
-	}
-	content, err := renderSellerEmailCode(s.webURL, businessName(name, email), code, ttl)
-	if err != nil {
-		return err
-	}
-	key := fmt.Sprintf("seller_email_code:%s:%d", sellerID, time.Now().UnixNano())
-	return s.queue(ctx, "seller_email_code", key, email, name, content)
-}
-
-// SendSellerPendingReview welcomes a seller whose email is confirmed and
-// tells them an admin is reviewing their account.
-func (s *EmailService) SendSellerPendingReview(ctx context.Context, sellerID uuid.UUID, email, name string) error {
-	if s == nil {
-		return nil
-	}
-	content, err := renderSellerPendingReview(s.webURL, businessName(name, email))
-	if err != nil {
-		return err
-	}
-	return s.queue(ctx, "seller_pending_review", "seller_pending_review:"+sellerID.String(), email, name, content)
-}
-
-// SendSellerReviewed tells a seller an admin approved or rejected them.
-func (s *EmailService) SendSellerReviewed(ctx context.Context, seller *models.Seller) error {
-	if s == nil {
-		return nil
-	}
-	name := sellerName(seller)
-	var (
-		content *EmailContent
-		err     error
-	)
-	switch seller.VerificationStatus {
-	case "verified":
-		content, err = renderSellerApproved(s.webURL, businessName(name, seller.Email), derefOr(seller.VerificationNote, ""))
-	case "rejected":
-		content, err = renderSellerRejected(s.webURL, businessName(name, seller.Email), derefOr(seller.VerificationNote, ""))
-	default:
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	reviewedAt := time.Now()
-	if seller.VerificationReviewedAt != nil {
-		reviewedAt = *seller.VerificationReviewedAt
-	}
-	kind := "seller_" + seller.VerificationStatus
-	key := fmt.Sprintf("%s:%s:%d", kind, seller.ID, reviewedAt.UnixNano())
-	return s.queue(ctx, kind, key, seller.Email, name, content)
 }
 
 // SendOrderPlaced confirms a new order to the customer who placed it.
@@ -393,4 +334,9 @@ func businessName(name, email string) string {
 
 func sellerName(s *models.Seller) string {
 	return derefOr(s.TradingName, s.LegalName)
+}
+
+// normalizeEmail is the form an address is stored and matched in.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }

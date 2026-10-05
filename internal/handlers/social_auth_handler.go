@@ -75,3 +75,9 @@ func (h *SocialAuthHandler) writeError(w http.ResponseWriter, err error) {
 		utils.Error(w, http.StatusBadGateway, "Sign-in failed. Please try again.")
 	}
 }
+
+// writeCodedError sends an error with a machine-readable code the client can
+// branch on.
+func writeCodedError(w http.ResponseWriter, status int, code, message string) {
+	utils.JSON(w, status, map[string]string{"error": message, "code": code})
+}

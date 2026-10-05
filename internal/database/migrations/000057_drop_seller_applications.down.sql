@@ -1,7 +1,3 @@
--- The details a seller gives when they apply: business registration and tax,
--- the person applying, addresses, the shop they plan, how they deliver and
--- where they want to be paid. Admins read it to approve or reject the
--- account. Each section is a validated JSON document.
 CREATE TABLE IF NOT EXISTS seller.seller_applications (
     seller_id             uuid PRIMARY KEY REFERENCES seller.sellers (id) ON DELETE CASCADE,
     business              jsonb NOT NULL,

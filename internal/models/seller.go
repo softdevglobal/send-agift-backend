@@ -8,33 +8,19 @@ import (
 
 // Seller maps to seller.sellers.
 type Seller struct {
-	ID           uuid.UUID `json:"id"`
-	CountryID    uuid.UUID `json:"country_id"`
-	SellerType   string    `json:"seller_type"`
-	LegalName    string    `json:"legal_name"`
-	TradingName  *string   `json:"trading_name,omitempty"`
-	Email        string    `json:"email"`
-	Phone        *string   `json:"phone,omitempty"`
-	PasswordHash string    `json:"-"`
-	// unverified (email not confirmed yet) -> pending (waiting for an admin)
-	// -> verified | rejected.
-	VerificationStatus string     `json:"verification_status"`
-	Status             string     `json:"status"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	ImageURL           *string    `json:"image_url,omitempty"`
-	EmailVerifiedAt    *time.Time `json:"email_verified_at,omitempty"`
-	// What the admin told the seller when approving or rejecting them.
-	VerificationNote       *string    `json:"verification_note,omitempty"`
-	VerificationReviewedAt *time.Time `json:"verification_reviewed_at,omitempty"`
-}
-
-// AdminSellerSummary is one row of the admin seller review list.
-type AdminSellerSummary struct {
-	Seller
-	CountryName string  `json:"country_name"`
-	ShopCount   int     `json:"shop_count"`
-	City        *string `json:"city,omitempty"`
+	ID                 uuid.UUID `json:"id"`
+	CountryID          uuid.UUID `json:"country_id"`
+	SellerType         string    `json:"seller_type"`
+	LegalName          string    `json:"legal_name"`
+	TradingName        *string   `json:"trading_name,omitempty"`
+	Email              string    `json:"email"`
+	Phone              *string   `json:"phone,omitempty"`
+	PasswordHash       string    `json:"-"`
+	VerificationStatus string    `json:"verification_status"`
+	Status             string    `json:"status"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	ImageURL           *string   `json:"image_url,omitempty"`
 }
 
 // SellerAddress maps to seller.seller_addresses.
