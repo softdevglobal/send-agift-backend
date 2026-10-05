@@ -119,16 +119,12 @@ func main() {
 		database.Exclusive(pool, database.LockEmailDelivery))
 	// New customers get a welcome email.
 	customerService.SendEmailsWith(emailService)
-	// New sellers confirm their email with a code, then wait for an admin.
-	verificationService := services.NewSellerVerificationService(sellers, emailService, cfg.JWTSecret, cfg.JWTExpiry)
-	sellerService.VerifyEmailsWith(verificationService)
 	// Orders: the buyer gets a confirmation and the recipient a customer
 	// account; the recipient is emailed only once the gift is delivered.
 	giftRecipientService := services.NewGiftRecipientService(orders, customers, emailService)
 	orderService.NotifyWith(giftRecipientService)
 	go giftRecipientService.RunDeliveredNotices(context.Background(), time.Minute,
 		database.Exclusive(pool, database.LockGiftDeliveryNotices))
-	verificationHandler := handlers.NewVerificationHandler(verificationService)
 	// Customer sign-in with Google and Facebook. A provider without keys
 	// answers 503, so its button can be shown or hidden by configuration.
 	socialAuthService := services.NewSocialAuthService(customers, countries, countryCapabilityService, emailService,
@@ -181,7 +177,7 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, verificationHandler, socialAuthHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

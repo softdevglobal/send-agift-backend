@@ -49,11 +49,6 @@ func TestEmailTemplatesRender(t *testing.T) {
 		want   []string
 	}{
 		"customer_welcome": {func() (*EmailContent, error) { return renderCustomerWelcome(web, "Sam") }, []string{"Hi Sam,", "A little something", web + "/products", "cid:" + emailLogoCID}},
-		"seller_code": {func() (*EmailContent, error) { return renderSellerEmailCode(web, "Kim", "042917", 15*time.Minute) },
-			[]string{"042917 is your SendAGift verification code", ">0<", ">7<", "15 minutes"}},
-		"seller_pending":  {func() (*EmailContent, error) { return renderSellerPendingReview(web, "Kim") }, []string{"Pending review", "DONE"}},
-		"seller_approved": {func() (*EmailContent, error) { return renderSellerApproved(web, "Kim", "Welcome aboard!") }, []string{"account is now active", "Welcome aboard!", web + "/seller/shops"}},
-		"seller_rejected": {func() (*EmailContent, error) { return renderSellerRejected(web, "Kim", "Please add your ABN.") }, []string{"Please add your ABN.", web + "/seller/profile"}},
 		"order_placed": {func() (*EmailContent, error) { return renderOrderPlaced(web, order) },
 			[]string{"Your gift for Alex Silva", "AUD 54.50", "AUD 74.50", "Free", "Surprise intact", "&lt;3"}},
 		"gift_delivered": {func() (*EmailContent, error) { return renderGiftDelivered(web, order, GiftRecipientDefaultPassword) },
@@ -106,24 +101,6 @@ func TestFormatMoney(t *testing.T) {
 		if got := formatMoney(tc.minor, tc.currency); got != tc.want {
 			t.Errorf("formatMoney(%d, %s) = %q, want %q", tc.minor, tc.currency, got, tc.want)
 		}
-	}
-}
-
-func TestEmailCode(t *testing.T) {
-	seen := map[string]bool{}
-	for i := 0; i < 200; i++ {
-		c, err := newEmailCode()
-		if err != nil || len(c) != 6 || strings.Trim(c, "0123456789") != "" {
-			t.Fatalf("bad code %q: %v", c, err)
-		}
-		seen[c] = true
-	}
-	if len(seen) < 190 {
-		t.Fatalf("codes repeat too often: %d distinct of 200", len(seen))
-	}
-	a, b := uuid.New(), uuid.New()
-	if hashEmailCode(a, "123456") == hashEmailCode(b, "123456") {
-		t.Fatal("code hash must depend on the seller")
 	}
 }
 
