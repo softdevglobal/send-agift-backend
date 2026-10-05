@@ -47,9 +47,6 @@ var allowedFolders = map[string]string{
 	"chat-document":    "public/chat/documents",
 	"review-photo":     "public/reviews/photos",
 	"review-video":     "public/reviews/videos",
-	// Business registration evidence from seller applications; admins read
-	// it through a signed link.
-	"seller-document": "private/sellers/documents",
 }
 
 // PresignUpload issues a short-lived URL the client can PUT a file to directly.
