@@ -54,8 +54,8 @@ func (c BlockBlastConfig) withDefaults() BlockBlastConfig {
 }
 
 // BlockShapes is the fixed piece catalog; a piece's id is its index. Cells
-// are {row, col}. The order is part of the rules — the seed picks pieces by
-// index — so never reorder it without shipping a new game version.
+// are {row, col}. The order is part of the rules. The seed picks pieces by
+// index. So never reorder it without shipping a new game version.
 var BlockShapes = [][][2]int{
 	{{0, 0}},
 	{{0, 0}, {0, 1}},
@@ -91,7 +91,7 @@ type BlockBlastMove struct {
 
 // BlockBlastGame is Block Blast: place pieces from a hand of three on the
 // board; a full row or column clears. When the hand is empty a new one is
-// dealt from the seed — like 2048's tile spawns, identical for everyone who
+// dealt from the seed. Like 2048's tile spawns, identical for everyone who
 // shares the seed. The game ends when nothing in the hand fits.
 //
 // The Dart implementation in the mobile app mirrors this file exactly.

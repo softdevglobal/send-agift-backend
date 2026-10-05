@@ -26,7 +26,7 @@ type S3Service struct {
 // NewS3Service builds the S3 client. With AWS_ACCESS_KEY_ID and
 // AWS_SECRET_ACCESS_KEY set (local development) it signs with those keys.
 // Without them it uses the SDK's default credential chain, which on ECS is the
-// task role — no long-lived keys on the server.
+// task role. No long-lived keys on the server.
 func NewS3Service(cfg *config.Config) (*S3Service, error) {
 	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(cfg.AWSRegion)}
 	if cfg.AWSAccessKeyID != "" && cfg.AWSSecretKey != "" {

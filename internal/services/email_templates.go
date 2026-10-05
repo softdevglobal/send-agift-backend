@@ -226,17 +226,17 @@ func renderCustomerWelcome(webURL, name string) (*EmailContent, error) {
 	}
 	text := fmt.Sprintf(`Hi %s,
 
-Welcome to SendAGift — your account is ready.
+Welcome to SendAGift. Your account is ready.
 
 Send thoughtful gifts to the people who matter, right from your phone or desktop.
 
-  01 Find a gift — discover gifts from shops near them.
-  02 Make it personal — add a message or video to your gift.
-  03 Earn points — get points whenever you send a gift.
+  01 Find a gift. Discover gifts from shops near them.
+  02 Make it personal. Add a message or video to your gift.
+  03 Earn points. Get points whenever you send a gift.
 
 Start sending gifts: %s/products
 
-— The SendAGift team`, name, webURL)
+The SendAGift team`, name, webURL)
 	return renderEmail(webURL, customerWelcomeContent, "Welcome to SendAGift, "+name,
 		"Your account is ready. A little something goes a long way.", data, text)
 }
@@ -270,10 +270,10 @@ func renderSellerEmailCode(webURL, name, code string, ttl time.Duration) (*Email
 
 Your SendAGift verification code is: %s
 
-It expires in %d minutes. Never share this code — SendAGift staff will never ask for it.
+It expires in %d minutes. Never share this code. SendAGift staff will never ask for it.
 If you didn't sign up, you can ignore this email.
 
-— The SendAGift team`, name, code, minutes)
+The SendAGift team`, name, code, minutes)
 	return renderEmail(webURL, sellerEmailCodeContent, code+" is your SendAGift verification code",
 		fmt.Sprintf("Your code is %s. It expires in %d minutes.", code, minutes), data, text)
 }
@@ -293,7 +293,7 @@ const sellerPendingContent = `{{define "content"}}
 
 func renderSellerPendingReview(webURL, name string) (*EmailContent, error) {
 	data := map[string]any{
-		"Intro": fmt.Sprintf("Hi %s,\nYour email is confirmed and your seller account has been created. Our team is now checking the details you sent us — we'll email you the moment your account is active.", name),
+		"Intro": fmt.Sprintf("Hi %s,\nYour email is confirmed and your seller account has been created. Our team is now checking the details you sent us. We'll email you the moment your account is active.", name),
 		"CTA":   emailButton{Label: "Open seller dashboard", URL: webURL + "/seller"},
 		"Steps": []emailStep{
 			{Title: "Email confirmed", Body: "Your seller account has been created.", Done: true},
@@ -301,7 +301,7 @@ func renderSellerPendingReview(webURL, name string) (*EmailContent, error) {
 			{Title: "Start selling", Body: "Open your shop, list gifts and post reels."},
 		},
 		"Callout": emailCallout{Label: "Account status: Pending review", Body: "Reviews usually take 1–2 business days. Meanwhile, sign in and polish your profile so customers love your shop from day one."},
-		"Closing": emailClosing{Title: "Great gifts start with sellers like you.", Body: "Thanks for joining SendAGift — we'll be in touch soon."},
+		"Closing": emailClosing{Title: "Great gifts start with sellers like you.", Body: "Thanks for joining SendAGift. We'll be in touch soon."},
 	}
 	text := fmt.Sprintf(`Hi %s,
 
@@ -312,8 +312,8 @@ Our team is checking the details you sent us. Reviews usually take 1–2 busines
 
 Seller dashboard: %s/seller
 
-— The SendAGift team`, name, webURL)
-	return renderEmail(webURL, sellerPendingContent, "Welcome to SendAGift — your account is under review",
+The SendAGift team`, name, webURL)
+	return renderEmail(webURL, sellerPendingContent, "Welcome to SendAGift. Your account is under review",
 		"Your email is confirmed. We're reviewing your seller account now.", data, text)
 }
 
@@ -332,7 +332,7 @@ const sellerApprovedContent = `{{define "content"}}
 
 func renderSellerApproved(webURL, name, note string) (*EmailContent, error) {
 	data := map[string]any{
-		"Intro": fmt.Sprintf("Hi %s,\nGreat news — our team has reviewed your details and your seller account is now active. Customers can't wait to see what you've got.", name),
+		"Intro": fmt.Sprintf("Hi %s,\nGreat news. Our team has reviewed your details and your seller account is now active. Customers can't wait to see what you've got.", name),
 		"CTA":   emailButton{Label: "Set up your shop", URL: webURL + "/seller/shops"},
 		"Steps": []emailStep{
 			{Title: "Open a shop", Body: "Set your location and delivery zones."},
@@ -346,16 +346,16 @@ func renderSellerApproved(webURL, name, note string) (*EmailContent, error) {
 	}
 	text := fmt.Sprintf(`Hi %s,
 
-Great news — your SendAGift seller account has been approved and is now ACTIVE.
+Great news. Your SendAGift seller account has been approved and is now ACTIVE.
 %s
 Your first three moves:
-  01 Open a shop — set your location and delivery zones
-  02 List gifts — photos, prices and stock
-  03 Post a reel — show your gifts in motion
+  01 Open a shop. Set your location and delivery zones
+  02 List gifts. Photos, prices and stock
+  03 Post a reel. Show your gifts in motion
 
 Set up your shop: %s/seller/shops
 
-— The SendAGift team`, name, textNote(note), webURL)
+The SendAGift team`, name, textNote(note), webURL)
 	return renderEmail(webURL, sellerApprovedContent, "You're live on SendAGift, "+name,
 		"Your seller account is approved and active. Time to open your shop.", data, text)
 }
@@ -369,7 +369,7 @@ const sellerRejectedContent = `{{define "content"}}
 <tr><td style="padding:32px 0 0;font-size:0;line-height:0;">&nbsp;</td></tr>
 {{if .Note}}{{template "callout" .Note}}{{end}}
 <tr><td class="px" style="padding:0 60px;">
-  <div style="font-size:15px;line-height:25px;color:{{c "muted"}};">This usually just means something needs a quick update. Sign in, check your business details and reply to this email — we'll take another look.</div>
+  <div style="font-size:15px;line-height:25px;color:{{c "muted"}};">This usually just means something needs a quick update. Sign in, check your business details and reply to this email. We'll take another look.</div>
 </td></tr>
 {{template "button" .CTA}}
 {{end}}`
@@ -386,11 +386,11 @@ func renderSellerRejected(webURL, name, note string) (*EmailContent, error) {
 
 Thank you for applying to sell on SendAGift. We reviewed your details and aren't able to activate your seller account just yet.
 %s
-Sign in, check your business details and reply to this email — we'll take another look.
+Sign in, check your business details and reply to this email. We'll take another look.
 
 Review my details: %s/seller/profile
 
-— The SendAGift team`, name, textNote(note), webURL)
+The SendAGift team`, name, textNote(note), webURL)
 	return renderEmail(webURL, sellerRejectedContent, "An update on your SendAGift seller account",
 		"We couldn't activate your seller account yet. Here's what to do next.", data, text)
 }
@@ -465,7 +465,7 @@ func renderOrderPlaced(webURL string, o *repository.OrderEmailSummary) (*EmailCo
 	}
 	data.Eyebrow = "Order confirmed · " + o.OrderNumber
 	data.Heading = "Your gift for " + recipient + "\nis being prepared."
-	data.Intro = fmt.Sprintf("Hi %s,\nThank you for your order. The shop is getting everything ready — and we won't tell %s a thing until the gift is in their hands.", data.Name, recipient)
+	data.Intro = fmt.Sprintf("Hi %s,\nThank you for your order. The shop is getting everything ready. And we won't tell %s a thing until the gift is in their hands.", data.Name, recipient)
 	data.CTA = emailButton{Label: "Track your order", URL: webURL + "/orders/" + o.OrderID.String()}
 	data.Callout = emailCallout{Label: "Your message", Body: "“" + data.GiftMessage + "”"}
 	data.Closing = emailClosing{Title: "Surprise intact.", Body: "We'll keep you posted as your gift makes its way."}
@@ -478,10 +478,10 @@ func renderOrderPlaced(webURL string, o *repository.OrderEmailSummary) (*EmailCo
 	}
 	b.WriteString("\n")
 	for _, it := range data.Items {
-		fmt.Fprintf(&b, "  • %s ×%d (%s) — %s\n", it.ProductName, it.Quantity, it.ShopName, formatMoney(it.TotalAmount, data.Currency))
+		fmt.Fprintf(&b, "  • %s ×%d (%s), %s\n", it.ProductName, it.Quantity, it.ShopName, formatMoney(it.TotalAmount, data.Currency))
 	}
 	fmt.Fprintf(&b, "\nSubtotal: %s\nDelivery: %s\nTotal: %s\n", formatMoney(data.Subtotal, data.Currency), formatMoney(data.Delivery, data.Currency), formatMoney(data.Total, data.Currency))
-	fmt.Fprintf(&b, "\nWe won't tell %s a thing until the gift is in their hands.\n\nTrack your order: %s/orders/%s\n\n— The SendAGift team", recipient, webURL, o.OrderID)
+	fmt.Fprintf(&b, "\nWe won't tell %s a thing until the gift is in their hands.\n\nTrack your order: %s/orders/%s\n\nThe SendAGift team", recipient, webURL, o.OrderID)
 	return renderEmail(webURL, orderPlacedContent, "Order confirmed: your gift for "+recipient,
 		"Order "+o.OrderNumber+" · arriving "+data.DeliveryDate+". We'll keep it a surprise.", data, b.String())
 }
@@ -511,7 +511,7 @@ const giftDeliveredContent = `{{define "content"}}
         <tr><td style="padding:4px 18px 4px 0;font-size:13px;color:{{c "muted"}};">Email</td><td style="padding:4px 0;font-size:15px;font-weight:700;color:{{c "navy"}};">{{.LoginEmail}}</td></tr>
         <tr><td style="padding:4px 18px 4px 0;font-size:13px;color:{{c "muted"}};">Password</td><td style="padding:4px 0;"><span style="display:inline-block;padding:4px 10px;border-radius:4px;background-color:{{c "lavender"}};font-family:'Courier New',Courier,monospace;font-size:16px;font-weight:700;letter-spacing:2px;color:{{c "navy"}};">{{.TempPassword}}</span></td></tr>
       </table>
-      <div style="margin-top:12px;font-size:12px;line-height:18px;color:{{c "muted"}};">This is a temporary password — please change it as soon as you sign in.</div>
+      <div style="margin-top:12px;font-size:12px;line-height:18px;color:{{c "muted"}};">This is a temporary password. Please change it as soon as you sign in.</div>
     </td></tr>
   </table>
 </td></tr>{{end}}
@@ -530,24 +530,24 @@ func renderGiftDelivered(webURL string, o *repository.OrderEmailSummary, tempPas
 	data.Heading = data.SenderName + " sent you\nsomething special."
 	data.Intro = fmt.Sprintf("Hi %s,\n%s was thinking of you, and your gift has just been delivered.", data.Name, data.SenderName)
 	data.CTA = emailButton{Label: "See your gift & leave a review", URL: signIn}
-	data.Closing = emailClosing{Title: "Loving it?", Body: "Tell " + data.SenderName + " and everyone else with a quick review — it only takes a minute."}
+	data.Closing = emailClosing{Title: "Loving it?", Body: "Tell " + data.SenderName + " and everyone else with a quick review. It only takes a minute."}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Hi %s,\n\n%s was thinking of you — your gift has just been delivered!\n\n", data.Name, data.SenderName)
+	fmt.Fprintf(&b, "Hi %s,\n\n%s was thinking of you. Your gift has just been delivered!\n\n", data.Name, data.SenderName)
 	if data.GiftMessage != "" {
-		fmt.Fprintf(&b, "\"%s\"\n— %s\n\n", data.GiftMessage, data.SenderName)
+		fmt.Fprintf(&b, "\"%s\"\nFrom %s\n\n", data.GiftMessage, data.SenderName)
 	}
 	b.WriteString("What arrived:\n")
 	for _, it := range data.Items {
 		fmt.Fprintf(&b, "  • %s ×%d (from %s)\n", it.ProductName, it.Quantity, it.ShopName)
 	}
 	if data.GiftPoints > 0 {
-		fmt.Fprintf(&b, "\n%s also sent you %d points — they're in your SendAGift wallet.\n", data.SenderName, data.GiftPoints)
+		fmt.Fprintf(&b, "\n%s also sent you %d points. They're in your SendAGift wallet.\n", data.SenderName, data.GiftPoints)
 	}
 	if tempPassword != "" {
-		fmt.Fprintf(&b, "\nWe've set up a SendAGift account for you:\n  Email: %s\n  Password: %s\nThis is a temporary password — please change it as soon as you sign in.\n", data.LoginEmail, tempPassword)
+		fmt.Fprintf(&b, "\nWe've set up a SendAGift account for you:\n  Email: %s\n  Password: %s\nThis is a temporary password. Please change it as soon as you sign in.\n", data.LoginEmail, tempPassword)
 	}
-	fmt.Fprintf(&b, "\nSee your gift and leave a review: %s\n\n— The SendAGift team", signIn)
+	fmt.Fprintf(&b, "\nSee your gift and leave a review: %s\n\nThe SendAGift team", signIn)
 	return renderEmail(webURL, giftDeliveredContent, data.SenderName+" sent you a gift",
 		"Your gift from "+data.SenderName+" has been delivered. Open to see what's inside.", data, b.String())
 }

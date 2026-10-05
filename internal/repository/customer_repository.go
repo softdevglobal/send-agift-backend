@@ -102,8 +102,8 @@ func (r *CustomerRepository) Update(ctx context.Context, c *models.Customer) err
 	return err
 }
 
-// ClaimGiftAccount hands an account made for a gift recipient — one still on
-// its default password — to the person signing up with its email, with the
+// ClaimGiftAccount hands an account made for a gift recipient. One still on
+// its default password. To the person signing up with its email, with the
 // details they entered. It reports false when there is no such account.
 func (r *CustomerRepository) ClaimGiftAccount(ctx context.Context, c *models.Customer) (bool, error) {
 	err := r.db.QueryRow(ctx, `
@@ -230,7 +230,7 @@ func (r *CustomerRepository) DeleteAddress(ctx context.Context, customerID, addr
 
 // CreateSavedGift inserts a wishlist row for a customer + product.
 // UNIQUE (customer_id, product_id) prevents saving the same product twice.
-// There is no Update for saved gifts — change = delete old + create new.
+// There is no Update for saved gifts. Change = delete old + create new.
 func (r *CustomerRepository) CreateSavedGift(ctx context.Context, g *models.SavedGift) error {
 	err := r.db.QueryRow(ctx, `
 		insert into customer.saved_gifts (customer_id, product_id)

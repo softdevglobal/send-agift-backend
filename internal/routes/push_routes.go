@@ -10,10 +10,10 @@ import (
 // RegisterPushRoutes mounts the device registration the mobile app uses for
 // push notifications (customer JWT):
 //
-//	POST   /customers/me/push-devices — register this device's Firebase token
-//	DELETE /customers/me/push-devices — forget it, on sign-out
-//	GET    /customers/me/notifications — the in-app inbox, with the unread count
-//	POST   /customers/me/notifications/read — mark some (ids) or all read
+//	POST   /customers/me/push-devices. Register this device's Firebase token
+//	DELETE /customers/me/push-devices. Forget it, on sign-out
+//	GET    /customers/me/notifications. The in-app inbox, with the unread count
+//	POST   /customers/me/notifications/read. Mark some (ids) or all read
 func RegisterPushRoutes(r chi.Router, push *handlers.PushHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))

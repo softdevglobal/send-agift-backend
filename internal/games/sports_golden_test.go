@@ -7,7 +7,7 @@ import (
 
 // The logs below were produced by bots on seed "cafebabe". The Flutter
 // engines replay the same logs in send-agift-mobile/test/*_game_test.dart and
-// must land on the same numbers — if either side drifts, both fail.
+// must land on the same numbers. If either side drifts, both fail.
 
 var basketballGoldenLog = strings.Split("5:0:40,32:0:85,59:0:75,86:0:55,113:9:40,140:-13:85,167:8:70,194:11:60,221:-10:40,248:-16:85,275:0:70,302:34:55,329:-3:45,356:-28:85,383:-3:70,410:-27:55,437:72:40,464:-33:90,491:3:70,518:25:55,545:-20:40,572:15:85,599:5:70,626:5:55,653:17:40,680:-35:85,707:52:70,734:-70:60,761:-8:40,788:40:85,815:-58:70,842:65:55,869:-47:45,896:-46:85", ",")
 

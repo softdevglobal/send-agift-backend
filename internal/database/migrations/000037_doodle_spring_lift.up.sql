@@ -1,5 +1,5 @@
 -- A Doodle Jump spring now carries the climber three ledges, counting the
--- spring itself, rather than two — so it clears the two above it outright and
+-- spring itself, rather than two. So it clears the two above it outright and
 -- reads as a launch rather than a long step.
 --
 -- Sessions already in flight keep their own snapshot of the config they

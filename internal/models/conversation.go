@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Conversation maps to messaging.conversations — one chat thread (the "room").
+// Conversation maps to messaging.conversations. One chat thread (the "room").
 //
 // Type decides which optional FKs are filled:
 //   - product_inquiry → product_id + shop_id
@@ -52,7 +52,7 @@ type ConversationParticipant struct {
 	ImageURL    *string `json:"image_url,omitempty"`
 }
 
-// SupportCase maps to support.cases — admin help ticket metadata linked 1:1 to a conversation.
+// SupportCase maps to support.cases. Admin help ticket metadata linked 1:1 to a conversation.
 // Chat bubbles still live in messaging.messages; this row holds subject/status/priority
 // and who the ticket is about (counterpart_*).
 type SupportCase struct {
@@ -69,7 +69,7 @@ type SupportCase struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
-// Message maps to messaging.messages — one chat bubble.
+// Message maps to messaging.messages. One chat bubble.
 //
 // There is NO role column here. To know if the sender was customer or seller:
 // look up sender_user_id in conversation_participants for this conversation_id.

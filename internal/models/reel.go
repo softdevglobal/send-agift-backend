@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Reel maps to seller.reels — one short video or photo post by a seller.
+// Reel maps to seller.reels. One short video or photo post by a seller.
 type Reel struct {
 	ID               uuid.UUID  `json:"id"`
 	SellerID         uuid.UUID  `json:"seller_id"`

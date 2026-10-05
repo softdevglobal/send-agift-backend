@@ -245,7 +245,7 @@ func (g *FruitGame) BestCombo() int       { return g.bestCombo }
 func (g *FruitGame) Over() bool           { return g.over }
 func (g *FruitGame) Throws() []FruitThrow { return g.throws }
 
-// LastTick is when the final throw lands — the length of the whole round.
+// LastTick is when the final throw lands. The length of the whole round.
 func (g *FruitGame) LastTick() int {
 	last := 0
 	for _, t := range g.throws {

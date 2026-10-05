@@ -171,7 +171,7 @@ func (h *CustomerHandler) ListSavedGifts(w http.ResponseWriter, r *http.Request)
 }
 
 // DeleteSavedGift removes one saved gift by id (must belong to this customer).
-// No body — use URL {id}.
+// No body. Use URL {id}.
 func (h *CustomerHandler) DeleteSavedGift(w http.ResponseWriter, r *http.Request) {
 	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
 	savedGiftID := chi.URLParam(r, "id")

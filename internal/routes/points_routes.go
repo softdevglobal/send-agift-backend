@@ -13,11 +13,11 @@ import (
 //
 // Seller JWT:
 //
-//	GET  /sellers/me/points                                     — balance, reserved, rate, history
-//	GET  /sellers/me/points/purchases                           — purchase history
-//	POST /sellers/me/points/purchases                           — start a purchase (Idempotency-Key)
-//	POST /sellers/me/points/purchases/{purchaseID}/cancel       — abandon a pending purchase
-//	POST /sellers/me/points/purchases/{purchaseID}/test-payment — test provider only
+//	GET  /sellers/me/points                                    . Balance, reserved, rate, history
+//	GET  /sellers/me/points/purchases                          . Purchase history
+//	POST /sellers/me/points/purchases                          . Start a purchase (Idempotency-Key)
+//	POST /sellers/me/points/purchases/{purchaseID}/cancel      . Abandon a pending purchase
+//	POST /sellers/me/points/purchases/{purchaseID}/test-payment. Test provider only
 //
 // Payment provider (HMAC-signed, no JWT):
 //

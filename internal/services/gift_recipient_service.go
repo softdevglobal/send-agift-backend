@@ -19,8 +19,8 @@ import (
 const GiftRecipientDefaultPassword = "00001111"
 
 // GiftRecipientService looks after the person a gift is sent to: it gives
-// them a customer account when the order is placed — so they can review the
-// gift and receive any points sent with it — and emails them once the gift
+// them a customer account when the order is placed. So they can review the
+// gift and receive any points sent with it. And emails them once the gift
 // is delivered. Until then they hear nothing, so the surprise holds.
 type GiftRecipientService struct {
 	orders    *repository.OrderRepository

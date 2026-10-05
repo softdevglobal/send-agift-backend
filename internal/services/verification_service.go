@@ -205,7 +205,7 @@ func (s *SellerVerificationService) AdminList(ctx context.Context, status, query
 	return &AdminSellerList{Sellers: sellers, Total: total, Counts: counts}, nil
 }
 
-// AdminGet is a seller's full profile — addresses and shops — for review.
+// AdminGet is a seller's full profile. Addresses and shops. For review.
 func (s *SellerVerificationService) AdminGet(ctx context.Context, sellerID string) (*models.SellerDetails, error) {
 	if _, err := uuid.Parse(sellerID); err != nil {
 		return nil, ErrSellerNotFound

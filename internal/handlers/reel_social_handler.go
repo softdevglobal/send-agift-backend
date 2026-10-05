@@ -57,7 +57,7 @@ func (h *ReelSocialHandler) optionalActorFromHeaders(r *http.Request) services.S
 	return services.SocialActor{}
 }
 
-// GetLikes handles GET /reels/{id}/likes — fully public (like_count + recent_likers).
+// GetLikes handles GET /reels/{id}/likes. Fully public (like_count + recent_likers).
 // Optional JWT / X-Guest-Token only affects liked_by_requester.
 func (h *ReelSocialHandler) GetLikes(w http.ResponseWriter, r *http.Request) {
 	reelID := chi.URLParam(r, "id")

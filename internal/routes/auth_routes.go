@@ -10,7 +10,14 @@ import (
 )
 
 // RegisterAuthRoutes mounts the shared login for admin, customer, and seller.
-func RegisterAuthRoutes(r chi.Router, auth *handlers.AuthHandler, jwtSecret string) {
+func RegisterAuthRoutes(r chi.Router, auth *handlers.AuthHandler, social *handlers.SocialAuthHandler, jwtSecret string) {
+	// Customer sign-in with Google or Facebook, limited per address.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RateLimitByIP(20, time.Minute))
+		r.Post("/auth/social", social.SignIn)
+		r.Post("/auth/social/complete", social.Complete)
+	})
+
 	// A signed-in admin confirms their password again before a high-risk
 	// action; limited per address so it cannot be used to guess passwords.
 	r.Group(func(r chi.Router) {

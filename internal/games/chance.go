@@ -14,7 +14,7 @@ import (
 // Unlike the skill games, nothing about a chance play is replayed from moves:
 // the server decides the outcome the moment the play is made, with a
 // cryptographically secure generator, and keeps the draw with the play so it
-// can be audited. The app only reveals the result — the wheel, the scratch
+// can be audited. The app only reveals the result. The wheel, the scratch
 // card and the chests are presentation, not input.
 
 const (

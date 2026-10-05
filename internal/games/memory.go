@@ -22,7 +22,7 @@ type MemoryConfig struct {
 
 // DefaultMemoryConfig mirrors the 1.0.0 version seeded by migration 000032
 // and resized since: 6x6 by 000033, 8x8 by 000034, 7x6 by 000035, and the
-// full 7x7 square by 000036 — 24 pairs, with the odd forty-ninth slot drawn
+// full 7x7 square by 000036. 24 pairs, with the odd forty-ninth slot drawn
 // by the client as an emblem rather than a card.
 func DefaultMemoryConfig() MemoryConfig {
 	return MemoryConfig{

@@ -242,8 +242,8 @@ func (s *EmailService) DeliverDue(ctx context.Context, limit int) (int, error) {
 	return len(due), nil
 }
 
-// permanentEmailError is a send the provider refused for good — a bad
-// address or a rejected sender — so it is not retried.
+// permanentEmailError is a send the provider refused for good. A bad
+// address or a rejected sender. So it is not retried.
 type permanentEmailError struct{ msg string }
 
 func (e *permanentEmailError) Error() string { return e.msg }
@@ -382,7 +382,7 @@ func firstName(name, email string) string {
 	return "there"
 }
 
-// businessName greets a seller by their whole trading name — the first word
+// businessName greets a seller by their whole trading name. The first word
 // of "Kim's Blooms" is not a name.
 func businessName(name, email string) string {
 	if n := strings.TrimSpace(name); n != "" {

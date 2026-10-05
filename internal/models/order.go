@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Order maps to marketplace.orders — one checkout, one header row.
+// Order maps to marketplace.orders. One checkout, one header row.
 type Order struct {
 	ID              uuid.UUID  `json:"id"`
 	OrderNumber     string     `json:"order_number"`
@@ -34,7 +34,7 @@ type Order struct {
 
 // OrderItemTracking is the part of a shipment a customer is allowed to see:
 // who is carrying the parcel and how to follow it. Deliberately not the whole
-// shipment row — the label PDF, provider ids, parcel dimensions and customs
+// shipment row. The label PDF, provider ids, parcel dimensions and customs
 // paperwork are the seller's business, not the buyer's.
 type OrderItemTracking struct {
 	// Carrier name, e.g. "USPS", or the seller's own courier when they
@@ -54,7 +54,7 @@ type OrderItemTracking struct {
 	ShippedAt    time.Time  `json:"shipped_at"`
 }
 
-// OrderItem maps to marketplace.order_items — one product from one shop.
+// OrderItem maps to marketplace.order_items. One product from one shop.
 type OrderItem struct {
 	ID               uuid.UUID `json:"id"`
 	OrderID          uuid.UUID `json:"order_id"`

@@ -35,8 +35,8 @@ func (r *PushRepository) UpsertDevice(ctx context.Context, customerID uuid.UUID,
 }
 
 // RequeueMissed puts back in the queue the customer's unread notifications
-// that never reached a phone — they had none registered, or only dead ones
-// — while their competition is still open. Called when a device registers,
+// that never reached a phone. They had none registered, or only dead ones
+// while their competition is still open. Called when a device registers,
 // so signing in delivers what arrived while signed out. Returns how many.
 func (r *PushRepository) RequeueMissed(ctx context.Context, customerID uuid.UUID) (int64, error) {
 	tag, err := r.db.Exec(ctx, `
@@ -191,8 +191,8 @@ func (r *PushRepository) DuePushes(ctx context.Context, limit int) ([]PendingPus
 	return out, rows.Err()
 }
 
-// MarkPush records how a send went: sent, skipped or failed, or — with a
-// retry time — left pending for another try.
+// MarkPush records how a send went: sent, skipped or failed, or. With a
+// retry time. Left pending for another try.
 func (r *PushRepository) MarkPush(ctx context.Context, id uuid.UUID, status string, lastError *string, retryAt *time.Time) error {
 	_, err := r.db.Exec(ctx, `
 		update core.push_notifications

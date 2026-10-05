@@ -92,7 +92,7 @@ func (h *CompetitionHandler) Play(w http.ResponseWriter, r *http.Request) {
 }
 
 // writePlayError is writeError for plays: a refusal carries its machine code
-// and details, and anything unexpected is PLAY_TRANSACTION_FAILED — the
+// and details, and anything unexpected is PLAY_TRANSACTION_FAILED. The
 // transaction rolled back, so nothing was charged.
 func (h *CompetitionHandler) writePlayError(w http.ResponseWriter, err error) {
 	var refusal *services.PlayRefusal

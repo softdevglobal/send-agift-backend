@@ -70,6 +70,8 @@ func New(
 	push *handlers.PushHandler,
 	// Handler instance that confirms seller emails and serves the admin seller review queue
 	verification *handlers.VerificationHandler,
+	// Handler instance that signs customers in with Google and Facebook
+	social *handlers.SocialAuthHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -82,7 +84,7 @@ func New(
 	// These are applied to all routes in order
 
 	// CORS: needed for browser frontends (React/Vite on another port).
-	// Postman / curl do not use CORS — they already work without this.
+	// Postman / curl do not use CORS. They already work without this.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -140,7 +142,7 @@ func New(
 
 		// Register authentication routes (login, register, refresh token, etc)
 		// Example: POST /api/v1/login, POST /api/v1/register
-		RegisterAuthRoutes(r, auth, jwtSecret)
+		RegisterAuthRoutes(r, auth, social, jwtSecret)
 
 		// Register admin-only routes (requires valid JWT token)
 		// Example: GET /api/v1/admin/dashboard, DELETE /api/v1/admin/users/:id

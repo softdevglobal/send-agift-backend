@@ -129,6 +129,11 @@ func main() {
 	go giftRecipientService.RunDeliveredNotices(context.Background(), time.Minute,
 		database.Exclusive(pool, database.LockGiftDeliveryNotices))
 	verificationHandler := handlers.NewVerificationHandler(verificationService)
+	// Customer sign-in with Google and Facebook. A provider without keys
+	// answers 503, so its button can be shown or hidden by configuration.
+	socialAuthService := services.NewSocialAuthService(customers, countries, countryCapabilityService, emailService,
+		cfg.GoogleClientIDs, cfg.FacebookAppID, cfg.FacebookAppSecret, cfg.JWTSecret, cfg.JWTExpiry)
+	socialAuthHandler := handlers.NewSocialAuthHandler(socialAuthService)
 
 	authHandler := handlers.NewAuthHandler(authService)          // create a new auth handler
 	adminHandler := handlers.NewAdminHandler(adminService)       // create a new admin handler
@@ -159,7 +164,7 @@ func main() {
 	availabilityHandler := handlers.NewAvailabilityHandler(availabilityService)
 
 	// Push notifications (Firebase Cloud Messaging): queued with the event
-	// they announce — a competition being published — and sent by this loop.
+	// they announce. A competition being published. And sent by this loop.
 	// Without credentials they wait in the queue until some are configured.
 	fcmSender, err := services.NewFCMSender(context.Background(), cfg.FirebaseCredentialsFile, cfg.FirebaseCredentialsJSON)
 	if err != nil {
@@ -176,7 +181,7 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, verificationHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, verificationHandler, socialAuthHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

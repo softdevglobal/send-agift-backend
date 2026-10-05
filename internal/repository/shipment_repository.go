@@ -498,7 +498,7 @@ func (r *ShipmentRepository) UpdateTrackingStatus(ctx context.Context, trackingN
 }
 
 // MarkOrderItemDelivered sets one order_items.fulfilment_status = delivered.
-// One seller's line completing does not complete the whole order — see
+// One seller's line completing does not complete the whole order. See
 // MarkOrderDeliveredIfComplete.
 func (r *ShipmentRepository) MarkOrderItemDelivered(ctx context.Context, orderItemID uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `

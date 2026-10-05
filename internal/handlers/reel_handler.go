@@ -133,19 +133,19 @@ func (h *ReelHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, map[string]string{"message": "reel deleted"})
 }
 
-// Feed handles GET /reels — the public customer feed.
+// Feed handles GET /reels. The public customer feed.
 // Query params: shop_id, product_id, scope (all|shop|product), limit (max 50), cursor.
 func (h *ReelHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	h.writeFeed(w, r, "", "")
 }
 
-// FeedByShop handles GET /shops/{shopId}/reels — public reels for one shop.
+// FeedByShop handles GET /shops/{shopId}/reels. Public reels for one shop.
 // Add ?scope=shop for the shop's own videos only (no product tagged).
 func (h *ReelHandler) FeedByShop(w http.ResponseWriter, r *http.Request) {
 	h.writeFeed(w, r, chi.URLParam(r, "shopId"), "")
 }
 
-// FeedByProduct handles GET /products/{productId}/reels — public reels for one product.
+// FeedByProduct handles GET /products/{productId}/reels. Public reels for one product.
 func (h *ReelHandler) FeedByProduct(w http.ResponseWriter, r *http.Request) {
 	h.writeFeed(w, r, "", chi.URLParam(r, "productId"))
 }
@@ -184,7 +184,7 @@ func (h *ReelHandler) writeFeed(w http.ResponseWriter, r *http.Request, shopID, 
 	utils.JSON(w, http.StatusOK, feed)
 }
 
-// GetPublic handles GET /reels/{id} — published public reel, counts a view.
+// GetPublic handles GET /reels/{id}. Published public reel, counts a view.
 func (h *ReelHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 	reelID := chi.URLParam(r, "id")
 	details, err := h.reels.GetPublic(r.Context(), reelID)

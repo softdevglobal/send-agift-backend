@@ -110,7 +110,7 @@ func (h *VerificationHandler) RequireApprovedSeller(next http.Handler) http.Hand
 		}
 		if status != "verified" {
 			writeCodedError(w, http.StatusForbidden, "seller_not_approved",
-				"your seller account is waiting for approval — you can open shops and list gifts once it's active")
+				"Your seller account is waiting for approval. You can open shops and list gifts once it's active")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -124,13 +124,13 @@ func (h *VerificationHandler) writeError(w http.ResponseWriter, err error, fallb
 		w.Header().Set("Retry-After", strconv.Itoa(int(cooldown.RetryAfter.Seconds())+1))
 		writeCodedError(w, http.StatusTooManyRequests, "code_cooldown", cooldown.Error())
 	case errors.Is(err, services.ErrEmailCodeInvalid):
-		writeCodedError(w, http.StatusBadRequest, "code_invalid", "that code isn't right — check the email and try again")
+		writeCodedError(w, http.StatusBadRequest, "code_invalid", "That code isn't right. Check the email and try again")
 	case errors.Is(err, services.ErrEmailCodeExpired):
-		writeCodedError(w, http.StatusBadRequest, "code_expired", "that code has expired — ask for a new one")
+		writeCodedError(w, http.StatusBadRequest, "code_expired", "That code has expired. Ask for a new one")
 	case errors.Is(err, services.ErrEmailCodeLocked):
-		writeCodedError(w, http.StatusBadRequest, "code_locked", "too many wrong codes — ask for a new one")
+		writeCodedError(w, http.StatusBadRequest, "code_locked", "Too many wrong codes. Ask for a new one")
 	case errors.Is(err, services.ErrEmailAlreadyVerified):
-		writeCodedError(w, http.StatusConflict, "already_verified", "this email is already confirmed — sign in to continue")
+		writeCodedError(w, http.StatusConflict, "already_verified", "This email is already confirmed. Sign in to continue")
 	case errors.Is(err, services.ErrInvalidSellerReview):
 		utils.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrSellerEmailUnconfirmed):

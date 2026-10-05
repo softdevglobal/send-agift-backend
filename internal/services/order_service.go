@@ -30,7 +30,7 @@ var (
 	ErrGiftPoints = errors.New("gift points cannot be sent")
 	// ErrOrderRewardSpent is cancelling an order whose reward points have
 	// already been spent.
-	ErrOrderRewardSpent = errors.New("this order's reward points have already been spent, so it can no longer be cancelled here — contact support")
+	ErrOrderRewardSpent = errors.New("this order's reward points have already been spent, so it can no longer be cancelled here. Contact support")
 	// ErrGiftPointsBalance is more points attached than the customer holds.
 	ErrGiftPointsBalance = errors.New("not enough points to attach to this gift")
 )

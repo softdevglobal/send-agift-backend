@@ -58,14 +58,14 @@ func (r *IdempotencyRepository) Acquire(ctx context.Context, scope, key string) 
 	case "completed":
 		return response, true, nil
 	case "failed":
-		// Previous attempt failed — reclaim for a clean retry.
+		// Previous attempt failed. Reclaim for a clean retry.
 		_, err = r.db.Exec(ctx, `
 			update core.idempotency_keys
 			set status = 'processing', response_body = null, updated_at = now()
 			where key = $1 and status = 'failed'`, key)
 		return nil, false, err
 	case "processing":
-		// Crashed / abandoned attempt — reclaim after a short grace period.
+		// Crashed / abandoned attempt. Reclaim after a short grace period.
 		if time.Since(updatedAt) >= staleProcessingAfter {
 			tag, err = r.db.Exec(ctx, `
 				update core.idempotency_keys

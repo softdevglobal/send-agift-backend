@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Game maps to competition.games — the catalog entry for one skill game.
+// Game maps to competition.games. The catalog entry for one skill game.
 type Game struct {
 	ID          uuid.UUID `json:"id"`
 	Slug        string    `json:"slug"`
@@ -34,7 +34,7 @@ type GameVersion struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
-// GameSession maps to competition.game_sessions — one play.
+// GameSession maps to competition.game_sessions. One play.
 // CustomerID / GuestToken are never exposed in JSON; they exist only to prove
 // that the account submitting a score is the one that started the session.
 type GameSession struct {
@@ -53,7 +53,7 @@ type GameSession struct {
 	SubmittedAt   *time.Time      `json:"submitted_at,omitempty"`
 }
 
-// GameScore maps to competition.game_scores — the server-computed result.
+// GameScore maps to competition.game_scores. The server-computed result.
 type GameScore struct {
 	SessionID        uuid.UUID        `json:"session_id"`
 	GameVersionID    uuid.UUID        `json:"game_version_id"`
@@ -143,7 +143,7 @@ type LeaderboardEntry struct {
 	IsMe        bool      `json:"is_me"`
 }
 
-// LeaderboardView is a practice board plus the caller's own row, when known —
+// LeaderboardView is a practice board plus the caller's own row, when known.
 // even if they rank outside the top of the board.
 type LeaderboardView struct {
 	GameSlug     string             `json:"game_slug"`

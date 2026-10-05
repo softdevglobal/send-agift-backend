@@ -8,7 +8,7 @@ import (
 
 // The whole router must build: chi panics at startup on clashing patterns.
 func TestRouterBuilds(t *testing.T) {
-	h := New(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "secret")
+	h := New(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "secret")
 	for _, path := range []string{
 		"/api/v1/competitions/00000000-0000-0000-0000-000000000000/plays",
 		"/api/v1/admin/competitions/00000000-0000-0000-0000-000000000000/prize-adjustments",

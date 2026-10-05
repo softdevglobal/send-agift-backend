@@ -14,7 +14,7 @@ import (
 )
 
 // ErrScoreNotReviewable means the score is not in a state an admin can
-// change — a log that failed to replay stays rejected.
+// change. A log that failed to replay stays rejected.
 var ErrScoreNotReviewable = errors.New("score cannot be reviewed")
 
 // adminPlayer shapes a player for the admin console: customers by name (or
@@ -136,7 +136,7 @@ func (r *GameRepository) AdminGameSummaries(ctx context.Context) ([]models.Admin
 // AdminLeaderboard ranks every player's best accepted score for a game,
 // across all its versions, with how often they played.
 //
-// Guests rank alongside customers — a board that hid them showed nothing on a
+// Guests rank alongside customers. A board that hid them showed nothing on a
 // game most people play signed out. Each row still carries which it is.
 func (r *GameRepository) AdminLeaderboard(ctx context.Context, slug string, limit int) ([]models.AdminLeaderboardRow, error) {
 	rows, err := r.db.Query(ctx, `

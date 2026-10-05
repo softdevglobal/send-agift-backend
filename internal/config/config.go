@@ -34,14 +34,14 @@ type Config struct {
 	// minor units of PointsCurrency (10 = $0.10 a point). The provider is
 	// "instant" (the default until Stripe is connected: points are credited
 	// the moment they are bought), "manual" (an admin confirms each payment)
-	// or "test" (sellers approve their own purchase — development only). The webhook secret
+	// or "test" (sellers approve their own purchase. Development only). The webhook secret
 	// signs provider confirmations; without it the webhook is refused.
 	PointsCentsPerPoint   int
 	PointsCurrency        string
 	PointsPaymentProvider string
 	PointsWebhookSecret   string
 	// PointsRewardTiming is when a product's reward points reach the buyer:
-	// "order" (as soon as the order is placed — the default while there is
+	// "order" (as soon as the order is placed. The default while there is
 	// no payment step) or "delivery".
 	PointsRewardTiming string
 
@@ -62,6 +62,15 @@ type Config struct {
 	ZeptoMailAPIURL string
 	// AppWebURL is the customer website, for links and images in emails.
 	AppWebURL string
+
+	// Customer sign-in with Google and Facebook. Without an ID the provider's
+	// button is refused with 503. GoogleClientIDs lists every OAuth client
+	// whose tokens are accepted: the web client first, then any Android or
+	// iOS clients (GOOGLE_EXTRA_CLIENT_IDS, comma separated).
+	GoogleClientIDs    []string
+	GoogleClientSecret string
+	FacebookAppID      string
+	FacebookAppSecret  string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -99,6 +108,11 @@ func Load() (*Config, error) {
 		ZeptoMailFromName:    envOr("ZEPTOMAIL_SYSTEM_FROM_NAME", "SendAGift"),
 		ZeptoMailAPIURL:      envOr("ZEPTOMAIL_API_URL", "https://api.zeptomail.com/v1.1/email"),
 		AppWebURL:            strings.TrimRight(envOr("APP_WEB_URL", "http://localhost:5173"), "/"),
+
+		GoogleClientIDs:    listEnv("GOOGLE_CLIENT_ID", "GOOGLE_EXTRA_CLIENT_IDS"),
+		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		FacebookAppID:      os.Getenv("FACEBOOK_APP_ID"),
+		FacebookAppSecret:  os.Getenv("FACEBOOK_APP_SECRET"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -118,6 +132,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ZeptoMailToken != "" && cfg.ZeptoMailFromAddress == "" {
 		return nil, fmt.Errorf("ZEPTOMAIL_SYSTEM_FROM_ADDRESS is required when ZEPTOMAIL_SYSTEM_TOKEN is set")
+	}
+	if (cfg.FacebookAppID == "") != (cfg.FacebookAppSecret == "") {
+		return nil, fmt.Errorf("set both FACEBOOK_APP_ID and FACEBOOK_APP_SECRET, or neither")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")
@@ -163,4 +180,18 @@ func minutesOr(key string, fallback int) time.Duration {
 		return time.Duration(fallback) * time.Minute
 	}
 	return time.Duration(n) * time.Minute
+}
+
+// listEnv reads comma-separated values from the given variables, in order,
+// skipping blanks.
+func listEnv(keys ...string) []string {
+	var out []string
+	for _, key := range keys {
+		for _, v := range strings.Split(os.Getenv(key), ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
 }

@@ -2,7 +2,7 @@
 --
 -- An 8x8 board was 64 cards, which is more than reads comfortably on a phone.
 -- A true 7x7 is 49 cards, an odd number, so it cannot be dealt as pairs at all
--- — 7x6 is the closest board to it that can.
+--. 7x6 is the closest board to it that can.
 --
 -- Sessions already in flight keep their own snapshot of the config they were
 -- dealt with, so this only changes what a session started after it gets.

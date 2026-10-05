@@ -26,8 +26,8 @@ func DefaultSlideConfig() SlideConfig {
 	return SlideConfig{
 		Size:         4,
 		ShuffleMoves: 140,
-		// A 4x4 takes far more moves than a 3x3 — around 80 played perfectly,
-		// a few hundred played well — so the base and the floor are set to
+		// A 4x4 takes far more moves than a 3x3. Around 80 played perfectly,
+		// a few hundred played well. So the base and the floor are set to
 		// keep those apart instead of bottoming out halfway through a good
 		// solve. Every board is solvable in well under 600 moves.
 		SolveBase:         14000,
@@ -178,7 +178,7 @@ func (p *SlidePuzzle) slide(dir string) {
 }
 
 // Move slides one tile. Unlike 2048, an impossible move is never something an
-// honest client sends — it only offers tiles next to the gap — so it is an
+// honest client sends. It only offers tiles next to the gap. So it is an
 // error rather than a no-op.
 func (p *SlidePuzzle) Move(dir string) error {
 	if !isDirection(dir) {

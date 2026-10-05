@@ -130,7 +130,7 @@ const maxSessionLevel = 8
 //
 // level lets a game with level progression (currently Memory Match) ask for
 // a harder board than its base config. The scaled config is computed once,
-// here, and stored on the session itself — replay just reads it back, so a
+// here, and stored on the session itself. Replay just reads it back, so a
 // level is never something the server has to remember separately.
 func (s *GameService) StartSession(ctx context.Context, slug string, actor SocialActor, level int) (*models.GameSessionView, error) {
 	identity, err := actor.toIdentity()
@@ -145,7 +145,7 @@ func (s *GameService) StartSession(ctx context.Context, slug string, actor Socia
 	// A paid play needs an account to pay from.
 	cost := s.costOf(pg.Game.PlayCostPoints)
 	if cost > 0 && identity.CustomerID == nil {
-		return nil, refuse(PlaySignInRequired, fmt.Sprintf("Sign in to play — %s costs %d points.",
+		return nil, refuse(PlaySignInRequired, fmt.Sprintf("Sign in to play. %s costs %d points.",
 			pg.Game.Name, cost), map[string]any{"points_required": cost})
 	}
 
@@ -277,7 +277,7 @@ func (s *GameService) SubmitScore(ctx context.Context, sessionID string, actor S
 	moveLogHash := hashMoves(in.Moves)
 
 	// Replay the game from the seed this server issued. If the move log cannot
-	// produce a legal game, the submission is rejected — but we still record it
+	// produce a legal game, the submission is rejected. But we still record it
 	// so the attempt is preserved as evidence.
 	result, replayErr := engine.Replay(session.ServerSeed, session.Config, in.Moves)
 	if replayErr != nil {
@@ -460,7 +460,7 @@ func scaleConfigForLevel(slug string, base json.RawMessage, level int) (json.Raw
 
 	// The board itself does not grow. An 8x8 grid is already as many cards as
 	// a phone can show at a readable size, and the client only has one look
-	// per pair to draw with — more pairs than looks would put two
+	// per pair to draw with. More pairs than looks would put two
 	// identical-looking cards on the board that are not a pair, which no
 	// amount of memory can beat.
 	//

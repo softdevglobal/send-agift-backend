@@ -31,7 +31,7 @@ func (h *ShopsHandler) ListActiveShops(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, items)
 }
 
-// GetShop returns one active shop — the public shop page header.
+// GetShop returns one active shop. The public shop page header.
 func (h *ShopsHandler) GetShop(w http.ResponseWriter, r *http.Request) {
 	shop, err := h.marketplace.GetActiveShop(r.Context(), chi.URLParam(r, "shopId"))
 	if err != nil {
@@ -55,7 +55,7 @@ func (h *ShopsHandler) ListShopProducts(w http.ResponseWriter, r *http.Request) 
 	utils.JSON(w, http.StatusOK, items)
 }
 
-// GetProduct returns one published product plus its shop — the public product page.
+// GetProduct returns one published product plus its shop. The public product page.
 // Query param: customer_type=personal|corporate (optional; defaults to personal)
 func (h *ShopsHandler) GetProduct(w http.ResponseWriter, r *http.Request) {
 	productID := chi.URLParam(r, "productId")

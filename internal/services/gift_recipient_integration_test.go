@@ -14,7 +14,7 @@ import (
 
 // Integration test for what happens around a gift: the buyer's confirmation,
 // the recipient's account made silently at order time, and the recipient's
-// email once — and only once — the gift is delivered.
+// email once. And only once. The gift is delivered.
 //
 //	TEST_DATABASE_URL=postgres://user:pass@localhost:5432/scratch_db?sslmode=disable \
 //	    go test ./internal/services -run GiftRecipient -v

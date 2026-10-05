@@ -1,7 +1,7 @@
 -- Snake opens slower still, and scoring is what winds it up.
 --
--- The opening tick goes from 220ms to 300ms — slow enough to place the first
--- turns without hurrying — and a gift now takes 12ms off instead of 6, so
+-- The opening tick goes from 220ms to 300ms. Slow enough to place the first
+-- turns without hurrying. And a gift now takes 12ms off instead of 6, so
 -- every gift is felt. The drift with time is eased back to one millisecond
 -- every 45 ticks, leaving the pace mostly in the player's hands.
 UPDATE competition.game_versions v

@@ -100,7 +100,7 @@ type CricketOutcome struct {
 
 // CricketGame is a batting challenge: twelve balls, three wickets.
 //
-// Every delivery — its pace and line — and where the fielders stand are
+// Every delivery. Its pace and line. And where the fielders stand are
 // drawn from the seed before a ball is bowled and shown on screen, so with a
 // shared competition seed everyone faces the same bowling. The batter taps to
 // swing: timing against the ball's arrival decides how well it is struck,

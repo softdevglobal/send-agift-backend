@@ -13,7 +13,7 @@ import (
 	"myapp/internal/repository" // data-access layer this service delegates persistence to
 )
 
-// Sentinel errors this service can return — the handler layer maps each of these
+// Sentinel errors this service can return. The handler layer maps each of these
 // to a specific HTTP status code (see writeError in the previous file)
 var (
 	ErrConversationNotFound  = errors.New("conversation not found")
@@ -23,12 +23,12 @@ var (
 	ErrSupportUserNotFound   = errors.New("support counterpart not found")
 	ErrInvalidChatAttachment = errors.New("invalid chat attachment")
 	// NOTE: ErrProductNotFound and ErrOrderItemNotFound are referenced later in this file
-	// (and in the handler's writeError switch) but are NOT declared in this var block —
+	// (and in the handler's writeError switch) but are NOT declared in this var block.
 	// they must be defined elsewhere in the package (another file), otherwise this won't compile.
 )
 
 // MessagingService owns product-inquiry, order, and admin support chat (text + attachments).
-// It orchestrates business rules on top of several repositories — it doesn't talk to the DB directly.
+// It orchestrates business rules on top of several repositories. It doesn't talk to the DB directly.
 type MessagingService struct {
 	msg       *repository.MessagingRepository // conversations/messages/participants persistence
 	orders    *repository.OrderRepository     // looks up products/order items for inquiry & order chats
@@ -64,14 +64,14 @@ func NewMessagingService(
 const maxChatAttachments = 5
 
 // StartConversationInput opens (or reuses) a product, order, or support thread.
-// It's a single struct covering all three conversation types — fields relevant to
+// It's a single struct covering all three conversation types. Fields relevant to
 // one type are simply left nil/omitted for the others.
 type StartConversationInput struct {
-	Type              string                `json:"type"`                // product_inquiry | order | support — determines which fields below are required
+	Type              string                `json:"type"`                // product_inquiry | order | support. Determines which fields below are required
 	ProductID         *string               `json:"product_id"`          // required for product_inquiry
 	OrderItemID       *string               `json:"order_item_id"`       // required for order
-	CounterpartRole   *string               `json:"counterpart_role"`    // customer | seller — required when an admin opens a support case
-	CounterpartUserID *string               `json:"counterpart_user_id"` // target customer/seller id — required when an admin opens a support case
+	CounterpartRole   *string               `json:"counterpart_role"`    // customer | seller. Required when an admin opens a support case
+	CounterpartUserID *string               `json:"counterpart_user_id"` // target customer/seller id. Required when an admin opens a support case
 	Subject           *string               `json:"subject"`             // optional free-text subject, support only
 	Priority          *string               `json:"priority"`            // low|normal|high|urgent, support only (admin-opened)
 	Body              *string               `json:"body"`                // optional first message text
@@ -122,7 +122,7 @@ func (s *MessagingService) Start(ctx context.Context, userID, role string, in St
 
 // startProductInquiry creates (or reuses) a customer's pre-purchase question thread about a product.
 func (s *MessagingService) startProductInquiry(ctx context.Context, userID, role string, in StartConversationInput) (*models.ConversationDetails, error) {
-	// Only customers may initiate a product inquiry — sellers/admins can't start one on someone's behalf
+	// Only customers may initiate a product inquiry. Sellers/admins can't start one on someone's behalf
 	if role != "customer" {
 		return nil, ErrForbiddenConversation
 	}
@@ -136,11 +136,11 @@ func (s *MessagingService) startProductInquiry(ctx context.Context, userID, role
 	// (mirrors the DB's partial unique index idx_conversations_product_inquiry_open)
 	existing, err := s.msg.FindOpenProductInquiry(ctx, productID, userID)
 	if err == nil {
-		// Found one — just return its details rather than creating a duplicate
+		// Found one. Just return its details rather than creating a duplicate
 		return s.details(ctx, existing)
 	}
 	if !errors.Is(err, repository.ErrConversationNotFound) {
-		// Some other (unexpected) repository error — propagate it rather than treating as "not found"
+		// Some other (unexpected) repository error. Propagate it rather than treating as "not found"
 		return nil, err
 	}
 
@@ -157,7 +157,7 @@ func (s *MessagingService) startProductInquiry(ctx context.Context, userID, role
 		return nil, ErrProductNotFound
 	}
 
-	// Parse all the string IDs we got back into uuid.UUID — fails closed (returns raw err) if malformed,
+	// Parse all the string IDs we got back into uuid.UUID. Fails closed (returns raw err) if malformed,
 	// since these come from trusted internal data rather than client input
 	shopID, err := uuid.Parse(p.ShopID)
 	if err != nil {
@@ -302,7 +302,7 @@ func (s *MessagingService) startOrderChat(ctx context.Context, userID, role stri
 	}
 	if err := s.msg.CreateConversation(ctx, conv, participants); err != nil {
 		// Same race-condition fallback as product inquiry: someone else may have created the
-		// same order-item thread concurrently — re-check, re-verify participancy, and return it
+		// same order-item thread concurrently. Re-check, re-verify participancy, and return it
 		if existing, findErr := s.msg.FindByOrderItem(ctx, itemID); findErr == nil {
 			if _, perr := s.msg.GetForParticipant(ctx, existing.ID.String(), userID, role); perr != nil {
 				return nil, ErrConversationNotFound
@@ -365,13 +365,13 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 	existing, _, err := s.msg.FindOpenSupportForCounterpart(ctx, counterpartRole, counterpartUserID)
 	if err == nil {
 		// Add this admin to the existing thread (e.g. a second admin picking up a case,
-		// or the same admin re-opening it) — AddParticipant presumably no-ops or upserts
+		// or the same admin re-opening it). AddParticipant presumably no-ops or upserts
 		// if already a participant
 		if _, addErr := s.msg.AddParticipant(ctx, existing.ID.String(), adminID, "admin"); addErr != nil {
 			return nil, addErr
 		}
 		adminUUID, _ := uuid.Parse(adminID)
-		// NOTE: error from uuid.Parse here is silently discarded — adminID is assumed always
+		// NOTE: error from uuid.Parse here is silently discarded. AdminID is assumed always
 		// valid since it comes from the authenticated JWT, not client-supplied JSON
 		if err := s.maybeFirstMessage(ctx, existing.ID, adminUUID, "admin", in.Body, in.Attachments); err != nil {
 			return nil, err
@@ -399,7 +399,7 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 	}
 	switch priority {
 	case "low", "normal", "high", "urgent":
-		// valid — fall through
+		// valid. Fall through
 	default:
 		return nil, ErrInvalidConversation
 	}
@@ -439,7 +439,7 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 		// Race-condition fallback again: someone else opened a case for this counterpart first
 		if existing, _, findErr := s.msg.FindOpenSupportForCounterpart(ctx, counterpartRole, counterpartUserID); findErr == nil {
 			// Best-effort join; errors from AddParticipant are deliberately ignored here (`_, _ =`)
-			// since the primary goal — returning *a* valid conversation — still succeeds either way
+			// since the primary goal. Returning *a* valid conversation. Still succeeds either way
 			_, _ = s.msg.AddParticipant(ctx, existing.ID.String(), adminID, "admin")
 			return s.Get(ctx, adminID, "admin", existing.ID.String())
 		}
@@ -453,7 +453,7 @@ func (s *MessagingService) startAdminSupport(ctx context.Context, adminID string
 }
 
 // startUserSupport handles a customer or seller opening a help ticket with support staff
-// (they don't choose which admin — the system auto-assigns one).
+// (they don't choose which admin. The system auto-assigns one).
 func (s *MessagingService) startUserSupport(ctx context.Context, userID, role string, in StartConversationInput) (*models.ConversationDetails, error) {
 	// Reuse pattern: if this user already has an active support case, just return it
 	// rather than opening a duplicate ticket
@@ -479,7 +479,7 @@ func (s *MessagingService) startUserSupport(ctx context.Context, userID, role st
 	}
 
 	// Prefer an active admin so the ticket appears in an admin inbox immediately.
-	// This picks *some* available admin automatically — the user doesn't specify one
+	// This picks *some* available admin automatically. The user doesn't specify one
 	// (unlike startAdminSupport, where the admin explicitly targets a user)
 	admin, err := s.admins.GetFirstActive(ctx)
 	if err != nil {
@@ -499,7 +499,7 @@ func (s *MessagingService) startUserSupport(ctx context.Context, userID, role st
 		{UserID: userUUID, Role: role},
 		{UserID: admin.ID, Role: "admin"},
 	}
-	// Here, "counterpart" for a self-opened ticket is the user themself — since counterpart_role
+	// Here, "counterpart" for a self-opened ticket is the user themself. Since counterpart_role
 	// is what identifies which customer/seller the case is about, and here that IS the caller
 	sc := &models.SupportCase{
 		OpenedByUserID:    userUUID,
@@ -532,7 +532,7 @@ func (s *MessagingService) ensureCounterpartExists(ctx context.Context, role, id
 		if errors.Is(err, repository.ErrCustomerNotFound) {
 			return ErrSupportUserNotFound
 		}
-		// NOTE: any other error (nil included) is returned as-is here — if GetByID succeeds,
+		// NOTE: any other error (nil included) is returned as-is here. If GetByID succeeds,
 		// err is nil and this correctly returns nil (no error)
 		return err
 	case "seller":
@@ -651,7 +651,7 @@ func chatAssetTypeFromMime(mimeType string) (string, bool) {
 	}
 }
 
-// List returns the caller's inbox — only conversations where they are a participant
+// List returns the caller's inbox. Only conversations where they are a participant
 // with this role (e.g. seller JWT → only threads for that seller, not other sellers).
 func (s *MessagingService) List(ctx context.Context, userID, role string) ([]models.ConversationSummary, error) {
 	role = normalizeMessagingRole(role)
@@ -672,7 +672,7 @@ func (s *MessagingService) Get(ctx context.Context, userID, role, conversationID
 }
 
 // details assembles the full response shape for a conversation: the conversation itself,
-// its participants, and — if it's a support thread — the linked support case.
+// its participants, and. If it's a support thread. The linked support case.
 func (s *MessagingService) details(ctx context.Context, conv *models.Conversation) (*models.ConversationDetails, error) {
 	participants, err := s.msg.ListParticipants(ctx, conv.ID.String())
 	if err != nil {
@@ -688,7 +688,7 @@ func (s *MessagingService) details(ctx context.Context, conv *models.Conversatio
 			d.SupportCase = sc
 		} else if !errors.Is(err, repository.ErrConversationNotFound) {
 			// If the support case genuinely doesn't exist, that's silently tolerated (SupportCase
-			// stays nil) — but any OTHER error while fetching it is treated as a real failure
+			// stays nil). But any OTHER error while fetching it is treated as a real failure
 			return nil, err
 		}
 	}
@@ -767,7 +767,7 @@ func (s *MessagingService) MarkRead(ctx context.Context, userID, role, conversat
 	return nil
 }
 
-// Close marks a conversation closed for a participant (optional freeze — not auto).
+// Close marks a conversation closed for a participant (optional freeze. Not auto).
 func (s *MessagingService) Close(ctx context.Context, userID, role, conversationID string) (*models.ConversationDetails, error) {
 	role = normalizeMessagingRole(role)
 	if _, err := s.msg.GetForParticipant(ctx, conversationID, userID, role); err != nil {

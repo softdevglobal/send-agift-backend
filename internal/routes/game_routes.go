@@ -15,14 +15,14 @@ import (
 //
 // Catalog (public):
 //
-//	GET  /games                              — playable game collection
-//	GET  /games/{slug}                       — one game and its rules
-//	GET  /games/{slug}/leaderboard           — public board (+ my_best if identified)
+//	GET  /games                             . Playable game collection
+//	GET  /games/{slug}                      . One game and its rules
+//	GET  /games/{slug}/leaderboard          . Public board (+ my_best if identified)
 //
 // Play (customer JWT or guest token):
 //
-//	POST /games/{slug}/sessions              — start a play, returns the server seed
-//	POST /games/sessions/{sessionID}/submit  — submit the move log, get the real score
+//	POST /games/{slug}/sessions             . Start a play, returns the server seed
+//	POST /games/sessions/{sessionID}/submit . Submit the move log, get the real score
 func RegisterGameRoutes(r chi.Router, games *handlers.GameHandler, jwtSecret string) {
 	// Public catalog. The leaderboard accepts an optional identity, so it is
 	// mounted with a non-required identity middleware rather than left bare.

@@ -9,7 +9,7 @@ import (
 
 // The logs below were produced by bots on seed "cafebabe". The Flutter
 // engines replay the same logs in send-agift-mobile/test/*_test.dart and must
-// land on the same numbers — if either side drifts, both fail.
+// land on the same numbers. If either side drifts, both fail.
 
 var blockBlastGoldenLog = strings.Split("0:0:0,1:0:4,2:0:5,1:0:6,0:0:0,2:0:1,0:0:6,1:0:4,2:1:0,0:0:3,1:5:3,2:0:3,0:2:2,1:1:4,2:1:0,2:3:0,0:0:0,1:4:0,0:4:4,1:2:2,2:0:4,0:1:5,1:2:0,2:2:4,0:4:4,1:2:6,2:3:0,0:4:0,2:5:0,1:0:0,0:6:2,1:2:5,2:4:2,0:1:0,2:6:0,1:3:0,0:4:4,1:2:2,2:4:5,2:5:6,0:4:0,1:6:0,0:4:3,1:0:0,2:4:1,1:7:1,0:0:2,2:2:0,0:0:6,1:1:6", ",")
 
@@ -105,8 +105,8 @@ func TestHillCrossLanguageGolden(t *testing.T) {
 	}
 }
 
-// Bubble Shooter's log is a mix of aims — sideways units per 1000 of rise,
-// so the flight banks off the walls — and "s" swaps of the two queued
+// Bubble Shooter's log is a mix of aims. Sideways units per 1000 of rise,
+// so the flight banks off the walls. And "s" swaps of the two queued
 // colours. It was played by a bot that picks the best shot available, which
 // is what makes it worth pinning: a bot firing at random on this same seed
 // pops nothing at all, so these numbers only hold if the flight physics and

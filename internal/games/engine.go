@@ -120,7 +120,7 @@ func isDirection(dir string) bool { return opposite(dir) != "" }
 // Integer-only on purpose: floating point can round differently between Go
 // and Dart (Go may fuse multiply-adds on some CPUs), and the client and the
 // server must agree on every position exactly. u must be non-negative and
-// period even, so every division here is of non-negative numbers — Go and
+// period even, so every division here is of non-negative numbers. Go and
 // Dart truncate those identically.
 func triangle(u, period, amp int) int {
 	half := period / 2

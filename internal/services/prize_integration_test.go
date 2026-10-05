@@ -22,8 +22,8 @@ import (
 )
 
 // Integration tests for the Progressive Prize engine, run against a real
-// Postgres because the guarantees under test — row locks, one transaction,
-// unique keys, check constraints — live in the database. Each maps to an
+// Postgres because the guarantees under test. Row locks, one transaction,
+// unique keys, check constraints. Live in the database. Each maps to an
 // acceptance criterion in the spec (§11).
 //
 //	TEST_DATABASE_URL=postgres://user:pass@localhost:5432/scratch_db?sslmode=disable \
@@ -325,7 +325,7 @@ func TestPrizeIdempotentRetry(t *testing.T) {
 	f.reconciled(c.ID)
 }
 
-// AC-05: 100 plays at once — 100 plays, 100 charges, 100 increments, none
+// AC-05: 100 plays at once. 100 plays, 100 charges, 100 increments, none
 // lost.
 func TestPrizeConcurrentPlays(t *testing.T) {
 	f := newPrizeFixture(t)
@@ -576,7 +576,7 @@ func TestPrizeCancelRefundsEverything(t *testing.T) {
 }
 
 // A round played to the end: scores, close, freeze, finalise with the
-// grown prize split between winners, validate and settle — and the ledger
+// grown prize split between winners, validate and settle. And the ledger
 // still explains every cent.
 func TestPrizeSettlement(t *testing.T) {
 	f := newPrizeFixture(t)
@@ -682,7 +682,7 @@ func TestPrizePointsAdjustments(t *testing.T) {
 }
 
 // forceDraws makes the next secure draws return these values (mod n), then
-// always 1 — i.e. a losing draw.
+// always 1. I.e. a losing draw.
 func forceDraws(t *testing.T, values ...int64) {
 	t.Helper()
 	orig := games.SecureIntn
@@ -876,7 +876,7 @@ func TestPointsEarning(t *testing.T) {
 }
 
 // A quiz round: the device gets the questions without their answers, and
-// the server scores the answers from its own copy — at submission and again
+// the server scores the answers from its own copy. At submission and again
 // at finalisation.
 func TestPrizeQuiz(t *testing.T) {
 	f := newPrizeFixture(t)
@@ -1164,8 +1164,8 @@ func TestCompetitionAnnouncementPush(t *testing.T) {
 	}
 }
 
-// Any admin can set up a draft; changing a published competition — which
-// pulls it back to draft — takes a Super Admin.
+// Any admin can set up a draft; changing a published competition. Which
+// pulls it back to draft. Takes a Super Admin.
 func TestDraftEditingRoles(t *testing.T) {
 	f := newPrizeFixture(t)
 	rules := "Highest score wins."
@@ -1242,7 +1242,7 @@ func TestPublishRightNow(t *testing.T) {
 	}
 }
 
-// A notification that found no phone goes out as soon as one registers —
+// A notification that found no phone goes out as soon as one registers.
 // signing in delivers what arrived while signed out.
 func TestPushAfterSignIn(t *testing.T) {
 	f := newPrizeFixture(t)

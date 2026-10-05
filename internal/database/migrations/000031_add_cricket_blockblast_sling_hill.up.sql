@@ -6,7 +6,7 @@
 --   * Cricket: every delivery (pace and line) and the field are drawn from
 --     the seed and shown before each ball; timing and shot direction decide
 --     the runs.
---   * Block Blast: pieces are dealt from the seed, like 2048's tile spawns —
+--   * Block Blast: pieces are dealt from the seed, like 2048's tile spawns.
 --     identical for everyone who shares a seed.
 --   * Sling Shot: the structures are visible before the first shot, and the
 --     flight and collapse are integer physics.
@@ -27,7 +27,7 @@ VALUES
      'approved'),
     ('sling-shot',
      'Sling Shot',
-     'Pull back the sling and knock the target blocks off their towers. Wood breaks, stone does not — find the weak spot.',
+     'Pull back the sling and knock the target blocks off their towers. Wood breaks, stone does not. Find the weak spot.',
      'precision',
      'approved'),
     ('hill-rider',

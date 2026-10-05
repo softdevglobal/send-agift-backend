@@ -585,7 +585,7 @@ type PlayRequest struct {
 const maxClientRequestID = 128
 
 // Play is the spec's POST /games/{id}/plays: it checks the customer can
-// enter, then runs the atomic play transaction — points debit, the play, the
+// enter, then runs the atomic play transaction. Points debit, the play, the
 // prize increment and the cached prize, together or not at all. Every entrant
 // gets the round's single seed, so everyone plays the identical game (§14.1).
 //
@@ -851,7 +851,7 @@ func (s *CompetitionService) SubmitOfficial(ctx context.Context, session *models
 }
 
 // scorer is how a round's plays are scored: a skill game's replay engine,
-// or — for a quiz — the round's own questions, answers included, which never
+// or. For a quiz. The round's own questions, answers included, which never
 // leave the server.
 func (s *CompetitionService) scorer(ctx context.Context, competitionID uuid.UUID, slug string) (func(seed string, config json.RawMessage, moves []string) (*games.Result, error), error) {
 	if slug == games.QuizSlug {
@@ -1448,7 +1448,7 @@ func (s *CompetitionService) scheduleBlockers(ctx context.Context, c *models.Com
 	// A start time already passed means "open it as soon as it is
 	// published"; only one that has already ended cannot go out.
 	if !c.EndsAt.After(s.now().Add(time.Minute)) {
-		blockers = append(blockers, "it has already ended — set a later end time")
+		blockers = append(blockers, "it has already ended. Set a later end time")
 	}
 	if c.GameVersionStatus != "approved" {
 		blockers = append(blockers, "the game version is no longer approved")
@@ -1855,7 +1855,7 @@ func (s *CompetitionService) ValidateWinner(ctx context.Context, admin AdminActo
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("%w: %s — disqualify this winner instead", ErrNotEligible, reason)
+		return fmt.Errorf("%w: %s. Disqualify this winner instead", ErrNotEligible, reason)
 	}
 	audit := admin.audit("competition.winner_validated", c.ID, nil)
 	audit.After = map[string]any{"winner_id": w.ID, "prize_position": w.PrizePosition}
@@ -1867,7 +1867,7 @@ func (s *CompetitionService) ValidateWinner(ctx context.Context, admin AdminActo
 }
 
 // DisqualifyWinner removes a winner with a recorded reason and passes the
-// prize to the next eligible player — never a random pick (§19.3).
+// prize to the next eligible player. Never a random pick (§19.3).
 func (s *CompetitionService) DisqualifyWinner(ctx context.Context, admin AdminActor, id, winnerID uuid.UUID, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
