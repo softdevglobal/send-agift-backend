@@ -150,7 +150,7 @@ func (h *SellerHandler) DeleteAddress(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, map[string]string{"message": "address deleted"})
 }
 
-// ListShops handles GET /sellers/me/shops. The seller's own shops, any status.
+// ListShops handles GET /sellers/me/shops — the seller's own shops, any status.
 func (h *SellerHandler) ListShops(w http.ResponseWriter, r *http.Request) {
 	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
 	shops, err := h.sellers.ListShops(r.Context(), sellerID)
