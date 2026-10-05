@@ -34,6 +34,19 @@ func TestBuildSellerDeliveryOption(t *testing.T) {
 		t.Fatalf("want free 3 km band, got %+v", opt)
 	}
 
+	cutoff := "14:00"
+	zones[0].CutoffTime = &cutoff
+	before := time.Date(2026, 9, 25, 13, 30, 0, 0, time.UTC)
+	opt = buildSellerDeliveryOption(shopLat, shopLng, shopLat, shopLng, zones, before)
+	if opt.EstimatedDays != 0 || opt.EstimatedDeliveryDate != "2026-09-25" || opt.CutoffTime != "14:00" {
+		t.Fatalf("want same day before cutoff, got %+v", opt)
+	}
+	after := time.Date(2026, 9, 25, 14, 1, 0, 0, time.UTC)
+	opt = buildSellerDeliveryOption(shopLat, shopLng, shopLat, shopLng, zones, after)
+	if opt.EstimatedDays != 1 || opt.EstimatedDeliveryDate != "2026-09-26" {
+		t.Fatalf("want next day after cutoff, got %+v", opt)
+	}
+
 	// ~22 km → outside.
 	opt = buildSellerDeliveryOption(shopLat, shopLng, f64(7.1271), f64(79.8612), zones, now)
 	if opt.Available || !strings.Contains(opt.Reason, "farthest delivery zone is 10.00 km") || !opt.hasZoneAndPoints() {

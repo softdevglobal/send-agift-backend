@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"myapp/internal/models"
@@ -29,6 +30,7 @@ type SellerDeliveryOption struct {
 	Currency              string   `json:"currency,omitempty"`
 	IsFree                bool     `json:"is_free"`
 	EstimatedDays         int      `json:"estimated_days"`                    // 0 = same day
+	CutoffTime            string   `json:"cutoff_time,omitempty"`             // HH:MM when the zone is same-day
 	EstimatedDeliveryDate string   `json:"estimated_delivery_date,omitempty"` // YYYY-MM-DD
 }
 
@@ -63,8 +65,16 @@ func buildSellerDeliveryOption(fromLat, fromLng, toLat, toLng *float64, zones []
 			opt.PriceAmount = z.PriceAmount
 			opt.Currency = z.Currency
 			opt.IsFree = z.PriceAmount == 0
-			opt.EstimatedDays = z.EstimatedDays
-			opt.EstimatedDeliveryDate = now.AddDate(0, 0, z.EstimatedDays).Format("2006-01-02")
+			days := z.EstimatedDays
+			if z.CutoffTime != nil {
+				opt.CutoffTime = *z.CutoffTime
+			}
+			// After the same-day cutoff, the order cannot leave today.
+			if days == 0 && pastCutoff(now, opt.CutoffTime) {
+				days = 1
+			}
+			opt.EstimatedDays = days
+			opt.EstimatedDeliveryDate = now.AddDate(0, 0, days).Format("2006-01-02")
 			return opt
 		}
 	}
@@ -92,6 +102,17 @@ func (o *SellerDeliveryOption) applyToShipment(s *models.Shipment) {
 	if d, err := time.Parse("2006-01-02", o.EstimatedDeliveryDate); err == nil {
 		s.EstimatedDeliveryDate = &d
 	}
+}
+
+// pastCutoff is true when now is later than HH:MM on the same clock.
+func pastCutoff(now time.Time, cutoff string) bool {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(cutoff))
+	if err != nil {
+		return false
+	}
+	nowMins := now.Hour()*60 + now.Minute()
+	cutMins := parsed.Hour()*60 + parsed.Minute()
+	return nowMins > cutMins
 }
 
 // haversineKm is the great-circle distance between two points in kilometres.

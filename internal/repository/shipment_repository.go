@@ -75,11 +75,13 @@ type ShippingContext struct {
 	ProductParcelMassUnit     *string
 	// Seller delivery zone inputs: shop point (shop lat/lng, else ship-from address)
 	// and recipient point, used to measure distance against delivery zones.
-	ShopID  uuid.UUID
-	FromLat *float64
-	FromLng *float64
-	ToLat   *float64
-	ToLng   *float64
+	ShopID uuid.UUID
+	// ShopTimezone is the shop's IANA zone for same-day cutoffs.
+	ShopTimezone string
+	FromLat      *float64
+	FromLng      *float64
+	ToLat        *float64
+	ToLng        *float64
 	// Pending shipment's mode + seller delivery snapshot chosen at checkout (if any).
 	PendingDeliveryMode  *string
 	PendingPriceAmount   *int
@@ -106,6 +108,7 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
 			p.parcel_weight, p.parcel_mass_unit,
 			s.id,
+			coalesce(nullif(btrim(s.timezone), ''), 'UTC'),
 			coalesce(s.latitude, sa.latitude)::float8, coalesce(s.longitude, sa.longitude)::float8,
 			ra.latitude::float8, ra.longitude::float8,
 			sh.delivery_mode, sh.price_amount, sh.currency, sh.estimated_days,
@@ -137,6 +140,7 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		&sc.ProductParcelLength, &sc.ProductParcelWidth, &sc.ProductParcelHeight, &sc.ProductParcelDistanceUnit,
 		&sc.ProductParcelWeight, &sc.ProductParcelMassUnit,
 		&sc.ShopID,
+		&sc.ShopTimezone,
 		&sc.FromLat, &sc.FromLng,
 		&sc.ToLat, &sc.ToLng,
 		&sc.PendingDeliveryMode, &sc.PendingPriceAmount, &sc.PendingCurrency, &sc.PendingEstimatedDays,
@@ -440,7 +444,7 @@ func (r *ShipmentRepository) DeliveryZonesForShops(ctx context.Context, shopIDs 
 		return out, nil
 	}
 	rows, err := r.db.Query(ctx, `
-		select id, shop_id, max_km::float8, price_amount, currency, estimated_days, created_at, updated_at
+		select id, shop_id, max_km::float8, price_amount, currency, estimated_days, to_char(cutoff_time, 'HH24:MI'), created_at, updated_at
 		from seller.shop_delivery_zones
 		where shop_id = any($1)
 		order by shop_id, max_km asc`, shopIDs)
@@ -450,7 +454,7 @@ func (r *ShipmentRepository) DeliveryZonesForShops(ctx context.Context, shopIDs 
 	defer rows.Close()
 	for rows.Next() {
 		var z models.ShopDeliveryZone
-		if err := rows.Scan(&z.ID, &z.ShopID, &z.MaxKm, &z.PriceAmount, &z.Currency, &z.EstimatedDays, &z.CreatedAt, &z.UpdatedAt); err != nil {
+		if err := rows.Scan(&z.ID, &z.ShopID, &z.MaxKm, &z.PriceAmount, &z.Currency, &z.EstimatedDays, &z.CutoffTime, &z.CreatedAt, &z.UpdatedAt); err != nil {
 			return nil, err
 		}
 		z.IsFree = z.PriceAmount == 0
@@ -746,6 +750,7 @@ type CartShipFrom struct {
 	Email      string
 	Latitude   *float64 // shop lat/lng, else dispatch address lat/lng
 	Longitude  *float64
+	Timezone   string // IANA zone for the shop's same-day cutoff
 }
 
 // CartShipTo is the recipient's delivery address.
@@ -776,7 +781,8 @@ func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uui
 		       coalesce(sa.line1, ''), coalesce(sa.line2, ''), coalesce(sa.city, ''),
 		       coalesce(sa.region, ''), coalesce(sa.postal_code, ''),
 		       coalesce(fc.iso_code, ''), coalesce(se.phone, ''), se.email,
-		       coalesce(s.latitude, sa.latitude)::float8, coalesce(s.longitude, sa.longitude)::float8
+		       coalesce(s.latitude, sa.latitude)::float8, coalesce(s.longitude, sa.longitude)::float8,
+		       coalesce(nullif(btrim(s.timezone), ''), 'UTC')
 		from seller.shops s
 		inner join seller.sellers se on se.id = s.seller_id
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
@@ -793,7 +799,7 @@ func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uui
 		if err := rows.Scan(
 			&f.ShopID, &f.Name, &f.Street1, &f.Street2, &f.City,
 			&f.Region, &f.PostalCode, &f.CountryISO, &f.Phone, &f.Email,
-			&f.Latitude, &f.Longitude,
+			&f.Latitude, &f.Longitude, &f.Timezone,
 		); err != nil {
 			return nil, err
 		}

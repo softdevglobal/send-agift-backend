@@ -161,18 +161,37 @@ func (h *SellerHandler) ListShops(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, shops)
 }
 
-func (h *SellerHandler) CreateShop(w http.ResponseWriter, r *http.Request) {
+// createshop handles the Http request for creating a new shop
+func (h *SellerHandler) CreateShop(
+	w http.ResponseWriter, // used to send the response back to the frontend/postman
+	r *http.Request) { // contains the incoming HTTP request.
+
+	// Get the authenticated seller/user ID from the request context
+	// The seller ID normally comes from the JWT authentication middleware
+	// extract the sellerID from the context of the request
+
 	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+
+	// create a variable to store the incoming request body
 	var req services.ShopInput
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { // If the JSON is invalid, Decode() returns an error.
+		// send HTTP 400 bad request error to frontend/postman
+		// because the request body is invalid
 		utils.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// call the create shop service to create a new shop
+	// the service will return the created shop or an error
+	// if the shop is created successfully, send the shop details back to the frontend/postman
 	shop, err := h.sellers.CreateShop(r.Context(), sellerID, req)
 	if err != nil {
+		// if there is an error, send the error back to the frontend/postman
+		// and return the error message
 		h.writeError(w, err, "could not create shop")
 		return
 	}
+	// send the created shop details back to the frontend/postman
+	// with HTTP 201 created status code
 	utils.JSON(w, http.StatusCreated, shop)
 }
 
@@ -240,7 +259,7 @@ func (h *SellerHandler) writeError(w http.ResponseWriter, err error, fallback st
 	case errors.Is(err, services.ErrInvalidAddress):
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, city; address_type must be pickup|return|both")
 	case errors.Is(err, services.ErrInvalidShop):
-		utils.Error(w, http.StatusBadRequest, "shop name is required; at least one delivery zone is required; latitude and longitude must be sent together (-90..90, -180..180); delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day)")
+		utils.Error(w, http.StatusBadRequest, "shop name is required; at least one delivery zone is required; latitude and longitude must be sent together (-90..90, -180..180); timezone must be a valid IANA name; delivery zones need max_km > 0, price_amount >= 0, estimated_days >= 0, unique max_km, and a known currency (0 price = free, 0 days = same day and needs cutoff_time as HH:MM)")
 	case errors.Is(err, services.ErrInvalidCurrency):
 		utils.Error(w, http.StatusBadRequest, "currency must be the shop's country currency")
 	case errors.Is(err, services.ErrSellerConflict):

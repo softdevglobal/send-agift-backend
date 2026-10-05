@@ -350,10 +350,10 @@ func (s *OrderService) priceShopDeliveries(
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	for _, sid := range shopIDs {
 		from := froms[sid]
-		opt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zones[sid], now)
+		opt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zones[sid], shopLocalNow(now, from.Timezone))
 		if !opt.Available {
 			return nil, fmt.Errorf("%w: %s", ErrOutsideDeliveryZone, opt.Reason)
 		}

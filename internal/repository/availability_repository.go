@@ -26,7 +26,9 @@ type ShopForAvailability struct {
 	Name      string
 	Latitude  *float64
 	Longitude *float64
-	Zones     []models.ShopDeliveryZone
+	// Timezone is the shop's IANA zone, falling back to the country default.
+	Timezone string
+	Zones    []models.ShopDeliveryZone
 }
 
 // GiftStock is one published gift and the stock row used to decide if it
@@ -46,6 +48,7 @@ type GiftStock struct {
 	LowStockThreshold int
 	HasInventory      bool
 	UnavailableDates  []time.Time
+	PrepMinutes       int
 }
 
 // ListShopsInReach returns active shops whose farthest delivery zone might
@@ -59,9 +62,11 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 		with origins as (
 			select s.id, s.name,
 			       coalesce(s.latitude, sa.latitude)::float8 as lat,
-			       coalesce(s.longitude, sa.longitude)::float8 as lng
+			       coalesce(s.longitude, sa.longitude)::float8 as lng,
+			       coalesce(nullif(btrim(s.timezone), ''), c.default_timezone, 'UTC') as timezone
 			from seller.shops s
 			left join seller.seller_addresses sa on sa.id = coalesce(s.address_id, s.return_address_id)
+			left join core.countries c on c.id = s.country_id
 			where s.status = 'active'
 			  and coalesce(s.latitude, sa.latitude) is not null
 			  and coalesce(s.longitude, sa.longitude) is not null
@@ -71,7 +76,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 			from seller.shop_delivery_zones
 			group by shop_id
 		)
-		select o.id, o.name, o.lat, o.lng
+		select o.id, o.name, o.lat, o.lng, o.timezone
 		from origins o
 		inner join reach r on r.shop_id = o.id
 		where abs(o.lat - $1) <= (r.farthest_km / 111.0) * 1.02
@@ -87,7 +92,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 	index := map[uuid.UUID]int{}
 	for rows.Next() {
 		var shop ShopForAvailability
-		if err := rows.Scan(&shop.ID, &shop.Name, &shop.Latitude, &shop.Longitude); err != nil {
+		if err := rows.Scan(&shop.ID, &shop.Name, &shop.Latitude, &shop.Longitude, &shop.Timezone); err != nil {
 			return nil, err
 		}
 		shop.Zones = []models.ShopDeliveryZone{}
@@ -106,7 +111,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 		ids[i] = shops[i].ID
 	}
 	zoneRows, err := r.db.Query(ctx, `
-		select z.id, z.shop_id, z.max_km::float8, z.price_amount, z.currency, z.estimated_days, z.created_at, z.updated_at
+		select z.id, z.shop_id, z.max_km::float8, z.price_amount, z.currency, z.estimated_days, to_char(z.cutoff_time, 'HH24:MI'), z.created_at, z.updated_at
 		from seller.shop_delivery_zones z
 		where z.shop_id = any($1)
 		order by z.shop_id, z.max_km asc`, ids)
@@ -116,7 +121,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 	defer zoneRows.Close()
 	for zoneRows.Next() {
 		var z models.ShopDeliveryZone
-		if err := zoneRows.Scan(&z.ID, &z.ShopID, &z.MaxKm, &z.PriceAmount, &z.Currency, &z.EstimatedDays, &z.CreatedAt, &z.UpdatedAt); err != nil {
+		if err := zoneRows.Scan(&z.ID, &z.ShopID, &z.MaxKm, &z.PriceAmount, &z.Currency, &z.EstimatedDays, &z.CutoffTime, &z.CreatedAt, &z.UpdatedAt); err != nil {
 			return nil, err
 		}
 		z.IsFree = z.PriceAmount == 0
@@ -134,7 +139,7 @@ func (r *AvailabilityRepository) ListPublishedGifts(ctx context.Context, shopIDs
 	}
 	rows, err := r.db.Query(ctx, `
 		select p.id, p.shop_id, p.name, p.slug, p.description, p.price_amount, p.currency, p.image_url,
-		       p.occasion_tags,
+		       p.occasion_tags, p.prep_minutes,
 		       i.available_qty, i.reserved_qty, i.low_stock_threshold, i.unavailable_dates
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
@@ -156,7 +161,7 @@ func (r *AvailabilityRepository) ListPublishedGifts(ctx context.Context, shopIDs
 		var blocked []time.Time
 		if err := rows.Scan(
 			&item.ID, &item.ShopID, &item.Name, &item.Slug, &item.Description, &item.PriceAmount, &item.Currency, &item.ImageURL,
-			&item.OccasionTags, &available, &reserved, &threshold, &blocked,
+			&item.OccasionTags, &item.PrepMinutes, &available, &reserved, &threshold, &blocked,
 		); err != nil {
 			return nil, err
 		}

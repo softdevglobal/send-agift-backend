@@ -81,18 +81,20 @@ type SellerAddressInput struct {
 }
 
 type ShopInput struct {
-	Name                    string              `json:"name"`                      // name for the shop
-	Slug                    string              `json:"slug"`                      // slug for the shop
-	Description             *string             `json:"description"`               // description for the shop
-	CustomerVisibleLocation *string             `json:"customer_visible_location"` // customer visible location for the shop
-	Status                  string              `json:"status"`                    // status for the shop
-	CountryID               string              `json:"country_id"`
-	AddressID               *string             `json:"address_id"`
-	ReturnAddressID         *string             `json:"return_address_id"`
-	ImageURL                *string             `json:"image_url"`
-	Latitude                *float64            `json:"latitude"`
-	Longitude               *float64            `json:"longitude"`
-	DeliveryZones           []DeliveryZoneInput `json:"delivery_zones"`
+	Name                    string  `json:"name"`                      // name for the shop
+	Slug                    string  `json:"slug"`                      // slug for the shop
+	Description             *string `json:"description"`               // description for the shop
+	CustomerVisibleLocation *string `json:"customer_visible_location"` // customer visible location for the shop
+	Status                  string  `json:"status"`                    // status for the shop
+	CountryID               string  `json:"country_id"`
+	// Timezone is an IANA name. Empty means the shop country's default zone.
+	Timezone        string              `json:"timezone"`
+	AddressID       *string             `json:"address_id"`
+	ReturnAddressID *string             `json:"return_address_id"`
+	ImageURL        *string             `json:"image_url"`
+	Latitude        *float64            `json:"latitude"`
+	Longitude       *float64            `json:"longitude"`
+	DeliveryZones   []DeliveryZoneInput `json:"delivery_zones"`
 } // ShopInput is a struct that contains the input for the shop
 
 // DeliveryZoneInput is one local-delivery band. price_amount 0 = free.
@@ -100,7 +102,8 @@ type DeliveryZoneInput struct {
 	MaxKm         float64 `json:"max_km"`
 	PriceAmount   int     `json:"price_amount"`
 	Currency      string  `json:"currency"`
-	EstimatedDays *int    `json:"estimated_days"` // required; 0 = same day
+	EstimatedDays *int    `json:"estimated_days"`        // required; 0 = same day
+	CutoffTime    *string `json:"cutoff_time,omitempty"` // HH:MM, required when estimated_days is 0
 }
 
 // DeliveryZonesReplaceInput is the body for PUT .../delivery-zones (replaces the whole list).
@@ -360,12 +363,16 @@ func (s *SellerService) DeleteAddress(ctx context.Context, sellerID, addressID s
 	return err // return an error if the seller address is not deleted
 }
 
-func (s *SellerService) CreateShop(ctx context.Context, sellerID string, in ShopInput) (*models.Shop, error) {
+func (s *SellerService) CreateShop(
+	ctx context.Context, // request context
+	sellerID string, // seller ID
+	in ShopInput) (*models.Shop, error) { // ShopInput is a struct that contains the input for the shop
+	// check if the seller exists
 	if _, err := s.sellers.GetByID(ctx, sellerID); err != nil {
 		if errors.Is(err, repository.ErrSellerNotFound) {
-			return nil, ErrSellerNotFound
+			return nil, ErrSellerNotFound // return an error if the seller is not found
 		}
-		return nil, err
+		return nil, err // return an error if the seller is not found
 	}
 	sid, err := uuid.Parse(sellerID)
 	if err != nil {
@@ -374,16 +381,13 @@ func (s *SellerService) CreateShop(ctx context.Context, sellerID string, in Shop
 	return s.createShopForSeller(ctx, sid, in) // return the shop
 }
 
-func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string, in ShopInput) (*models.Shop, error) {
-	shop, err := s.sellers.GetShopByID(ctx, sellerID, shopID)
+func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string, in ShopInput) (*models.Shop, error) { // UpdateShop is a function that updates a shop
+	shop, err := s.sellers.GetShopByID(ctx, sellerID, shopID) // get the shop by ID
 	if err != nil {
 		if errors.Is(err, repository.ErrShopNotFound) {
-			return nil, ErrShopNotFound
+			return nil, ErrShopNotFound // return an error if the shop is not found
 		}
-		return nil, err
-	}
-	if strings.TrimSpace(in.Name) == "" {
-		return nil, ErrInvalidShop
+		return nil, err // return an error if the shop is not found
 	}
 	shop.Name = strings.TrimSpace(in.Name)
 	shop.Slug = slugOrFromName(in.Slug, in.Name)
@@ -429,6 +433,15 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 		return nil, err
 	}
 	shop.CountryID = country.ID
+	timezoneRaw := in.Timezone
+	if strings.TrimSpace(timezoneRaw) == "" {
+		timezoneRaw = shop.Timezone
+	}
+	timezone, tzErr := resolveShopTimezone(timezoneRaw, country.DefaultTimezone)
+	if tzErr != nil {
+		return nil, tzErr
+	}
+	shop.Timezone = timezone
 	var zones []models.ShopDeliveryZone
 	replaceZones := in.DeliveryZones != nil
 	if replaceZones {
@@ -468,20 +481,23 @@ func (s *SellerService) DeleteShop(ctx context.Context, sellerID, shopID string)
 	return err
 }
 
+// createShopForSeller creates a new shop for a seller
 func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.UUID, in ShopInput) (*models.Shop, error) {
+	// trim the name of the shop
 	in.Name = strings.TrimSpace(in.Name)
+	// return an error if the name is empty
 	if in.Name == "" {
 		return nil, ErrInvalidShop
 	}
-	status := strings.TrimSpace(in.Status)
+	status := strings.TrimSpace(in.Status) // trim the status of the shop
 	if status == "" {
-		status = "active"
+		status = "active" // set the status to active if it is empty
 	}
-	var addressID *uuid.UUID
+	var addressID *uuid.UUID // address ID for the shop
 	if in.AddressID != nil && *in.AddressID != "" {
-		aid, err := uuid.Parse(*in.AddressID)
+		aid, err := uuid.Parse(*in.AddressID) // parse the address ID
 		if err != nil {
-			return nil, ErrInvalidAddress
+			return nil, ErrInvalidAddress // return an error if the address is invalid
 		}
 		addressID = &aid
 	}
@@ -511,6 +527,11 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		return nil, err
 	}
 	shop.CountryID = country.ID
+	timezone, err := resolveShopTimezone(in.Timezone, country.DefaultTimezone)
+	if err != nil {
+		return nil, err
+	}
+	shop.Timezone = timezone
 	if err := validateLatLng(in.Latitude, in.Longitude); err != nil {
 		return nil, err
 	}
@@ -583,6 +604,10 @@ func normalizeDeliveryZones(in []DeliveryZoneInput, allowed string) ([]models.Sh
 		if z.MaxKm <= 0 || z.PriceAmount < 0 || z.EstimatedDays == nil || *z.EstimatedDays < 0 {
 			return nil, ErrInvalidShop
 		}
+		cutoff, err := cutoffForZone(*z.EstimatedDays, z.CutoffTime)
+		if err != nil {
+			return nil, err
+		}
 		currency := strings.ToUpper(strings.TrimSpace(z.Currency))
 		if currency == "" || currency != allowed {
 			return nil, ErrInvalidCurrency
@@ -598,12 +623,55 @@ func normalizeDeliveryZones(in []DeliveryZoneInput, allowed string) ([]models.Sh
 			Currency:      currency,
 			IsFree:        z.PriceAmount == 0,
 			EstimatedDays: *z.EstimatedDays,
+			CutoffTime:    cutoff,
 		})
 	}
 	return out, nil
 }
 
+// cutoffForZone requires HH:MM when the band is same-day, and drops a cutoff
+// on any later band.
+func cutoffForZone(days int, raw *string) (*string, error) {
+	text := ""
+	if raw != nil {
+		text = strings.TrimSpace(*raw)
+	}
+	if days != 0 {
+		return nil, nil
+	}
+	if text == "" {
+		return nil, ErrInvalidShop
+	}
+	parsed, err := time.Parse("15:04", text)
+	if err != nil {
+		if len(text) >= 5 {
+			parsed, err = time.Parse("15:04", text[:5])
+		}
+	}
+	if err != nil {
+		return nil, ErrInvalidShop
+	}
+	value := parsed.Format("15:04")
+	return &value, nil
+}
+
 // shopCountry loads the country the shop sells in. It must be a row in core.countries.
+// resolveShopTimezone keeps a valid IANA name. A blank value uses the
+// shop country's default, then UTC.
+func resolveShopTimezone(raw, countryDefault string) (string, error) {
+	zone := strings.TrimSpace(raw)
+	if zone == "" {
+		zone = strings.TrimSpace(countryDefault)
+	}
+	if zone == "" {
+		zone = "UTC"
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		return "", ErrInvalidShop
+	}
+	return zone, nil
+}
+
 func (s *SellerService) shopCountry(ctx context.Context, countryID string) (*models.Country, error) {
 	countryID = strings.TrimSpace(countryID)
 	if _, err := uuid.Parse(countryID); err != nil {

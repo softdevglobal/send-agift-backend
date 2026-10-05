@@ -44,9 +44,11 @@ type SellerAddress struct {
 
 // Shop maps to seller.shops.
 type Shop struct {
-	ID                      uuid.UUID          `json:"id"`
-	SellerID                uuid.UUID          `json:"seller_id"`
-	CountryID               uuid.UUID          `json:"country_id"`
+	ID        uuid.UUID `json:"id"`
+	SellerID  uuid.UUID `json:"seller_id"`
+	CountryID uuid.UUID `json:"country_id"`
+	// Timezone is the IANA zone used for same-day cutoffs, for example Asia/Colombo.
+	Timezone                string             `json:"timezone"`
 	Name                    string             `json:"name"`
 	Slug                    string             `json:"slug"`
 	Description             *string            `json:"description,omitempty"`
@@ -72,8 +74,10 @@ type ShopDeliveryZone struct {
 	Currency      string    `json:"currency"`
 	IsFree        bool      `json:"is_free"`
 	EstimatedDays int       `json:"estimated_days"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	// CutoffTime is HH:MM, set only when EstimatedDays is 0 (same day).
+	CutoffTime *string   `json:"cutoff_time,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // SellerDetails is seller profile with addresses and shops.
