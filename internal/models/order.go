@@ -127,3 +127,29 @@ type SellerOrderItemDetails struct {
 	Recipient       *Recipient         `json:"recipient,omitempty"`
 	ShippingAddress *RecipientAddress  `json:"shipping_address,omitempty"`
 }
+
+// ReceivedGift is a delivered order as the person it was sent to sees it:
+// who sent it and what arrived, without what was paid.
+type ReceivedGift struct {
+	OrderID     uuid.UUID          `json:"order_id"`
+	OrderNumber string             `json:"order_number"`
+	SenderName  string             `json:"sender_name"`
+	GiftMessage *string            `json:"gift_message,omitempty"`
+	GiftPoints  int64              `json:"gift_points"`
+	DeliveredAt time.Time          `json:"delivered_at"`
+	Items       []ReceivedGiftItem `json:"items"`
+}
+
+// ReceivedGiftItem is one product in a received gift. ReviewID is set once
+// the line has been reviewed, by the recipient or the sender.
+type ReceivedGiftItem struct {
+	ID               uuid.UUID  `json:"id"`
+	ProductID        uuid.UUID  `json:"product_id"`
+	ProductName      string     `json:"product_name"`
+	ProductSlug      string     `json:"product_slug"`
+	ProductImageURL  *string    `json:"product_image_url,omitempty"`
+	ShopName         string     `json:"shop_name"`
+	Quantity         int        `json:"quantity"`
+	FulfilmentStatus string     `json:"fulfilment_status"`
+	ReviewID         *uuid.UUID `json:"review_id,omitempty"`
+}

@@ -104,6 +104,32 @@ func main() {
 	sellerPointsService := services.NewSellerPointsService(pointsRepo, pointsProvider, cfg.PointsCentsPerPoint, cfg.PointsCurrency, cfg.PointsWebhookSecret)
 	shippingService := services.NewShippingService(shipments, orders)
 
+	// Transactional email through ZeptoMail: rendered into an outbox when
+	// something happens, and sent by this loop. Without a token the emails
+	// wait in the outbox until one is configured.
+	var emailSender services.EmailSender
+	if zepto := services.NewZeptoMailSender(cfg.ZeptoMailAPIURL, cfg.ZeptoMailToken, cfg.ZeptoMailFromAddress, cfg.ZeptoMailFromName); zepto != nil {
+		emailSender = zepto
+		fmt.Printf("✉️  Email: ZeptoMail %s, from %s\n", cfg.ZeptoMailAPIURL, cfg.ZeptoMailFromAddress)
+	} else {
+		log.Printf("⚠️  ZEPTOMAIL_SYSTEM_TOKEN is not set: emails are queued but not sent.")
+	}
+	emailService := services.NewEmailService(repository.NewEmailRepository(pool), emailSender, cfg.AppWebURL)
+	go emailService.RunDeliveryLoop(context.Background(), 15*time.Second,
+		database.Exclusive(pool, database.LockEmailDelivery))
+	// New customers get a welcome email.
+	customerService.SendEmailsWith(emailService)
+	// New sellers confirm their email with a code, then wait for an admin.
+	verificationService := services.NewSellerVerificationService(sellers, emailService, cfg.JWTSecret, cfg.JWTExpiry)
+	sellerService.VerifyEmailsWith(verificationService)
+	// Orders: the buyer gets a confirmation and the recipient a customer
+	// account; the recipient is emailed only once the gift is delivered.
+	giftRecipientService := services.NewGiftRecipientService(orders, customers, emailService)
+	orderService.NotifyWith(giftRecipientService)
+	go giftRecipientService.RunDeliveredNotices(context.Background(), time.Minute,
+		database.Exclusive(pool, database.LockGiftDeliveryNotices))
+	verificationHandler := handlers.NewVerificationHandler(verificationService)
+
 	authHandler := handlers.NewAuthHandler(authService)          // create a new auth handler
 	adminHandler := handlers.NewAdminHandler(adminService)       // create a new admin handler
 	countryHandler := handlers.NewCountryHandler(countryService) // create a new country handler
@@ -150,7 +176,7 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, verificationHandler, cfg.JWTSecret) // create a new router
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

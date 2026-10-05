@@ -131,6 +131,10 @@ func (s *AuthService) Login(ctx context.Context, in LoginInput) (*LoginResult, e
 	// check if the seller exists
 	if seller, err := s.sellers.GetByEmail(ctx, email); err == nil {
 		if utils.CheckPassword(in.Password, seller.PasswordHash) {
+			// A seller confirms their email with a code before signing in.
+			if seller.EmailVerifiedAt == nil {
+				return nil, ErrEmailNotVerified
+			}
 			return s.token(seller.ID.String(), seller.Email, "seller") // return the token and role
 		}
 	} else if !errors.Is(err, repository.ErrSellerNotFound) {

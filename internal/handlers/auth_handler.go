@@ -79,6 +79,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, services.ErrInvalidCredentials):
 			utils.Error(w, http.StatusUnauthorized, "invalid email or password")
+		case errors.Is(err, services.ErrEmailNotVerified):
+			// The client sends the seller to the code screen.
+			writeCodedError(w, http.StatusForbidden, "email_not_verified", "confirm your email to sign in — we sent you a 6-digit code")
 		default:
 			utils.Error(w, http.StatusInternalServerError, "login failed")
 		}

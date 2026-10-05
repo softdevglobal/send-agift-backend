@@ -68,6 +68,8 @@ func New(
 	availability *handlers.AvailabilityHandler,
 	// Handler instance that registers mobile devices for push notifications
 	push *handlers.PushHandler,
+	// Handler instance that confirms seller emails and serves the admin seller review queue
+	verification *handlers.VerificationHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -153,7 +155,11 @@ func New(
 
 		// Register seller-related routes (requires valid JWT token)
 		// Example: GET /api/v1/sellers, POST /api/v1/sellers
-		RegisterSellerRoutes(r, sellers, sellerOrders, products, jwtSecret)
+		RegisterSellerRoutes(r, sellers, sellerOrders, products, verification.RequireApprovedSeller, jwtSecret)
+
+		// Seller email codes (public) + admin seller approval
+		// Example: POST /api/v1/sellers/verify-email, PATCH /api/v1/admin/sellers/{id}/verification
+		RegisterVerificationRoutes(r, verification, jwtSecret)
 
 		// Public reel feed (no JWT) + seller reel CRUD (seller JWT)
 		// Example: GET /api/v1/reels, POST /api/v1/sellers/me/shops/{shopID}/reels

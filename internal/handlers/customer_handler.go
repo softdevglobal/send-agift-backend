@@ -293,10 +293,32 @@ func (h *CustomerHandler) DeleteRecipientAddress(w http.ResponseWriter, r *http.
 	utils.JSON(w, http.StatusOK, map[string]string{"message": "address deleted"})
 }
 
+// ChangePassword handles PUT /customers/me/password.
+func (h *CustomerHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	var req services.ChangePasswordInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.customers.ChangePassword(r.Context(), customerID, req); err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidInput):
+			utils.Error(w, http.StatusBadRequest, "new password must be at least 8 characters and not the temporary password")
+		case errors.Is(err, services.ErrWrongPassword):
+			utils.Error(w, http.StatusBadRequest, "current password is incorrect")
+		default:
+			h.writeCustomerError(w, err, "could not change password")
+		}
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]string{"message": "password changed"})
+}
+
 func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, services.ErrInvalidInput):
-		utils.Error(w, http.StatusBadRequest, "email required, password must be at least 8 characters")
+		utils.Error(w, http.StatusBadRequest, "email and phone number are required, password must be at least 8 characters")
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
 	case errors.Is(err, services.ErrCustomerRegistrationDisabled):

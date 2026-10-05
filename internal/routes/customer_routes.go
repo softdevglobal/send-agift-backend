@@ -17,6 +17,7 @@ func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, o
 		r.Get("/customers/me", customers.Me)                              // get the customer's profile
 		r.Put("/customers/me", customers.UpdateMe)                        // update the customer's profile
 		r.Delete("/customers/me", customers.DeleteMe)                     // delete the customer's profile
+		r.Put("/customers/me/password", customers.ChangePassword)         // change the customer's password
 		r.Post("/customers/me/addresses", customers.AddAddress)           // add a new address to the customer's profile
 		r.Delete("/customers/me/addresses/{id}", customers.DeleteAddress) // delete an address from the customer's profile
 
@@ -38,5 +39,8 @@ func RegisterCustomerRoutes(r chi.Router, customers *handlers.CustomerHandler, o
 		r.Get("/customers/me/orders", orders.List)
 		r.Get("/customers/me/orders/{id}", orders.Get)
 		r.Post("/customers/me/orders/{id}/cancel", orders.Cancel)
+
+		// Delivered gifts sent to this customer, which they can review
+		r.Get("/customers/me/received-gifts", orders.ReceivedGifts)
 	})
 }

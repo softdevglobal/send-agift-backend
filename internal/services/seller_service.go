@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,7 +33,11 @@ type SellerService struct {
 	capabilities *CountryCapabilityService
 	jwtSecret    string        // secret for the JWT
 	jwtExpiry    time.Duration // expiry for the JWT
+	verification *SellerVerificationService
 }
+
+// VerifyEmailsWith sends new sellers a code to confirm their email.
+func (s *SellerService) VerifyEmailsWith(v *SellerVerificationService) { s.verification = v }
 
 func NewSellerService(
 	sellers *repository.SellerRepository, // repository for the seller
@@ -189,6 +194,13 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 			return nil, err // return an error if the shop is not created
 		}
 		shops = append(shops, *shop)
+	}
+
+	if s.verification != nil {
+		if err := s.verification.IssueCode(ctx, seller.ID, seller.Email, derefOr(seller.TradingName, seller.LegalName)); err != nil {
+			// The seller can ask for another code from the verify screen.
+			log.Printf("seller %s email code: %v", seller.ID, err)
+		}
 	}
 
 	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil // return the seller details

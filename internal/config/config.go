@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -49,6 +50,18 @@ type Config struct {
 	// neither set, notifications queue up and are sent once one is added.
 	FirebaseCredentialsFile string
 	FirebaseCredentialsJSON string
+
+	// Transactional email through ZeptoMail. The token is the "Send Mail"
+	// token from the ZeptoMail agent, with or without its "Zoho-enczapikey"
+	// prefix. Without a token, emails queue up and are sent once one is set.
+	ZeptoMailToken       string
+	ZeptoMailFromAddress string
+	ZeptoMailFromName    string
+	// ZeptoMailAPIURL is the send endpoint for the account's data centre
+	// (api.zeptomail.com, .eu, .in, ...).
+	ZeptoMailAPIURL string
+	// AppWebURL is the customer website, for links and images in emails.
+	AppWebURL string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -80,6 +93,12 @@ func Load() (*Config, error) {
 
 		FirebaseCredentialsFile: os.Getenv("FIREBASE_CREDENTIALS_FILE"),
 		FirebaseCredentialsJSON: os.Getenv("FIREBASE_CREDENTIALS_JSON"),
+
+		ZeptoMailToken:       os.Getenv("ZEPTOMAIL_SYSTEM_TOKEN"),
+		ZeptoMailFromAddress: os.Getenv("ZEPTOMAIL_SYSTEM_FROM_ADDRESS"),
+		ZeptoMailFromName:    envOr("ZEPTOMAIL_SYSTEM_FROM_NAME", "SendAGift"),
+		ZeptoMailAPIURL:      envOr("ZEPTOMAIL_API_URL", "https://api.zeptomail.com/v1.1/email"),
+		AppWebURL:            strings.TrimRight(envOr("APP_WEB_URL", "http://localhost:5173"), "/"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -96,6 +115,9 @@ func Load() (*Config, error) {
 	// Keys come as a pair or not at all; one alone is a typo, not a choice.
 	if (cfg.AWSAccessKeyID == "") != (cfg.AWSSecretKey == "") {
 		return nil, fmt.Errorf("set both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or neither to use the AWS default credentials (the task role on ECS)")
+	}
+	if cfg.ZeptoMailToken != "" && cfg.ZeptoMailFromAddress == "" {
+		return nil, fmt.Errorf("ZEPTOMAIL_SYSTEM_FROM_ADDRESS is required when ZEPTOMAIL_SYSTEM_TOKEN is set")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")

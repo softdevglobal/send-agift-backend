@@ -33,10 +33,12 @@ func NewCustomerRepository(db *pgxpool.Pool) *CustomerRepository {
 func (r *CustomerRepository) Create(ctx context.Context, c *models.Customer) error {
 	err := r.db.QueryRow(ctx, `
 		insert into customer.customers (
-			country_id, email, phone, password_hash, display_name, customer_type, date_of_birth, status, image_url
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			country_id, email, phone, password_hash, display_name, customer_type, date_of_birth, status, image_url,
+			password_change_required
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		returning id, created_at, updated_at, image_url`,
 		c.CountryID, c.Email, c.Phone, c.PasswordHash, c.DisplayName, c.CustomerType, c.DateOfBirth, c.Status, c.ImageURL,
+		c.PasswordChangeRequired,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt, &c.ImageURL)
 	return mapCustomerWriteError(err)
 }
@@ -46,13 +48,13 @@ func (r *CustomerRepository) GetByEmail(ctx context.Context, email string) (*mod
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, email, phone, password_hash, display_name, customer_type,
 		       date_of_birth, age_verified_at, identity_verified_at, status,
-		       created_at, updated_at, deleted_at, image_url
+		       created_at, updated_at, deleted_at, image_url, password_change_required
 		from customer.customers
 		where email = $1 and deleted_at is null and status = 'active'`, email,
 	).Scan(
 		&c.ID, &c.CountryID, &c.Email, &c.Phone, &c.PasswordHash, &c.DisplayName, &c.CustomerType,
 		&c.DateOfBirth, &c.AgeVerifiedAt, &c.IdentityVerifiedAt, &c.Status,
-		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL,
+		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL, &c.PasswordChangeRequired,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrCustomerNotFound
@@ -65,13 +67,13 @@ func (r *CustomerRepository) GetByID(ctx context.Context, id string) (*models.Cu
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, email, phone, password_hash, display_name, customer_type,
 		       date_of_birth, age_verified_at, identity_verified_at, status,
-		       created_at, updated_at, deleted_at, image_url
+		       created_at, updated_at, deleted_at, image_url, password_change_required
 		from customer.customers
 		where id = $1 and deleted_at is null`, id,
 	).Scan(
 		&c.ID, &c.CountryID, &c.Email, &c.Phone, &c.PasswordHash, &c.DisplayName, &c.CustomerType,
 		&c.DateOfBirth, &c.AgeVerifiedAt, &c.IdentityVerifiedAt, &c.Status,
-		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL,
+		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL, &c.PasswordChangeRequired,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrCustomerNotFound
@@ -98,6 +100,45 @@ func (r *CustomerRepository) Update(ctx context.Context, c *models.Customer) err
 		return ErrCustomerNotFound
 	}
 	return err
+}
+
+// ClaimGiftAccount hands an account made for a gift recipient — one still on
+// its default password — to the person signing up with its email, with the
+// details they entered. It reports false when there is no such account.
+func (r *CustomerRepository) ClaimGiftAccount(ctx context.Context, c *models.Customer) (bool, error) {
+	err := r.db.QueryRow(ctx, `
+		update customer.customers
+		set country_id = $2, phone = $3, password_hash = $4, display_name = $5,
+		    customer_type = $6, date_of_birth = $7, image_url = $8,
+		    password_change_required = false, updated_at = now()
+		where email = $1 and password_change_required and deleted_at is null and status = 'active'
+		returning id, created_at, updated_at`,
+		c.Email, c.CountryID, c.Phone, c.PasswordHash, c.DisplayName, c.CustomerType, c.DateOfBirth, c.ImageURL,
+	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	c.PasswordChangeRequired = false
+	return true, nil
+}
+
+// UpdatePassword stores a new password hash and clears any requirement to
+// change it.
+func (r *CustomerRepository) UpdatePassword(ctx context.Context, id, hash string) error {
+	tag, err := r.db.Exec(ctx, `
+		update customer.customers
+		set password_hash = $2, password_change_required = false, updated_at = now()
+		where id = $1 and deleted_at is null`, id, hash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrCustomerNotFound
+	}
+	return nil
 }
 
 func (r *CustomerRepository) SoftDelete(ctx context.Context, id string) error {

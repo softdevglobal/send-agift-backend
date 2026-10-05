@@ -46,12 +46,14 @@ func (r *SellerRepository) GetByEmail(ctx context.Context, email string) (*model
 	s := &models.Seller{}
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, seller_type, legal_name, trading_name, email, phone,
-		       password_hash, verification_status, status, created_at, updated_at, image_url
+		       password_hash, verification_status, status, created_at, updated_at, image_url,
+		       email_verified_at, verification_note, verification_reviewed_at
 		from seller.sellers
 		where email = $1 and status = 'active'`, email,
 	).Scan(
 		&s.ID, &s.CountryID, &s.SellerType, &s.LegalName, &s.TradingName, &s.Email, &s.Phone,
 		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+		&s.EmailVerifiedAt, &s.VerificationNote, &s.VerificationReviewedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSellerNotFound
@@ -63,12 +65,14 @@ func (r *SellerRepository) GetByID(ctx context.Context, id string) (*models.Sell
 	s := &models.Seller{}
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, seller_type, legal_name, trading_name, email, phone,
-		       password_hash, verification_status, status, created_at, updated_at, image_url
+		       password_hash, verification_status, status, created_at, updated_at, image_url,
+		       email_verified_at, verification_note, verification_reviewed_at
 		from seller.sellers
 		where id = $1`, id,
 	).Scan(
 		&s.ID, &s.CountryID, &s.SellerType, &s.LegalName, &s.TradingName, &s.Email, &s.Phone,
 		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
+		&s.EmailVerifiedAt, &s.VerificationNote, &s.VerificationReviewedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSellerNotFound

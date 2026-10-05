@@ -46,6 +46,18 @@ func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, items)
 }
 
+// ReceivedGifts handles GET /customers/me/received-gifts: delivered gifts
+// other customers sent to this one, which they can review.
+func (h *OrderHandler) ReceivedGifts(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	gifts, err := h.orders.ReceivedGifts(r.Context(), customerID)
+	if err != nil {
+		h.writeOrderError(w, err, "could not list received gifts")
+		return
+	}
+	utils.JSON(w, http.StatusOK, gifts)
+}
+
 func (h *OrderHandler) Get(w http.ResponseWriter, r *http.Request) {
 	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
 	orderID := chi.URLParam(r, "id")

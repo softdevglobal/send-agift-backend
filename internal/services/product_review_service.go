@@ -103,7 +103,8 @@ func (s *ProductReviewService) Create(ctx context.Context, customerID, orderItem
 		return nil, err
 	}
 
-	item, err := s.orders.GetItemForCustomer(ctx, customerID, orderItemID)
+	// The buyer or, for a gift, the recipient who received it.
+	item, err := s.orders.GetItemForReviewer(ctx, customerID, orderItemID)
 	if err != nil {
 		if errors.Is(err, repository.ErrOrderItemNotFound) {
 			return nil, ErrProductReviewNotEligible
