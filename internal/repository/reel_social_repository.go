@@ -69,10 +69,12 @@ func (r *ReelSocialRepository) PublicCounts(ctx context.Context, reelID string) 
 		select r.like_count, r.comment_count
 		from seller.reels r
 		inner join seller.shops s on s.id = r.shop_id
+		inner join seller.sellers se on se.id = r.seller_id
 		where r.id = $1
 		  and r.status = 'published'
 		  and r.visibility = 'public'
-		  and s.status = 'active'`, reelID).Scan(&c.LikeCount, &c.CommentCount)
+		  and s.status = 'active'
+		  and se.status = 'active'`, reelID).Scan(&c.LikeCount, &c.CommentCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrReelNotPublic
 	}

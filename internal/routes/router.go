@@ -159,17 +159,17 @@ func New(
 
 		// Public reel feed (no JWT) + seller reel CRUD (seller JWT)
 		// Example: GET /api/v1/reels, POST /api/v1/sellers/me/shops/{shopID}/reels
-		RegisterReelRoutes(r, reels, jwtSecret)
+		RegisterReelRoutes(r, reels, jwtSecret, sellers.RequireActive)
 
 		// Public reel likes + comments (customer JWT or X-Guest-Token on same URLs)
 		RegisterReelSocialRoutes(r, reelSocial, jwtSecret)
 
 		// Product reviews (public list/summary + customer create/vote + seller reply)
-		RegisterProductReviewRoutes(r, productReviews, jwtSecret)
+		RegisterProductReviewRoutes(r, productReviews, jwtSecret, sellers.RequireActive)
 
 		// Customer↔seller product inquiry and order chat
 		// Example: POST /api/v1/conversations, GET /api/v1/conversations/{id}/messages
-		RegisterMessagingRoutes(r, messaging, jwtSecret)
+		RegisterMessagingRoutes(r, messaging, jwtSecret, sellers.RequireActive)
 
 		// Skill-game collection: catalog, seeded sessions, server-scored results
 		// Example: POST /api/v1/games/2048/sessions
@@ -181,17 +181,17 @@ func New(
 
 		// Sellers buying points, and the admin/webhook that confirm payment
 		// Example: POST /api/v1/sellers/me/points/purchases
-		RegisterSellerPointsRoutes(r, sellerPoints, jwtSecret)
+		RegisterSellerPointsRoutes(r, sellerPoints, jwtSecret, sellers.RequireActive)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload
-		RegisterMediaRoutes(r, media, jwtSecret)
+		RegisterMediaRoutes(r, media, jwtSecret, sellers.RequireActive)
 
 		// Register Google Places address lookup routes (public, rate limited)
 		// Example: GET /api/v1/places/autocomplete?input=221b+baker
 		RegisterPlacesRoutes(r, places)
 
-		RegisterShippingRoutes(r, shipping, jwtSecret)
+		RegisterShippingRoutes(r, shipping, jwtSecret, sellers.RequireActive)
 
 		// Find gifts: which published gifts a delivery zone can reach
 		// Example: GET /api/v1/availability?latitude=6.9&longitude=79.8&delivery_date=2026-10-05

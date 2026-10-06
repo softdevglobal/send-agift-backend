@@ -278,10 +278,12 @@ func (r *ReelRepository) GetPublicByID(ctx context.Context, reelID string) (*mod
 		select `+reelSelectCols+`
 		from seller.reels r
 		inner join seller.shops s on s.id = r.shop_id
+		inner join seller.sellers se on se.id = r.seller_id
 		where r.id = $1
 		  and r.status = 'published'
 		  and r.visibility = 'public'
-		  and s.status = 'active'`, reelID), reel)
+		  and s.status = 'active'
+		  and se.status = 'active'`, reelID), reel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrReelNotFound
 	}
@@ -304,9 +306,11 @@ func (r *ReelRepository) ListPublicFeed(ctx context.Context, q ReelFeedQuery) ([
 		select `+reelSelectCols+`
 		from seller.reels r
 		inner join seller.shops s on s.id = r.shop_id
+		inner join seller.sellers se on se.id = r.seller_id
 		where r.status = 'published'
 		  and r.visibility = 'public'
 		  and s.status = 'active'
+		  and se.status = 'active'
 		  and ($1::uuid is null or r.shop_id = $1::uuid)
 		  and ($2::uuid is null or r.product_id = $2::uuid)
 		  and (

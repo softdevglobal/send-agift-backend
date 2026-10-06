@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/handlers"
@@ -31,7 +33,7 @@ import (
 //	GET    /sellers/me/reels/{id}
 //	PUT    /sellers/me/reels/{id}
 //	DELETE /sellers/me/reels/{id}
-func RegisterReelRoutes(r chi.Router, reels *handlers.ReelHandler, jwtSecret string) {
+func RegisterReelRoutes(r chi.Router, reels *handlers.ReelHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	r.Get("/reels", reels.Feed)
 	r.Get("/reels/{id}", reels.GetPublic)
 	r.Get("/shops/{shopId}/reels", reels.FeedByShop)
@@ -40,6 +42,7 @@ func RegisterReelRoutes(r chi.Router, reels *handlers.ReelHandler, jwtSecret str
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("seller"))
+		r.Use(sellerActive)
 
 		// Shop-level reels: product_id in the body is optional.
 		r.Post("/sellers/me/shops/{shopID}/reels", reels.Create)

@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/handlers"
@@ -17,7 +19,7 @@ import (
 //
 //	POST .../shipping/local           . Start shop delivery inside the zones
 //	POST .../shipping/local/delivered . Mark that hand-over complete
-func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jwtSecret string) {
+func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("customer"))
@@ -27,6 +29,7 @@ func RegisterShippingRoutes(r chi.Router, shipping *handlers.ShippingHandler, jw
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("seller"))
+		r.Use(sellerActive)
 		r.Post("/sellers/me/orders/{orderID}/shops/{shopID}/shipping/local", shipping.StartLocalDelivery)
 		r.Post("/sellers/me/orders/{orderID}/shops/{shopID}/shipping/local/delivered", shipping.CompleteLocalDelivery)
 	})

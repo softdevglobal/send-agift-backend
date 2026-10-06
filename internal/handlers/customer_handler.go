@@ -68,6 +68,16 @@ func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusCreated, details)
 }
 
+// AdminGet handles GET /admin/customers/{id}.
+func (h *CustomerHandler) AdminGet(w http.ResponseWriter, r *http.Request) {
+	record, err := h.customers.AdminGetCustomer(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		h.writeCustomerError(w, err, "could not load customer")
+		return
+	}
+	utils.JSON(w, http.StatusOK, record)
+}
+
 func (h *CustomerHandler) Me(w http.ResponseWriter, r *http.Request) {
 	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
 	details, err := h.customers.GetDetails(r.Context(), customerID)

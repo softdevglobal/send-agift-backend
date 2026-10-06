@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/handlers"
@@ -32,7 +34,7 @@ import (
 //	GET    /sellers/me/reviews/{id}
 //	PUT    /sellers/me/reviews/{id}/reply
 //	DELETE /sellers/me/reviews/{id}/reply
-func RegisterProductReviewRoutes(r chi.Router, reviews *handlers.ProductReviewHandler, jwtSecret string) {
+func RegisterProductReviewRoutes(r chi.Router, reviews *handlers.ProductReviewHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	r.Get("/products/{productId}/reviews/summary", reviews.SummaryByProduct)
 	r.Get("/products/{productId}/reviews", reviews.ListByProduct)
 	r.Get("/shops/{shopId}/reviews", reviews.ListByShop)
@@ -55,6 +57,7 @@ func RegisterProductReviewRoutes(r chi.Router, reviews *handlers.ProductReviewHa
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("seller"))
+		r.Use(sellerActive)
 
 		r.Get("/sellers/me/reviews", reviews.ListForSeller)
 		r.Get("/sellers/me/reviews/{id}", reviews.GetForSeller)

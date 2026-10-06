@@ -242,7 +242,9 @@ func (r *CustomerRepository) CreateSavedGift(ctx context.Context, g *models.Save
 }
 
 // ListSavedGifts returns saved gifts for one customer with product details joined from seller.products.
-func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID string) ([]models.SavedGiftDetails, error) {
+// ListSavedGifts returns saved gifts. includeInactiveSellers is for the admin
+// record, which still shows a gift after the seller is suspended.
+func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID string, includeInactiveSellers bool) ([]models.SavedGiftDetails, error) {
 	rows, err := r.db.Query(ctx, `
 		select
 			sg.id, sg.customer_id, sg.product_id, sg.created_at,
@@ -253,8 +255,11 @@ func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID stri
 			p.parcel_weight, p.parcel_mass_unit
 		from customer.saved_gifts sg
 		inner join seller.products p on p.id = sg.product_id
+		inner join seller.shops s on s.id = p.shop_id
+		inner join seller.sellers se on se.id = s.seller_id
 		where sg.customer_id = $1
-		order by sg.created_at desc`, customerID)
+		  and ($2::bool or se.status = 'active')
+		order by sg.created_at desc`, customerID, includeInactiveSellers)
 	if err != nil {
 		return nil, err
 	}

@@ -128,9 +128,12 @@ func (s *AuthService) Login(ctx context.Context, in LoginInput) (*LoginResult, e
 	} else if !errors.Is(err, repository.ErrCustomerNotFound) {
 		return nil, err // return an error if the customer is not found
 	}
-	// check if the seller exists
-	if seller, err := s.sellers.GetByEmail(ctx, email); err == nil {
+	// check if the seller exists, including a suspended account
+	if seller, err := s.sellers.GetByEmailAny(ctx, email); err == nil {
 		if utils.CheckPassword(in.Password, seller.PasswordHash) {
+			if err := sellerSessionAllowed(seller); err != nil {
+				return nil, err
+			}
 			return s.token(seller.ID.String(), seller.Email, "seller") // return the token and role
 		}
 	} else if !errors.Is(err, repository.ErrSellerNotFound) {
@@ -138,6 +141,21 @@ func (s *AuthService) Login(ctx context.Context, in LoginInput) (*LoginResult, e
 	}
 
 	return nil, ErrInvalidCredentials // return an error if the email or password is invalid
+}
+
+// sellerSessionAllowed decides whether a password match may open a seller session.
+func sellerSessionAllowed(seller *models.Seller) error {
+	switch seller.Status {
+	case "suspended":
+		return ErrSellerSuspended
+	case "active":
+		if seller.EmailVerifiedAt == nil {
+			return ErrSellerEmailUnconfirmed
+		}
+		return nil
+	default:
+		return ErrInvalidCredentials
+	}
 }
 
 // token generates a JWT token for the user

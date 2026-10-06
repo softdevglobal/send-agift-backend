@@ -22,18 +22,19 @@ type GiftAvailabilityQuery struct {
 // ShopGiftAvailability is one shop that can deliver to the searched point,
 // priced from the matching delivery zone, plus the gifts that can be sent.
 type ShopGiftAvailability struct {
-	ShopID                string             `json:"shop_id"`
-	ShopName              string             `json:"shop_name"`
-	DistanceKm            *float64           `json:"distance_km,omitempty"`
-	MaxKm                 float64            `json:"max_km"`
-	PriceAmount           int                `json:"price_amount"`
-	Currency              string             `json:"currency,omitempty"`
-	IsFree                bool               `json:"is_free"`
-	EstimatedDays         int                `json:"estimated_days"`
-	CutoffTime            string             `json:"cutoff_time,omitempty"`
-	EstimatedDeliveryDate string             `json:"estimated_delivery_date,omitempty"`
-	ProductIDs            []string           `json:"product_ids"`
-	Products              []AvailableProduct `json:"products"`
+	ShopID                   string             `json:"shop_id"`
+	ShopName                 string             `json:"shop_name"`
+	SellerVerificationStatus string             `json:"seller_verification_status,omitempty"`
+	DistanceKm               *float64           `json:"distance_km,omitempty"`
+	MaxKm                    float64            `json:"max_km"`
+	PriceAmount              int                `json:"price_amount"`
+	Currency                 string             `json:"currency,omitempty"`
+	IsFree                   bool               `json:"is_free"`
+	EstimatedDays            int                `json:"estimated_days"`
+	CutoffTime               string             `json:"cutoff_time,omitempty"`
+	EstimatedDeliveryDate    string             `json:"estimated_delivery_date,omitempty"`
+	ProductIDs               []string           `json:"product_ids"`
+	Products                 []AvailableProduct `json:"products"`
 }
 
 // AvailableProduct is a published gift the gifts page can render without
@@ -191,18 +192,19 @@ func shopAvailability(shop repository.ShopForAvailability, gifts []repository.Gi
 		return nil
 	}
 	return &ShopGiftAvailability{
-		ShopID:                shop.ID.String(),
-		ShopName:              shop.Name,
-		DistanceKm:            opt.DistanceKm,
-		MaxKm:                 opt.MaxKm,
-		PriceAmount:           opt.PriceAmount,
-		Currency:              opt.Currency,
-		IsFree:                opt.IsFree,
-		EstimatedDays:         opt.EstimatedDays,
-		CutoffTime:            opt.CutoffTime,
-		EstimatedDeliveryDate: opt.EstimatedDeliveryDate,
-		ProductIDs:            ids,
-		Products:              products,
+		ShopID:                   shop.ID.String(),
+		ShopName:                 shop.Name,
+		SellerVerificationStatus: shop.VerificationStatus,
+		DistanceKm:               opt.DistanceKm,
+		MaxKm:                    opt.MaxKm,
+		PriceAmount:              opt.PriceAmount,
+		Currency:                 opt.Currency,
+		IsFree:                   opt.IsFree,
+		EstimatedDays:            opt.EstimatedDays,
+		CutoffTime:               opt.CutoffTime,
+		EstimatedDeliveryDate:    opt.EstimatedDeliveryDate,
+		ProductIDs:               ids,
+		Products:                 products,
 	}
 }
 

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,10 +27,11 @@ import (
 // Admin JWT views purchases; a Super Admin with a fresh password
 // confirmation (X-Reauth-Token) confirms or fails them, which credits or
 // refuses the points.
-func RegisterSellerPointsRoutes(r chi.Router, h *handlers.SellerPointsHandler, jwtSecret string) {
+func RegisterSellerPointsRoutes(r chi.Router, h *handlers.SellerPointsHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("seller"))
+		r.Use(sellerActive)
 		r.Get("/sellers/me/points", h.Wallet)
 		r.Get("/sellers/me/points/purchases", h.Purchases)
 		r.Group(func(r chi.Router) {

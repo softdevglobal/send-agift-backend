@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/handlers"
@@ -38,11 +40,12 @@ import (
 //  1. POST /media/presign-upload with folder "chat-image" or "chat-document"
 //  2. PUT file to upload_url
 //  3. POST .../messages with attachments[{object_path, mime_type, size_bytes}]
-func RegisterMessagingRoutes(r chi.Router, msg *handlers.MessagingHandler, jwtSecret string) {
+func RegisterMessagingRoutes(r chi.Router, msg *handlers.MessagingHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
 		// All messaging routes share the same auth/role gate
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("customer", "seller", "admin"))
+		r.Use(sellerActive)
 
 		r.Post("/conversations", msg.Start)                     // create / reuse thread
 		r.Get("/conversations", msg.List)                       // inbox: only JWT user's threads (customer/seller/admin scoped)
