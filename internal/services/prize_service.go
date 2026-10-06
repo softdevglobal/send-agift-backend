@@ -532,7 +532,7 @@ func (s *PointsService) SearchCustomers(ctx context.Context, query string) ([]mo
 	}
 	// LIKE wildcards in the query are matched literally.
 	query = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(query)
-	return s.points.SearchCustomers(ctx, query, 50)
+	return s.points.SearchCustomers(ctx, query, 200)
 }
 
 // AdjustPointsInput is a Super Admin granting or taking points. The key

@@ -68,7 +68,9 @@ func (r *OrderRepository) GetCheckoutProduct(ctx context.Context, productID stri
 		       p.parcel_weight, p.parcel_mass_unit, p.reward_points
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
-		where p.id = $1`, productID,
+		inner join seller.sellers se on se.id = s.seller_id
+		where p.id = $1
+		  and se.status = 'active'`, productID,
 	).Scan(
 		&p.ID, &p.ShopID, &p.SellerID, &p.PriceAmount, &p.Currency,
 		&p.Status, &p.CustomerTypeVisibility, &p.ShopStatus,

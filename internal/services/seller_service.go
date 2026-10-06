@@ -30,6 +30,10 @@ type SellerService struct {
 	sellers      *repository.SellerRepository  // repository for the seller
 	countries    *repository.CountryRepository // repository for the country
 	capabilities *CountryCapabilityService
+	email        *EmailService // confirmation codes; nil sends nothing
+	resets       *repository.PasswordResetRepository
+	products     *repository.ProductRepository
+	orders       *repository.OrderRepository
 	jwtSecret    string        // secret for the JWT
 	jwtExpiry    time.Duration // expiry for the JWT
 }
@@ -55,6 +59,19 @@ type SellerRegisterInput struct { // SellerRegisterInput is a struct that contai
 	ImageURL    *string
 	Addresses   []SellerAddressInput // addresses for the seller
 	Shop        *ShopInput           // nil / omitted = blank (no shop)
+
+	LocalName          *string
+	RegistrationStatus string // registered | pending | no_number; blank for older clients
+	RegistrationNote   *string
+	Identifiers        []SellerIdentifierInput
+	TaxStatus          string // registered | not_registered | unsure; blank for older clients
+	TaxRegistrations   []SellerTaxRegistrationInput
+	ContactName        *string
+	ContactRole        string // owner | director | authorised
+	ContactJobTitle    *string
+	AuthorityConfirmed bool
+	TermsAccepted      bool
+	MarketingOptIn     bool
 }
 
 type SellerUpdateInput struct { // SellerUpdateInput is a struct that contains the input for the seller update
@@ -95,6 +112,15 @@ type ShopInput struct {
 	Latitude        *float64            `json:"latitude"`
 	Longitude       *float64            `json:"longitude"`
 	DeliveryZones   []DeliveryZoneInput `json:"delivery_zones"`
+
+	// Storefront extras. nil keeps the current value on update.
+	Website       *string  `json:"website"`
+	SupportEmail  *string  `json:"support_email"`
+	ReturnsPolicy *string  `json:"returns_policy"`
+	Categories    []string `json:"categories"`
+	GiftOptions   []string `json:"gift_options"`
+	WorkingDays   []string `json:"working_days"`
+	PickupEnabled *bool    `json:"pickup_enabled"`
 } // ShopInput is a struct that contains the input for the shop
 
 // DeliveryZoneInput is one local-delivery band. price_amount 0 = free.
@@ -157,44 +183,107 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 		Status:             "active",
 		ImageURL:           in.ImageURL,
 	}
-	if err := s.sellers.Create(ctx, seller); err != nil {
-		if errors.Is(err, repository.ErrSellerDuplicate) {
-			return nil, ErrSellerConflict // return an error if the seller already exists
+	identifiers, taxes, err := applySignupDetails(in, seller, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	for _, tax := range taxes {
+		if _, err := s.shopCountry(ctx, tax.CountryID.String()); err != nil {
+			return nil, err
 		}
-		return nil, err // return an error if the seller is not created
 	}
 
 	addresses := make([]models.SellerAddress, 0, len(in.Addresses))
-	for i, addrIn := range in.Addresses {
-		if i == 0 && !addrIn.IsDefault && len(in.Addresses) == 1 {
-			addrIn.IsDefault = true
-		}
-		addr, err := s.buildAddress(seller.ID, addrIn)
+	registered := 0
+	for _, addrIn := range in.Addresses {
+		addr, err := s.buildAddress(uuid.Nil, addrIn)
 		if err != nil {
 			return nil, err // return an error if the address is not built
 		}
-		if _, err := s.countries.GetByID(ctx, addr.CountryID.String()); err != nil {
-			if errors.Is(err, repository.ErrCountryNotFound) {
-				return nil, ErrInvalidCountry // return an error if the country is invalid
-			}
-			return nil, err // return an error if the country is not found
+		if addr.AddressType == "registered" {
+			registered++
 		}
-		if err := s.sellers.CreateAddress(ctx, addr); err != nil {
-			return nil, err // return an error if the address is not created
+		if _, err := s.shopCountry(ctx, addr.CountryID.String()); err != nil {
+			return nil, err
 		}
 		addresses = append(addresses, *addr)
 	}
+	if registered > 1 {
+		return nil, invalidSignup("send at most one registered business address")
+	}
+	pickupIdx, returnIdx := signupShopAddresses(addresses)
+	keepOneDefaultAddress(addresses, pickupIdx)
 
-	shops := []models.Shop{}
+	signup := &repository.SellerSignup{
+		Seller:           seller,
+		Identifiers:      identifiers,
+		TaxRegistrations: taxes,
+		Addresses:        addresses,
+	}
 	if in.Shop != nil && strings.TrimSpace(in.Shop.Name) != "" {
-		shop, err := s.createShopForSeller(ctx, seller.ID, *in.Shop)
-		if err != nil {
-			return nil, err // return an error if the shop is not created
+		shopIn := *in.Shop
+		if strings.TrimSpace(shopIn.CountryID) == "" {
+			shopIn.CountryID = countryID.String()
 		}
-		shops = append(shops, *shop)
+		// Address IDs do not exist yet; the repository links them by index.
+		shopIn.AddressID = nil
+		shopIn.ReturnAddressID = nil
+		shop, zones, err := s.buildShop(ctx, shopIn)
+		if err != nil {
+			return nil, err
+		}
+		hasOrigin := shop.Latitude != nil && shop.Longitude != nil
+		if pickupIdx != nil {
+			origin := addresses[*pickupIdx]
+			hasOrigin = hasOrigin || (origin.Latitude != nil && origin.Longitude != nil)
+		}
+		if !hasOrigin {
+			return nil, invalidSignup("the shop needs a pickup address with latitude and longitude so delivery distance can be measured")
+		}
+		signup.Shop = shop
+		signup.DeliveryZones = zones
+		signup.ShopAddressIndex = pickupIdx
+		signup.ShopReturnAddressIndex = returnIdx
 	}
 
-	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil // return the seller details
+	if err := s.sellers.CreateSignup(ctx, signup); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrSellerDuplicate):
+			return nil, ErrSellerConflict
+		case errors.Is(err, repository.ErrShopDuplicate):
+			return nil, ErrShopConflict
+		}
+		return nil, err
+	}
+	// The account is saved. A failure to store or send the code is logged
+	// inside issueEmailCode; the seller can ask for another from the confirm screen.
+	_ = s.issueEmailCode(ctx, seller)
+
+	shops := []models.Shop{}
+	if signup.Shop != nil {
+		shops = append(shops, *signup.Shop)
+	}
+	return &models.SellerDetails{
+		Seller:           *seller,
+		Addresses:        signup.Addresses,
+		Shops:            shops,
+		Identifiers:      signup.Identifiers,
+		TaxRegistrations: signup.TaxRegistrations,
+	}, nil
+}
+
+// ShopSlugAvailable normalises slug the same way shop creation does and
+// reports whether it is free. The unique index still decides at insert time.
+func (s *SellerService) ShopSlugAvailable(ctx context.Context, slug string) (string, bool, error) {
+	normalised := strings.Trim(nonSlugChars.ReplaceAllString(strings.ToLower(strings.TrimSpace(slug)), "-"), "-")
+	if normalised == "" {
+		return "", false, ErrInvalidShop
+	}
+	taken, err := s.sellers.ShopSlugTaken(ctx, normalised)
+	if err != nil {
+		return "", false, err
+	}
+	return normalised, !taken, nil
 }
 
 func (s *SellerService) Login(ctx context.Context, email, password string) (*SellerLoginResult, error) { // Login is a function that logs in a seller
@@ -211,6 +300,9 @@ func (s *SellerService) Login(ctx context.Context, email, password string) (*Sel
 	}
 	if !utils.CheckPassword(password, seller.PasswordHash) {
 		return nil, ErrInvalidCredentials // return an error if the password is invalid
+	}
+	if seller.EmailVerifiedAt == nil {
+		return nil, ErrSellerEmailUnconfirmed
 	}
 	token, err := utils.GenerateJWT(seller.ID.String(), seller.Email, "seller", s.jwtSecret, s.jwtExpiry)
 	if err != nil {
@@ -235,7 +327,21 @@ func (s *SellerService) GetDetails(ctx context.Context, sellerID string) (*model
 	if err != nil {
 		return nil, err // return an error if the shops are not found
 	}
-	return &models.SellerDetails{Seller: *seller, Addresses: addresses, Shops: shops}, nil // return the seller details
+	identifiers, err := s.sellers.ListIdentifiers(ctx, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	taxes, err := s.sellers.ListTaxRegistrations(ctx, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	return &models.SellerDetails{
+		Seller:           *seller,
+		Addresses:        addresses,
+		Shops:            shops,
+		Identifiers:      identifiers,
+		TaxRegistrations: taxes,
+	}, nil
 }
 
 // ListShops returns every shop owned by the seller, in any status.
@@ -428,6 +534,9 @@ func (s *SellerService) UpdateShop(ctx context.Context, sellerID, shopID string,
 		shop.Latitude = in.Latitude
 		shop.Longitude = in.Longitude
 	}
+	if err := applyShopExtras(shop, in); err != nil {
+		return nil, err
+	}
 	country, err := s.shopCountry(ctx, in.CountryID)
 	if err != nil {
 		return nil, err
@@ -483,11 +592,32 @@ func (s *SellerService) DeleteShop(ctx context.Context, sellerID, shopID string)
 
 // createShopForSeller creates a new shop for a seller
 func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.UUID, in ShopInput) (*models.Shop, error) {
-	// trim the name of the shop
+	shop, zones, err := s.buildShop(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	shop.SellerID = sellerID
+	if err := s.sellers.CreateShop(ctx, shop); err != nil {
+		if errors.Is(err, repository.ErrShopDuplicate) {
+			return nil, ErrShopConflict
+		}
+		return nil, err
+	}
+	saved, err := s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
+	if err != nil {
+		_ = s.sellers.DeleteShop(ctx, sellerID.String(), shop.ID.String())
+		return nil, err
+	}
+	shop.DeliveryZones = saved
+	return shop, nil
+}
+
+// buildShop validates in and returns the shop row and its delivery bands,
+// without writing anything. SellerID is left for the caller to set.
+func (s *SellerService) buildShop(ctx context.Context, in ShopInput) (*models.Shop, []models.ShopDeliveryZone, error) {
 	in.Name = strings.TrimSpace(in.Name)
-	// return an error if the name is empty
 	if in.Name == "" {
-		return nil, ErrInvalidShop
+		return nil, nil, ErrInvalidShop
 	}
 	status := strings.TrimSpace(in.Status) // trim the status of the shop
 	if status == "" {
@@ -497,7 +627,7 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 	if in.AddressID != nil && *in.AddressID != "" {
 		aid, err := uuid.Parse(*in.AddressID) // parse the address ID
 		if err != nil {
-			return nil, ErrInvalidAddress // return an error if the address is invalid
+			return nil, nil, ErrInvalidAddress // return an error if the address is invalid
 		}
 		addressID = &aid
 	}
@@ -505,12 +635,11 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 	if in.ReturnAddressID != nil && *in.ReturnAddressID != "" {
 		rid, err := uuid.Parse(*in.ReturnAddressID)
 		if err != nil {
-			return nil, ErrInvalidAddress
+			return nil, nil, ErrInvalidAddress
 		}
 		returnAddressID = &rid
 	}
 	shop := &models.Shop{
-		SellerID:                sellerID,
 		Name:                    in.Name,
 		Slug:                    slugOrFromName(in.Slug, in.Name),
 		Description:             in.Description,
@@ -522,44 +651,31 @@ func (s *SellerService) createShopForSeller(ctx context.Context, sellerID uuid.U
 		Latitude:                in.Latitude,
 		Longitude:               in.Longitude,
 	}
+	if err := applyShopExtras(shop, in); err != nil {
+		return nil, nil, err
+	}
 	country, err := s.shopCountry(ctx, in.CountryID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	shop.CountryID = country.ID
 	timezone, err := resolveShopTimezone(in.Timezone, country.DefaultTimezone)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	shop.Timezone = timezone
 	if err := validateLatLng(in.Latitude, in.Longitude); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	currency := strings.ToUpper(strings.TrimSpace(country.DefaultCurrency))
 	zones, err := normalizeDeliveryZones(in.DeliveryZones, currency)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(zones) == 0 {
-		return nil, ErrInvalidShop
+		return nil, nil, ErrInvalidShop
 	}
-	if err := s.sellers.CreateShop(ctx, shop); err != nil {
-		if errors.Is(err, repository.ErrShopDuplicate) {
-			return nil, ErrShopConflict
-		}
-		return nil, err
-	}
-	if len(zones) > 0 {
-		saved, err := s.sellers.ReplaceDeliveryZones(ctx, shop.ID, zones)
-		if err != nil {
-			_ = s.sellers.DeleteShop(ctx, sellerID.String(), shop.ID.String())
-			return nil, err
-		}
-		shop.DeliveryZones = saved
-	} else {
-		shop.DeliveryZones = []models.ShopDeliveryZone{}
-	}
-	return shop, nil
+	return shop, zones, nil
 }
 
 func (s *SellerService) ListDeliveryZones(ctx context.Context, sellerID, shopID string) ([]models.ShopDeliveryZone, error) {
@@ -707,7 +823,7 @@ func (s *SellerService) buildAddress(sellerID uuid.UUID, in SellerAddressInput) 
 		in.AddressType = "both"
 	}
 	switch in.AddressType {
-	case "pickup", "return", "both":
+	case "pickup", "return", "both", "registered":
 	default:
 		return nil, ErrInvalidAddress
 	}

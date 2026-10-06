@@ -64,11 +64,13 @@ func main() {
 	countryService := services.NewCountryService(countries)
 	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
 	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
+	customerService.UseAdminReads(orders)
 	// Product reward points reach the buyer when the order is placed, or on
 	// delivery (POINTS_REWARD_TIMING=delivery).
 	orders.PayRewardsAtOrder(cfg.PointsRewardTiming != "delivery")
 	orderService := services.NewOrderService(orders, customers, countries, shipments)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
+	sellerService.UseAdminReads(products, orders)
 	productService := services.NewProductService(products, sellers, countries, s3Service, cfg.S3Bucket)
 	reelService := services.NewReelService(reels, reelSocial, sellers, s3Service, cfg.S3Bucket)
 	reelSocialService := services.NewReelSocialService(reelSocial)
@@ -119,6 +121,10 @@ func main() {
 		database.Exclusive(pool, database.LockEmailDelivery))
 	// New customers get a welcome email.
 	customerService.SendEmailsWith(emailService)
+	sellerService.SendEmailsWith(emailService)
+	passwordResets := repository.NewPasswordResetRepository(pool)
+	customerService.UsePasswordResets(passwordResets)
+	sellerService.UsePasswordResets(passwordResets)
 	// Orders: the buyer gets a confirmation and the recipient a customer
 	// account; the recipient is emailed only once the gift is delivered.
 	giftRecipientService := services.NewGiftRecipientService(orders, customers, emailService)

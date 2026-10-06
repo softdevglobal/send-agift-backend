@@ -266,6 +266,43 @@ func (r *ProductRepository) ListByShopForSeller(ctx context.Context, sellerID, s
 	return items, nil
 }
 
+// ListBySeller returns every gift in the seller's shops, including drafts.
+func (r *ProductRepository) ListBySeller(ctx context.Context, sellerID string) ([]models.Product, error) {
+	rows, err := r.db.Query(ctx, `
+		select `+productSelectCols+`
+		from seller.products p
+		inner join seller.shops s on s.id = p.shop_id
+		where s.seller_id = $1
+		order by p.created_at desc`, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []models.Product{}
+	for rows.Next() {
+		var p models.Product
+		if err := scanProduct(rows, &p); err != nil {
+			return nil, err
+		}
+		if p.OccasionTags == nil {
+			p.OccasionTags = []string{}
+		}
+		items = append(items, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ptrs := make([]*models.Product, len(items))
+	for i := range items {
+		ptrs[i] = &items[i]
+	}
+	if err := r.attachMedia(ctx, ptrs); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ListPublishedByShopForCustomerType returns only published products for a given shop,
 // where the shop is active and the product is visible for the given customer_type.
 // customerType must be 'personal' or 'corporate'.
@@ -278,8 +315,10 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 		select `+publicProductSelectCols+`
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
+		inner join seller.sellers se on se.id = s.seller_id
 		where p.shop_id = $1
 		  and s.status = 'active'
+		  and se.status = 'active'
 		  and p.status = 'published'
 		  and (p.customer_type_visibility = 'both' or p.customer_type_visibility = $2)
 		order by p.created_at desc`, shopID, customerType)
@@ -328,11 +367,13 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 	var length, width, height, distanceUnit, weight, massUnit *string
 	err := r.db.QueryRow(ctx, `
 		select `+publicProductSelectCols+`,
-		       s.id, s.name, s.slug, s.image_url, s.customer_visible_location
+		       s.id, s.name, s.slug, s.image_url, s.customer_visible_location, se.verification_status
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
+		inner join seller.sellers se on se.id = s.seller_id
 		where p.id = $1
 		  and s.status = 'active'
+		  and se.status = 'active'
 		  and p.status = 'published'
 		  and (p.customer_type_visibility = 'both' or p.customer_type_visibility = $2)`,
 		productID, customerType,
@@ -341,7 +382,7 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 		&out.Currency, &out.Status, &out.OccasionTags, &out.CustomerTypeVisibility,
 		&out.PointsDisplayEnabled, &out.PrepMinutes, &out.CreatedAt, &out.UpdatedAt, &out.ImageURL,
 		&length, &width, &height, &distanceUnit, &weight, &massUnit, &out.RewardPoints,
-		&out.Shop.ID, &out.Shop.Name, &out.Shop.Slug, &out.Shop.ImageURL, &out.Shop.Location,
+		&out.Shop.ID, &out.Shop.Name, &out.Shop.Slug, &out.Shop.ImageURL, &out.Shop.Location, &out.Shop.SellerVerificationStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrProductNotFound

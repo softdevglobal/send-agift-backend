@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"myapp/internal/models"
 	"myapp/internal/repository"
 )
@@ -84,6 +86,34 @@ func (s *EmailService) queue(ctx context.Context, kind, dedupeKey, toEmail, toNa
 }
 
 // ── The emails ──────────────────────────────────────────────────────────
+
+// SendSellerEmailCode emails the 6-digit code a new seller enters to confirm
+// their address. Each send has its own dedupe key, so a resend is delivered.
+func (s *EmailService) SendSellerEmailCode(ctx context.Context, sellerID uuid.UUID, email, name, code string, validFor time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderSellerEmailCode(name, code, validFor)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("seller_email_code:%s:%d", sellerID, time.Now().UnixNano())
+	return s.queue(ctx, "seller_email_code", key, email, name, content)
+}
+
+// SendPasswordResetCode emails the 6-digit code for a forgotten password or a
+// change started from the profile. Each send has its own dedupe key.
+func (s *EmailService) SendPasswordResetCode(ctx context.Context, subjectType string, subjectID uuid.UUID, purpose, email, name, code string, validFor time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderPasswordResetCode(name, code, purpose, validFor)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("password_reset:%s:%s:%s:%d", subjectType, subjectID, purpose, time.Now().UnixNano())
+	return s.queue(ctx, "password_reset", key, email, name, content)
+}
 
 // SendCustomerWelcome greets a customer who just signed up.
 func (s *EmailService) SendCustomerWelcome(ctx context.Context, c *models.Customer) error {

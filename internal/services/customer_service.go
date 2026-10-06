@@ -34,13 +34,20 @@ type CustomerService struct {
 	countries    *repository.CountryRepository  // repository for the service
 	capabilities *CountryCapabilityService
 	products     *repository.ProductRepository // for validating product_id on saved gifts
-	jwtSecret    string                        // secret for the JWT
-	jwtExpiry    time.Duration                 // expiry for the JWT
-	email        *EmailService                 // welcome emails; nil sends none
+	orders       *repository.OrderRepository
+	jwtSecret    string        // secret for the JWT
+	jwtExpiry    time.Duration // expiry for the JWT
+	email        *EmailService // welcome emails; nil sends none
+	resets       *repository.PasswordResetRepository
 }
 
 // SendEmailsWith turns on the welcome email for new customers.
 func (s *CustomerService) SendEmailsWith(email *EmailService) { s.email = email }
+
+// UsePasswordResets turns on emailed codes for a forgotten or profile password.
+func (s *CustomerService) UsePasswordResets(codes *repository.PasswordResetRepository) {
+	s.resets = codes
+}
 
 func NewCustomerService(
 	customers *repository.CustomerRepository,
@@ -434,7 +441,7 @@ func (s *CustomerService) ListSavedGifts(ctx context.Context, customerID string)
 		}
 		return nil, err
 	}
-	return s.customers.ListSavedGifts(ctx, customerID)
+	return s.customers.ListSavedGifts(ctx, customerID, false)
 }
 
 // DeleteSavedGift removes a saved gift only if it belongs to this customer.

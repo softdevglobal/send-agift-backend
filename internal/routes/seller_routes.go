@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/go-chi/chi/v5"
 
 	"myapp/internal/handlers"
@@ -16,11 +18,31 @@ func RegisterSellerRoutes(
 	jwtSecret string,
 ) {
 	r.Post("/sellers/register", sellers.Register)
+	r.Get("/sellers/shops/slug-available", sellers.ShopSlugAvailable)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RateLimitByIP(20, time.Minute))
+		r.Post("/sellers/verify-email", sellers.VerifyEmail)
+		r.Post("/sellers/verify-email/resend", sellers.ResendEmailCode)
+		r.Post("/sellers/forgot-password", sellers.ForgotPassword)
+		r.Post("/sellers/reset-password", sellers.ResetPassword)
+	})
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth(jwtSecret))
+		r.Use(middleware.RequireRole("admin"))
+		r.Get("/admin/sellers", sellers.AdminList)
+		r.Get("/admin/sellers/{id}", sellers.AdminGet)
+		r.Patch("/admin/sellers/{id}/status", sellers.AdminSetStatus)
+		r.Patch("/admin/sellers/{id}/verification", sellers.AdminSetVerification)
+	})
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("seller"))
+		r.Use(sellers.RequireActive)
 		r.Get("/sellers/me", sellers.Me)
+		r.Post("/sellers/me/password/code", sellers.SendPasswordCode)
+		r.Post("/sellers/me/password/reset", sellers.ResetProfilePassword)
 		r.Put("/sellers/me", sellers.UpdateMe)
 		r.Delete("/sellers/me", sellers.DeleteMe)
 

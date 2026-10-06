@@ -68,3 +68,13 @@ type CustomerDetails struct {
 	Customer
 	Addresses []CustomerAddress `json:"addresses"`
 }
+
+// AdminCustomerRecord is everything an admin can open for one customer:
+// the profile, recipients, saved gifts, and orders.
+type AdminCustomerRecord struct {
+	CustomerDetails
+	CountryName string             `json:"country_name"`
+	Recipients  []RecipientDetails `json:"recipients"`
+	SavedGifts  []SavedGiftDetails `json:"saved_gifts"`
+	Orders      []Order            `json:"orders"`
+}

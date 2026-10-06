@@ -173,6 +173,14 @@ const emailLayout = `<!DOCTYPE html>
   </table>
 </td></tr>{{end}}
 
+{{define "otp"}}<tr><td class="px" align="center" style="padding:32px 60px 8px;">
+  <table cellpadding="0" cellspacing="0" border="0"><tr>
+  {{range .}}<td width="8"></td>
+    <td class="code" width="48" height="60" align="center" valign="middle" style="width:48px;height:60px;line-height:60px;font-size:28px;font-weight:700;color:{{c "navy"}};background-color:{{c "lavender"}};border-radius:8px;">{{.}}</td>
+  {{end}}<td width="8"></td>
+  </tr></table>
+</td></tr>{{end}}
+
 {{define "closing"}}<tr><td class="px" align="center" style="padding:0 60px 56px;">
   <div style="font-size:22px;line-height:30px;font-weight:700;letter-spacing:-0.4px;color:{{c "navy"}};">{{.Title}}</div>
   <div style="margin-top:10px;font-size:13px;line-height:21px;color:{{c "muted"}};">{{.Body}}</div>
@@ -211,6 +219,81 @@ const customerWelcomeContent = `{{define "content"}}
 
 type emailCallout struct{ Label, Body string }
 type emailClosing struct{ Title, Body string }
+
+const sellerEmailCodeContent = `{{define "content"}}
+{{template "eyebrow" "Confirm your email"}}
+{{template "heading" "Your seller code"}}
+{{template "intro" .Intro}}
+{{template "otp" .Digits}}
+{{template "callout" .Callout}}
+{{template "spacer"}}
+{{end}}`
+
+func renderSellerEmailCode(name, code string, validFor time.Duration) (*EmailContent, error) {
+	minutes := int(validFor.Round(time.Minute).Minutes())
+	if minutes < 1 {
+		minutes = 1
+	}
+	digits := make([]string, 0, len(code))
+	for _, r := range code {
+		digits = append(digits, string(r))
+	}
+	data := map[string]any{
+		"Intro":  fmt.Sprintf("Hi %s,\nEnter this code to confirm your seller email and open your shop. It expires in %d minutes.", name, minutes),
+		"Digits": digits,
+		"Callout": emailCallout{
+			Label: "Keep this code private",
+			Body:  "We will never ask you to read it out or forward this email.",
+		},
+	}
+	text := fmt.Sprintf(`Hi %s,
+
+Your SendAGift seller code is %s.
+
+Enter it to confirm your email. It expires in %d minutes.
+
+The SendAGift team`, name, code, minutes)
+	return renderEmail("", sellerEmailCodeContent, "Your SendAGift seller code",
+		"Enter this code to confirm your seller email.", data, text)
+}
+
+const passwordResetCodeContent = `{{define "content"}}
+{{template "eyebrow" .Eyebrow}}
+{{template "heading" .Heading}}
+{{template "intro" .Intro}}
+{{template "otp" .Digits}}
+{{template "callout" .Callout}}
+{{template "spacer"}}
+{{end}}`
+
+func renderPasswordResetCode(name, code, purpose string, validFor time.Duration) (*EmailContent, error) {
+	minutes := int(validFor.Round(time.Minute).Minutes())
+	if minutes < 1 {
+		minutes = 1
+	}
+	digits := make([]string, 0, len(code))
+	for _, r := range code {
+		digits = append(digits, string(r))
+	}
+	eyebrow := "Password reset"
+	heading := "Reset your password"
+	action := "reset your password"
+	if purpose == "profile" {
+		eyebrow = "Password change"
+		heading = "Confirm your new password"
+		action = "confirm the password change you started"
+	}
+	data := map[string]any{
+		"Eyebrow": eyebrow,
+		"Heading": heading,
+		"Intro":   fmt.Sprintf("Hi %s,\nEnter this code to %s. It expires in %d minutes. If you didn't ask for this, you can ignore the email.", name, action, minutes),
+		"Digits":  digits,
+		"Callout": emailCallout{Label: "Keep this code private", Body: "We will never ask you to read it out or forward this email."},
+	}
+	text := fmt.Sprintf("Hi %s,\n\nYour SendAGift code is %s.\n\nUse it to %s. It expires in %d minutes.\n\nThe SendAGift team", name, code, action, minutes)
+	return renderEmail("", passwordResetCodeContent, "Your SendAGift password code",
+		"Enter this code to continue.", data, text)
+}
 
 func renderCustomerWelcome(webURL, name string) (*EmailContent, error) {
 	data := map[string]any{
