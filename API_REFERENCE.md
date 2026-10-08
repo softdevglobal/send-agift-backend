@@ -2831,9 +2831,9 @@ bills them as a single session. The fields map straight onto `AddressInput`
 
 ### 8.17 Points
 
-One append-only ledger (`finance.points_ledger`) records every change to anyone's points,
-customer or seller; the balances on `finance.points_accounts` and
-`finance.seller_points_accounts` are caches written in the same transaction. Nothing a
+One append-only ledger (`points.points_ledger`) records every change to anyone's points,
+customer or seller; the balances on `points.points_accounts` and
+`points.seller_points_accounts` are caches written in the same transaction. Nothing a
 client sends can set a balance.
 
 Every ledger entry comes back as:

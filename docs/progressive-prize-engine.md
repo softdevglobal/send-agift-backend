@@ -9,14 +9,14 @@ Implements *SendAGift – Progressive Prize Game Engine, Developer Specification
 | game / round | `competition.competitions` (one row per round; `round_no`, `previous_round_id`) |
 | game_play | `competition.competition_attempts` (+ `client_request_id`, `prize_increment_cents`, `prize_before/after_cents`, `risk_metadata`, `refunded_at`) |
 | prize_ledger | `competition.prize_ledger` (append-only, trigger-enforced) |
-| wallet_transactions | `finance.points_ledger` (append-only) + `finance.points_accounts` (balance ≥ 0) |
+| wallet_transactions | `points.points_ledger` (append-only) + `points.points_accounts` (balance ≥ 0) |
 | game_winners | `competition.competition_winners` (+ `prize_value_cents`, `settlement_status`, `settled_at`) |
 | admin_audit_log | `admin.audit_log` (existing, append-only) |
 | outbox_events | `core.outbox_events` |
 | game_user_counters | derived from `competition_attempts` under the round lock (indexed); no separate table |
 | status ACTIVE / SETTLED | `live` / `finalised`; `paused` is new |
 
-Migration: `000043_progressive_prize_engine`.
+Migration: `000043_progressive_prize_engine`. The points tables were created in `finance` and moved to the `points` schema by `000064_move_points_to_points_schema`.
 
 ## The play transaction
 
@@ -144,7 +144,7 @@ Five catalog games with `game_type = 'chance'`: `spin-wheel`, `scratch-card`, `t
 
 ## Points earning
 
-`finance.points_earning_rules`, one per country, set by a Super Admin (`GET /admin/points/earning-rules`, `PUT /admin/points/earning-rules/{countryID}`): `points_per_unit` per whole unit of the order currency (rounded down; zero-decimal currencies handled) and a `signup_bonus`. A job every 5 minutes (or `POST /admin/points/earning-runs`):
+`points.points_earning_rules`, one per country, set by a Super Admin (`GET /admin/points/earning-rules`, `PUT /admin/points/earning-rules/{countryID}`): `points_per_unit` per whole unit of the order currency (rounded down; zero-decimal currencies handled) and a `signup_bonus`. A job every 5 minutes (or `POST /admin/points/earning-runs`):
 
 - awards delivered orders (`order_reward`, key `order:<id>`) — only orders delivered after the rule was switched on;
 - takes points back from refunded or cancelled orders (`order_reversal`), up to what the customer still holds;

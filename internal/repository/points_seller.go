@@ -32,7 +32,7 @@ func (r *PointsRepository) SellerWallet(ctx context.Context, sellerID uuid.UUID,
 	w := &models.SellerPointsWallet{SellerID: sellerID, Entries: []models.PointsEntry{}}
 	err := r.db.QueryRow(ctx, `
 		select balance, reserved, lifetime_purchased, lifetime_spent
-		from finance.seller_points_accounts where seller_id = $1`, sellerID).
+		from points.seller_points_accounts where seller_id = $1`, sellerID).
 		Scan(&w.Balance, &w.Reserved, &w.LifetimePurchased, &w.LifetimeSpent)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -57,7 +57,7 @@ const purchaseSelect = `
 	       pp.checkout_url, pp.failure_reason, pp.ledger_entry_id, pp.confirmed_by, pp.completed_at,
 	       pp.failed_at, pp.created_at, pp.updated_at,
 	       coalesce(s.trading_name, s.legal_name), s.email::text
-	from finance.points_purchases pp
+	from points.points_purchases pp
 	inner join seller.sellers s on s.id = pp.seller_id
 `
 
@@ -92,7 +92,7 @@ func scanPurchases(rows pgx.Rows) ([]models.PointsPurchase, error) {
 func (r *PointsRepository) CreatePurchase(ctx context.Context, p *models.PointsPurchase, key string) (*models.PointsPurchase, error) {
 	var id uuid.UUID
 	err := r.db.QueryRow(ctx, `
-		insert into finance.points_purchases
+		insert into points.points_purchases
 			(seller_id, amount_cents, currency, cents_per_point, points, provider, idempotency_key)
 		values ($1, $2, $3, $4, $5, $6, $7)
 		returning id`,
@@ -118,7 +118,7 @@ func (r *PointsRepository) CreatePurchase(ctx context.Context, p *models.PointsP
 // SetPurchaseCheckout stores where the provider sends the seller to pay.
 func (r *PointsRepository) SetPurchaseCheckout(ctx context.Context, id uuid.UUID, url, reference *string) error {
 	_, err := r.db.Exec(ctx, `
-		update finance.points_purchases
+		update points.points_purchases
 		set checkout_url = $2, provider_reference = coalesce($3, provider_reference), updated_at = now()
 		where id = $1 and status = 'pending'`, id, url, reference)
 	return err
@@ -190,7 +190,7 @@ func (r *PointsRepository) CompletePurchase(ctx context.Context, id uuid.UUID, c
 	)
 	err = tx.QueryRow(ctx, `
 		select seller_id, status, cents_per_point
-		from finance.points_purchases where id = $1 for update`, id).
+		from points.points_purchases where id = $1 for update`, id).
 		Scan(&sellerID, &status, &centsPerPoint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, ErrPurchaseNotFound
@@ -226,7 +226,7 @@ func (r *PointsRepository) CompletePurchase(ctx context.Context, id uuid.UUID, c
 		return nil, false, err
 	}
 	if _, err := tx.Exec(ctx, `
-		update finance.points_purchases
+		update points.points_purchases
 		set status = 'completed', paid_amount_cents = $2, points_credited = $3,
 		    provider_reference = coalesce($4, provider_reference), ledger_entry_id = $5,
 		    confirmed_by = $6, confirmed_by_admin_id = $7, completed_at = now(), updated_at = now()
@@ -262,7 +262,7 @@ func (r *PointsRepository) FailPurchase(ctx context.Context, id uuid.UUID, reaso
 	}
 	defer tx.Rollback(ctx)
 	tag, err := tx.Exec(ctx, `
-		update finance.points_purchases
+		update points.points_purchases
 		set status = 'failed', failure_reason = $2, confirmed_by = $3, confirmed_by_admin_id = $4,
 		    failed_at = now(), updated_at = now()
 		where id = $1 and status = 'pending'`, id, reason, confirmedBy, adminID)
@@ -290,7 +290,7 @@ func (r *PointsRepository) FailPurchase(ctx context.Context, id uuid.UUID, reaso
 // CancelPurchase lets a seller abandon one of their pending purchases.
 func (r *PointsRepository) CancelPurchase(ctx context.Context, sellerID, id uuid.UUID) (*models.PointsPurchase, error) {
 	tag, err := r.db.Exec(ctx, `
-		update finance.points_purchases
+		update points.points_purchases
 		set status = 'cancelled', updated_at = now()
 		where id = $1 and seller_id = $2 and status = 'pending'`, id, sellerID)
 	if err != nil {

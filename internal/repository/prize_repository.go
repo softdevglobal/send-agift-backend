@@ -565,7 +565,7 @@ func loadPlayOutcome(ctx context.Context, q querier, attemptID, customerID uuid.
 	}
 	s.Config = json.RawMessage(rawConfig)
 	if err := q.QueryRow(ctx, `
-		select coalesce((select balance from finance.points_accounts where customer_id = $1), 0),
+		select coalesce((select balance from points.points_accounts where customer_id = $1), 0),
 		       (select count(*) from competition.competition_attempts
 		         where competition_id = $2 and customer_id = $1 and status <> 'voided')`,
 		customerID, out.Attempt.CompetitionID).Scan(&out.PointsBalance, &out.AttemptsUsed); err != nil {
@@ -1198,18 +1198,18 @@ func (r *CompetitionRepository) Reconcile(ctx context.Context, id uuid.UUID) (*m
 		         where l.competition_id = c.id and l.entry_type = 'play_reversal'
 		           and (a.status <> 'voided' or l.amount_delta_cents <> -a.prize_increment_cents)),
 		       (select count(*) from competition.competition_attempts where competition_id = c.id and points_spent > 0),
-		       (select count(*) from finance.points_ledger where competition_id = c.id and entry_type = 'play_debit'),
+		       (select count(*) from points.points_ledger where competition_id = c.id and entry_type = 'play_debit'),
 		       (select count(*) from competition.competition_attempts a
 		         where a.competition_id = c.id and a.points_spent > 0 and not exists (
-		           select 1 from finance.points_ledger p
+		           select 1 from points.points_ledger p
 		            where p.id = a.points_ledger_id and p.entry_type = 'play_debit'
 		              and p.amount_delta = -a.points_spent and p.attempt_id = a.id)),
 		       (select count(*) from competition.competition_attempts
 		         where competition_id = c.id and refunded_at is not null),
-		       (select count(*) from finance.points_ledger where competition_id = c.id and entry_type = 'play_refund'),
+		       (select count(*) from points.points_ledger where competition_id = c.id and entry_type = 'play_refund'),
 		       (select count(*) from competition.competition_attempts a
 		         where a.competition_id = c.id and a.refunded_at is not null and not exists (
-		           select 1 from finance.points_ledger p
+		           select 1 from points.points_ledger p
 		            where p.attempt_id = a.id and p.entry_type = 'play_refund' and p.amount_delta = a.points_spent))
 		from competition.competitions c
 		where c.id = $1`, id).
@@ -1317,9 +1317,9 @@ func (r *CompetitionRepository) Analytics(ctx context.Context, id uuid.UUID) (*m
 		       (select count(*) from (select customer_id from competition.competition_attempts
 		         where competition_id = c.id and status <> 'voided'
 		         group by customer_id having count(*) > 1) t),
-		       coalesce((select -sum(amount_delta) from finance.points_ledger
+		       coalesce((select -sum(amount_delta) from points.points_ledger
 		                  where competition_id = c.id and entry_type = 'play_debit'), 0),
-		       coalesce((select sum(amount_delta) from finance.points_ledger
+		       coalesce((select sum(amount_delta) from points.points_ledger
 		                  where competition_id = c.id and entry_type = 'play_refund'), 0),
 		       coalesce((select sum(amount_delta_cents) filter (where entry_type = 'play_increment')
 		                   from competition.prize_ledger where competition_id = c.id), 0),

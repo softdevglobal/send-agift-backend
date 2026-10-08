@@ -41,7 +41,7 @@ const productSelectCols = `
 // shop as s.
 var publicProductSelectCols = strings.Replace(productSelectCols, "p.reward_points", `
 	case when p.reward_points > 0
-	      and coalesce((select a.balance - a.reserved from finance.seller_points_accounts a
+	      and coalesce((select a.balance - a.reserved from points.seller_points_accounts a
 	                    where a.seller_id = s.seller_id), 0) >= p.reward_points
 	     then p.reward_points else 0 end`, 1)
 

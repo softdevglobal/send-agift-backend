@@ -46,11 +46,12 @@ Diagram entity names use underscores because Mermaid does not allow dots, so
 | `social` | reel likes and comments | `reel_likes`, `reel_comments` |
 | `competition` | skill games and prize competitions | `games`, `game_versions`, `game_sessions`, `game_scores`, `competitions`, `competition_attempts`, `score_submissions`, `leaderboard_snapshots`, `competition_winners`, `prize_claims` |
 | `finance` | prize money held for competitions | `prize_reserves` |
+| `points` | customer and seller points: balances, the append-only ledger, earning rules, seller purchases | `points_accounts`, `seller_points_accounts`, `points_ledger`, `points_earning_rules`, `points_purchases` |
 | `public` | migration bookkeeping only | `schema_migrations` |
 
 `admin.audit_log` (added by `000029`) also lives in the `admin` schema.
 
-The `messaging`, `support`, `social`, `competition`, and `finance` schemas are listed for completeness
+The `messaging`, `support`, `social`, `competition`, `finance` and `points` schemas are listed for completeness
 and summarised in [section 19](#19-migration-history); this document details the gifting
 tables.
 
@@ -1581,6 +1582,7 @@ Applied in filename order, tracked in `schema_migrations`. Numbering has gaps �
 | `000041_shipment_seller_delivery` | `shipments.distance_km`, `zone_max_km`, `price_amount`, `currency`, `estimated_days`, `estimated_delivery_date` — the shop delivery snapshot |
 | `000047_points_system` | Points for everyone: `finance.points_ledger` gains `seller_id` (exactly one holder per row), `reference_type`/`reference_id`, `status`, generated `balance_before` and `direction`, and the new entry types; `finance.seller_points_accounts` (`balance`, `reserved` ≤ `balance`); `finance.points_purchases` (pending → completed/failed/cancelled, rate snapshot, UNIQUE `(seller_id, idempotency_key)` and `(provider, provider_reference)`); `seller.products.reward_points`; `order_items.reward_points_per_unit`/`reward_points`/`reward_status`; `orders.gift_points`/`gift_points_status`/`gift_points_recipient_id`; `competitions.prize_points` and prize type `points` |
 | `000048_game_play_cost` | `competition.games.play_cost_points` (default 50, 0–1,000,000): what one practice play of each game costs, set by a platform admin |
+| `000064_move_points_to_points_schema` | Moves `points_accounts`, `points_ledger`, `points_earning_rules`, `seller_points_accounts` and `points_purchases` (with their data, indexes, triggers and keys) and the ledger's `forbid_points_ledger_mutation()` from `finance` into the `points` schema. Earlier rows above that name `finance.points_*` describe where those tables were first created |
 
 Two files share each of the numbers `000027`–`000030`. Versions are the full file names,
 so both run, in alphabetical order.

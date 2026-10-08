@@ -59,13 +59,13 @@ func ref(kind string) *string { return &kind }
 // use.
 func lockPointsAccount(ctx context.Context, q querier, customerID uuid.UUID) (int64, error) {
 	if _, err := q.Exec(ctx, `
-		insert into finance.points_accounts (customer_id) values ($1)
+		insert into points.points_accounts (customer_id) values ($1)
 		on conflict (customer_id) do nothing`, customerID); err != nil {
 		return 0, err
 	}
 	var balance int64
 	err := q.QueryRow(ctx, `
-		select balance from finance.points_accounts where customer_id = $1 for update`, customerID).
+		select balance from points.points_accounts where customer_id = $1 for update`, customerID).
 		Scan(&balance)
 	return balance, err
 }
@@ -74,12 +74,12 @@ func lockPointsAccount(ctx context.Context, q querier, customerID uuid.UUID) (in
 // have promised on undelivered orders.
 func lockSellerPointsAccount(ctx context.Context, q querier, sellerID uuid.UUID) (balance, reserved int64, err error) {
 	if _, err = q.Exec(ctx, `
-		insert into finance.seller_points_accounts (seller_id) values ($1)
+		insert into points.seller_points_accounts (seller_id) values ($1)
 		on conflict (seller_id) do nothing`, sellerID); err != nil {
 		return 0, 0, err
 	}
 	err = q.QueryRow(ctx, `
-		select balance, reserved from finance.seller_points_accounts where seller_id = $1 for update`,
+		select balance, reserved from points.seller_points_accounts where seller_id = $1 for update`,
 		sellerID).Scan(&balance, &reserved)
 	return balance, reserved, err
 }
@@ -113,7 +113,7 @@ func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.
 		}
 	}
 	if err = q.QueryRow(ctx, `
-		update finance.points_accounts
+		update points.points_accounts
 		set balance = balance + $2,
 		    lifetime_earned = greatest(lifetime_earned + $3, 0),
 		    lifetime_spent = greatest(lifetime_spent + $4, 0),
@@ -146,7 +146,7 @@ func applySellerPoints(ctx context.Context, q querier, ch PointsChange) (uuid.UU
 		spent = -ch.Delta
 	}
 	if err = q.QueryRow(ctx, `
-		update finance.seller_points_accounts
+		update points.seller_points_accounts
 		set balance = balance + $2,
 		    reserved = reserved - $3,
 		    lifetime_purchased = greatest(lifetime_purchased + $4, 0),
@@ -174,7 +174,7 @@ func insertLedgerRow(ctx context.Context, q querier, ch PointsChange, balance in
 		customerID = &ch.CustomerID
 	}
 	_, err := q.Exec(ctx, `
-		insert into finance.points_ledger
+		insert into points.points_ledger
 			(id, customer_id, seller_id, entry_type, amount_delta, balance_after, competition_id,
 			 attempt_id, idempotency_key, reason, actor_type, actor_id, order_id,
 			 reference_type, reference_id)
@@ -200,7 +200,7 @@ func reserveSellerPoints(ctx context.Context, q querier, sellerID uuid.UUID, n i
 		return false, nil
 	}
 	_, err = q.Exec(ctx, `
-		update finance.seller_points_accounts
+		update points.seller_points_accounts
 		set reserved = reserved + $2, updated_at = now()
 		where seller_id = $1`, sellerID, n)
 	return err == nil, err
@@ -213,7 +213,7 @@ func releaseSellerPoints(ctx context.Context, q querier, sellerID uuid.UUID, n i
 		return err
 	}
 	_, err := q.Exec(ctx, `
-		update finance.seller_points_accounts
+		update points.seller_points_accounts
 		set reserved = greatest(reserved - $2, 0), updated_at = now()
 		where seller_id = $1`, sellerID, n)
 	return err
@@ -223,7 +223,7 @@ func releaseSellerPoints(ctx context.Context, q querier, sellerID uuid.UUID, n i
 func (r *PointsRepository) Balance(ctx context.Context, customerID uuid.UUID) (int64, error) {
 	var balance int64
 	err := r.db.QueryRow(ctx, `
-		select coalesce((select balance from finance.points_accounts where customer_id = $1), 0)`,
+		select coalesce((select balance from points.points_accounts where customer_id = $1), 0)`,
 		customerID).Scan(&balance)
 	return balance, err
 }
@@ -235,7 +235,7 @@ const ledgerSelect = `
 	       l.balance_after, l.direction, l.status, l.competition_id, l.attempt_id, l.order_id,
 	       l.reference_type, l.reference_id, l.reason, l.actor_type, l.created_at,
 	       c.title, o.order_number, p.name
-	from finance.points_ledger l
+	from points.points_ledger l
 	left join competition.competitions c on c.id = l.competition_id
 	left join marketplace.orders o on o.id = l.order_id
 	left join marketplace.order_items oi on l.reference_type = 'order_item' and oi.id = l.reference_id
@@ -322,7 +322,7 @@ func (r *PointsRepository) Wallet(ctx context.Context, customerID uuid.UUID, lim
 	w := &models.PointsWallet{CustomerID: customerID, Entries: []models.PointsEntry{}}
 	err := r.db.QueryRow(ctx, `
 		select balance, lifetime_earned, lifetime_spent
-		from finance.points_accounts where customer_id = $1`, customerID).
+		from points.points_accounts where customer_id = $1`, customerID).
 		Scan(&w.Balance, &w.LifetimeEarned, &w.LifetimeSpent)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -337,7 +337,7 @@ func (r *PointsRepository) Wallet(ctx context.Context, customerID uuid.UUID, lim
 			coalesce(-sum(amount_delta) filter (where entry_type in ('play_debit', 'play_refund')), 0),
 			coalesce(-sum(amount_delta) filter (where entry_type in
 				('gift_points_sent', 'gift_points_returned')), 0)
-		from finance.points_ledger where customer_id = $1`, customerID).
+		from points.points_ledger where customer_id = $1`, customerID).
 		Scan(&w.Totals.FromPurchases, &w.Totals.FromGifts, &w.Totals.FromPrizes,
 			&w.Totals.SpentOnGames, &w.Totals.SentAsGifts); err != nil {
 		return nil, err
@@ -401,7 +401,7 @@ func (r *PointsRepository) SearchCustomers(ctx context.Context, query string, li
 		       coalesce(a.balance, 0), c.created_at
 		from customer.customers c
 		inner join core.countries co on co.id = c.country_id
-		left join finance.points_accounts a on a.customer_id = c.id
+		left join points.points_accounts a on a.customer_id = c.id
 		where c.deleted_at is null
 		  and ($1 = '' or c.email::text ilike '%' || $1 || '%' or c.display_name ilike '%' || $1 || '%')
 		order by c.created_at desc
@@ -451,7 +451,7 @@ func (r *PointsRepository) EarningRules(ctx context.Context) ([]models.PointsEar
 		       coalesce(pr.signup_bonus, 0), pr.signup_bonus_since,
 		       coalesce(cc.points_earning_enabled, false), pr.updated_at
 		from core.countries co
-		left join finance.points_earning_rules pr on pr.country_id = co.id
+		left join points.points_earning_rules pr on pr.country_id = co.id
 		left join core.country_capabilities cc on cc.country_id = co.id
 		order by co.name`)
 	if err != nil {
@@ -481,7 +481,7 @@ func (r *PointsRepository) RuleForCustomer(ctx context.Context, customerID uuid.
 		       coalesce(cc.points_earning_enabled, false), pr.updated_at
 		from customer.customers c
 		inner join core.countries co on co.id = c.country_id
-		left join finance.points_earning_rules pr on pr.country_id = co.id
+		left join points.points_earning_rules pr on pr.country_id = co.id
 		left join core.country_capabilities cc on cc.country_id = co.id
 		where c.id = $1`, customerID).
 		Scan(&rule.CountryID, &rule.CountryName, &rule.Currency, &rule.Enabled,
@@ -503,14 +503,14 @@ func (r *PointsRepository) SetEarningRule(ctx context.Context, countryID uuid.UU
 	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, `
-		insert into finance.points_earning_rules
+		insert into points.points_earning_rules
 			(country_id, enabled, points_per_unit, signup_bonus, updated_by_admin_id)
 		values ($1, $2, $3, $4, $5)
 		on conflict (country_id) do update set
-			effective_from = case when not finance.points_earning_rules.enabled and excluded.enabled
-			                      then now() else finance.points_earning_rules.effective_from end,
-			signup_bonus_since = case when finance.points_earning_rules.signup_bonus = 0 and excluded.signup_bonus > 0
-			                          then now() else finance.points_earning_rules.signup_bonus_since end,
+			effective_from = case when not points.points_earning_rules.enabled and excluded.enabled
+			                      then now() else points.points_earning_rules.effective_from end,
+			signup_bonus_since = case when points.points_earning_rules.signup_bonus = 0 and excluded.signup_bonus > 0
+			                          then now() else points.points_earning_rules.signup_bonus_since end,
 			enabled = excluded.enabled,
 			points_per_unit = excluded.points_per_unit,
 			signup_bonus = excluded.signup_bonus,
@@ -546,12 +546,12 @@ func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.E
 	rows, err := r.db.Query(ctx, `
 		select o.id, o.customer_id, o.total_amount, o.currency, o.order_number, pr.points_per_unit
 		from marketplace.orders o
-		inner join finance.points_earning_rules pr
+		inner join points.points_earning_rules pr
 		        on pr.country_id = o.country_id and pr.enabled and pr.points_per_unit > 0
 		inner join core.country_capabilities cc
 		        on cc.country_id = o.country_id and cc.points_earning_enabled
 		where o.status = 'delivered' and o.updated_at >= pr.effective_from
-		  and not exists (select 1 from finance.points_ledger l
+		  and not exists (select 1 from points.points_ledger l
 		                  where l.idempotency_key = 'order:' || o.id::text)
 		order by o.updated_at
 		limit $1`, batch)
@@ -598,10 +598,10 @@ func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.E
 	}
 	rows, err = r.db.Query(ctx, `
 		select l.order_id, l.customer_id, l.amount_delta, o.order_number
-		from finance.points_ledger l
+		from points.points_ledger l
 		inner join marketplace.orders o on o.id = l.order_id
 		where l.entry_type = 'order_reward' and o.status in ('refunded', 'cancelled')
-		  and not exists (select 1 from finance.points_ledger x
+		  and not exists (select 1 from points.points_ledger x
 		                  where x.idempotency_key = 'order-reversal:' || l.order_id::text)
 		limit $1`, batch)
 	if err != nil {
@@ -655,12 +655,12 @@ func (r *PointsRepository) RunEarning(ctx context.Context, batch int) (*models.E
 	rows, err = r.db.Query(ctx, `
 		select c.id, pr.signup_bonus
 		from customer.customers c
-		inner join finance.points_earning_rules pr
+		inner join points.points_earning_rules pr
 		        on pr.country_id = c.country_id and pr.enabled and pr.signup_bonus > 0
 		inner join core.country_capabilities cc
 		        on cc.country_id = c.country_id and cc.points_earning_enabled
 		where c.created_at >= pr.signup_bonus_since and c.deleted_at is null and c.status = 'active'
-		  and not exists (select 1 from finance.points_ledger l
+		  and not exists (select 1 from points.points_ledger l
 		                  where l.idempotency_key = 'signup:' || c.id::text)
 		limit $1`, batch)
 	if err != nil {
