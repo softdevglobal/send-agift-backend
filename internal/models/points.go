@@ -74,7 +74,7 @@ func PointsCategory(entryType string) string {
 	}
 }
 
-// PointsEntry maps to finance.points_ledger. Exactly one of CustomerID and
+// PointsEntry maps to points.points_ledger. Exactly one of CustomerID and
 // SellerID is set.
 type PointsEntry struct {
 	ID         uuid.UUID  `json:"id"`
@@ -161,7 +161,7 @@ const (
 	PointsPurchaseCancelled = "cancelled"
 )
 
-// PointsPurchase maps to finance.points_purchases: a seller buying points.
+// PointsPurchase maps to points.points_purchases: a seller buying points.
 type PointsPurchase struct {
 	ID                uuid.UUID  `json:"id"`
 	SellerID          uuid.UUID  `json:"seller_id"`

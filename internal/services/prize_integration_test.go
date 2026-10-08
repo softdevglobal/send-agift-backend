@@ -354,7 +354,7 @@ func TestPrizeConcurrentPlays(t *testing.T) {
 	if got.EligiblePlayCount != 100 || got.CurrentPrizeCents != 10000+100*100 || got.UniquePlayerCount != 25 {
 		t.Fatalf("after 100 plays: plays %d prize %d players %d", got.EligiblePlayCount, got.CurrentPrizeCents, got.UniquePlayerCount)
 	}
-	if n := f.count(`select count(*) from finance.points_ledger where competition_id = $1 and entry_type = 'play_debit'`, c.ID); n != 100 {
+	if n := f.count(`select count(*) from points.points_ledger where competition_id = $1 and entry_type = 'play_debit'`, c.ID); n != 100 {
 		t.Fatalf("want 100 charges, got %d", n)
 	}
 	if n := f.count(`select count(*) from competition.prize_ledger where competition_id = $1 and entry_type = 'play_increment'`, c.ID); n != 100 {
@@ -570,7 +570,7 @@ func TestPrizeCancelRefundsEverything(t *testing.T) {
 	if got.CurrentPrizeCents != 0 || got.FinalPrizeCents == nil || *got.FinalPrizeCents != 10300 {
 		t.Fatalf("prize after cancel %d, final %v", got.CurrentPrizeCents, got.FinalPrizeCents)
 	}
-	if n := f.count(`select count(*) from finance.points_ledger where competition_id = $1 and entry_type = 'play_refund'`, c.ID); n != 3 {
+	if n := f.count(`select count(*) from points.points_ledger where competition_id = $1 and entry_type = 'play_refund'`, c.ID); n != 3 {
 		t.Fatalf("refunds %d", n)
 	}
 }
