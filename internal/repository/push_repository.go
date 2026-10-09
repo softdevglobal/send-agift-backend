@@ -225,7 +225,8 @@ func (r *PushRepository) Inbox(ctx context.Context, customerID uuid.UUID, limit 
 		select n.id, n.kind, n.title, n.body, n.data, n.created_at, n.read_at
 		from core.push_notifications n
 		left join competition.competitions c on c.id = n.competition_id
-		where n.customer_id = $1 and coalesce(c.status, '') <> 'cancelled'
+		where n.customer_id = $1 and n.dismissed_at is null
+		  and coalesce(c.status, '') <> 'cancelled'
 		order by n.created_at desc
 		limit $2`, customerID, limit)
 	if err != nil {
@@ -252,7 +253,8 @@ func (r *PushRepository) Inbox(ctx context.Context, customerID uuid.UUID, limit 
 		select count(*)
 		from core.push_notifications n
 		left join competition.competitions c on c.id = n.competition_id
-		where n.customer_id = $1 and n.read_at is null and coalesce(c.status, '') <> 'cancelled'`,
+		where n.customer_id = $1 and n.read_at is null and n.dismissed_at is null
+		  and coalesce(c.status, '') <> 'cancelled'`,
 		customerID).Scan(&inbox.Unread)
 	return inbox, err
 }
@@ -263,6 +265,18 @@ func (r *PushRepository) MarkRead(ctx context.Context, customerID uuid.UUID, ids
 	_, err := r.db.Exec(ctx, `
 		update core.push_notifications set read_at = now()
 		where customer_id = $1 and read_at is null
+		  and (cardinality($2::uuid[]) = 0 or id = any($2::uuid[]))`, customerID, ids)
+	return err
+}
+
+// Dismiss clears the given notifications from the customer's inbox, or all of
+// them when ids is empty. Rows are hidden, not deleted: they are also the
+// push queue. Only the customer's own notifications are touched.
+func (r *PushRepository) Dismiss(ctx context.Context, customerID uuid.UUID, ids []uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		update core.push_notifications
+		set dismissed_at = now(), read_at = coalesce(read_at, now())
+		where customer_id = $1 and dismissed_at is null
 		  and (cardinality($2::uuid[]) = 0 or id = any($2::uuid[]))`, customerID, ids)
 	return err
 }

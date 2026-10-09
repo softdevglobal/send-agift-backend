@@ -14,6 +14,7 @@ import (
 //	DELETE /customers/me/push-devices. Forget it, on sign-out
 //	GET    /customers/me/notifications. The in-app inbox, with the unread count
 //	POST   /customers/me/notifications/read. Mark some (ids) or all read
+//	DELETE /customers/me/notifications. Clear some (ids) or all (all: true)
 func RegisterPushRoutes(r chi.Router, push *handlers.PushHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
@@ -22,5 +23,6 @@ func RegisterPushRoutes(r chi.Router, push *handlers.PushHandler, jwtSecret stri
 		r.Delete("/customers/me/push-devices", push.UnregisterDevice)
 		r.Get("/customers/me/notifications", push.Inbox)
 		r.Post("/customers/me/notifications/read", push.MarkRead)
+		r.Delete("/customers/me/notifications", push.Dismiss)
 	})
 }
