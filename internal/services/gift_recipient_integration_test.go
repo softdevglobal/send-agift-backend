@@ -66,8 +66,8 @@ func TestGiftRecipientAccountAndEmails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recipient account not created: %v", err)
 	}
-	if !recipient.PasswordChangeRequired || !utils.CheckPassword(GiftRecipientDefaultPassword, recipient.PasswordHash) {
-		t.Fatal("recipient account should start on the default password and be asked to change it")
+	if !recipient.PasswordChangeRequired || utils.CheckPassword(GiftRecipientDefaultPassword, recipient.PasswordHash) {
+		t.Fatal("recipient account should ask for a password change and must not use the shared default password")
 	}
 	var linked *uuid.UUID
 	f.scan(&linked, `select recipient_customer_id from marketplace.orders where id = $1`, order.id)
@@ -131,8 +131,8 @@ func TestGiftRecipientAccountAndEmails(t *testing.T) {
 	}
 	var html string
 	f.scan(&html, `select html_body from core.email_outbox where to_email = $1`, recipientEmail)
-	if !strings.Contains(html, GiftRecipientDefaultPassword) || strings.Contains(html, "USD") {
-		t.Fatal("recipient email should carry the temporary password and no prices")
+	if strings.Contains(html, GiftRecipientDefaultPassword) || strings.Contains(html, "USD") || !strings.Contains(html, "one-time code") {
+		t.Fatal("recipient email should ask for a one-time code, not a shared password or prices")
 	}
 
 	gifts2, err := gifts.ReceivedGifts(f.ctx, recipient.ID.String())

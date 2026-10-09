@@ -59,8 +59,9 @@ func main() {
 		log.Fatalf("s3 error: %v", err)
 	}
 
-	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry) // create a new auth service
-	adminService := services.NewAdminService(admins)                                                                      // create a new admin service
+	authService := services.NewAuthService(admins, customers, sellers, cfg.JWTSecret, cfg.BootstrapSecret, cfg.JWTExpiry)
+	authService.UsePhoneCountry(cfg.DefaultPhoneCountryCode)
+	adminService := services.NewAdminService(admins) // create a new admin service
 	countryService := services.NewCountryService(countries)
 	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
 	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
@@ -131,6 +132,28 @@ func main() {
 	orderService.NotifyWith(giftRecipientService)
 	go giftRecipientService.RunDeliveredNotices(context.Background(), time.Minute,
 		database.Exclusive(pool, database.LockGiftDeliveryNotices))
+	// SMS through textbee: queued like email and sent by this loop. Without
+	// a key the messages wait in the outbox until one is configured.
+	var smsSender services.SMSSender
+	if textbee := services.NewTextBeeSender(cfg.TextBeeAPIBase, cfg.TextBeeDeviceID, cfg.TextBeeAPIKey, cfg.TextBeeSIMSubscription); textbee != nil {
+		smsSender = textbee
+		fmt.Printf("📱 SMS: textbee device %s\n", cfg.TextBeeDeviceID)
+	} else {
+		log.Printf("⚠️  TEXTBEE_API_KEY is not set: SMS are queued but not sent.")
+	}
+	smsService := services.NewSMSService(repository.NewSMSRepository(pool), smsSender)
+	go smsService.RunDeliveryLoop(context.Background(), 5*time.Second,
+		database.Exclusive(pool, database.LockSMSDelivery))
+	// Recipients reached by phone get the delivered notice by text too.
+	giftRecipientService.SendSMSWith(smsService, cfg.AppWebURL, cfg.DefaultPhoneCountryCode)
+	// Customers sign in or sign up with a 6-digit code by SMS or email.
+	loginCodeService := services.NewLoginCodeService(repository.NewLoginCodeRepository(pool), customers,
+		emailService, smsService, cfg.DefaultPhoneCountryCode, cfg.JWTSecret, cfg.JWTExpiry)
+	customerService.UseCodeSignups(loginCodeService)
+	loginCodeHandler := handlers.NewLoginCodeHandler(loginCodeService)
+	// Gift recipients review from the link in their email or text.
+	giftRecipientService.UseReviewLinks(cfg.JWTSecret)
+	giftReviewHandler := handlers.NewGiftReviewHandler(services.NewGiftReviewService(orders, customers, loginCodeService, cfg.JWTSecret, cfg.JWTExpiry))
 	// Customer sign-in with Google and Facebook. A provider without keys
 	// answers 503, so its button can be shown or hidden by configuration.
 	socialAuthService := services.NewSocialAuthService(customers, countries, countryCapabilityService, emailService,
@@ -183,7 +206,7 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, cfg.JWTSecret) // create a new router
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

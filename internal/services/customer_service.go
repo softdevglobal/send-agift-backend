@@ -39,6 +39,7 @@ type CustomerService struct {
 	jwtExpiry    time.Duration // expiry for the JWT
 	email        *EmailService // welcome emails; nil sends none
 	resets       *repository.PasswordResetRepository
+	codeSignups  *LoginCodeService // sign-ups proven by an SMS or email code
 }
 
 // SendEmailsWith turns on the welcome email for new customers.
@@ -48,6 +49,9 @@ func (s *CustomerService) SendEmailsWith(email *EmailService) { s.email = email 
 func (s *CustomerService) UsePasswordResets(codes *repository.PasswordResetRepository) {
 	s.resets = codes
 }
+
+// UseCodeSignups lets Register accept a sign-up token from a verified code.
+func (s *CustomerService) UseCodeSignups(codes *LoginCodeService) { s.codeSignups = codes }
 
 func NewCustomerService(
 	customers *repository.CustomerRepository,
@@ -77,6 +81,7 @@ type CustomerRegisterInput struct {
 	DateOfBirth  string         // Date of birth for the customer
 	Addresses    []AddressInput // Addresses for the customer
 	ImageURL     *string
+	SignupToken  string // from a verified sign-in code; marks the phone or email verified
 }
 
 type CustomerUpdateInput struct {
@@ -126,6 +131,33 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 	if in.CustomerType == "" {
 		in.CustomerType = "individual"
 	}
+
+	proven, provenPhone := "", ""
+	if strings.TrimSpace(in.SignupToken) != "" {
+		if s.codeSignups == nil {
+			return nil, ErrCodeSignupExpired
+		}
+		channel, dest, err := s.codeSignups.ReadSignupToken(in.SignupToken)
+		if err != nil {
+			return nil, err
+		}
+		switch channel {
+		case ChannelEmail:
+			if dest != in.Email {
+				return nil, ErrCodeSignupExpired
+			}
+		case ChannelSMS:
+			if _, err := s.customers.CustomerIDByVerifiedPhone(ctx, dest); err == nil {
+				return nil, ErrPhoneTaken
+			} else if !errors.Is(err, repository.ErrCustomerNotFound) {
+				return nil, err
+			}
+			in.Phone = &dest
+			provenPhone = dest
+		}
+		proven = channel
+	}
+
 	if in.Email == "" || len(in.Password) < 8 || in.Phone == nil || strings.TrimSpace(*in.Phone) == "" {
 		return nil, ErrInvalidInput // return an error if the input is invalid
 	}
@@ -172,17 +204,22 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 		ImageURL:     in.ImageURL,
 	}
 	if err := s.customers.Create(ctx, customer); err != nil {
-		if !errors.Is(err, repository.ErrCustomerDuplicate) {
-			return nil, err // return an error if the customer is not created
+		if errors.Is(err, repository.ErrCustomerDuplicate) {
+			return nil, ErrCustomerConflict
 		}
-		// An account made for a gift recipient that nobody has signed in to
-		// yet is theirs to claim: it takes the details they just entered.
-		claimed, claimErr := s.customers.ClaimGiftAccount(ctx, customer)
-		if claimErr != nil {
-			return nil, claimErr
+		return nil, err
+	}
+	switch proven {
+	case ChannelEmail:
+		if err := s.customers.MarkEmailVerified(ctx, customer.ID.String()); err != nil {
+			log.Printf("customer %s email verified: %v", customer.ID, err)
 		}
-		if !claimed {
-			return nil, ErrCustomerConflict // return an error if the customer already exists
+	case ChannelSMS:
+		if err := s.customers.SetVerifiedPhone(ctx, customer.ID.String(), provenPhone, provenPhone); err != nil {
+			if errors.Is(err, repository.ErrCustomerDuplicate) {
+				return nil, ErrPhoneTaken
+			}
+			return nil, err
 		}
 	}
 
@@ -269,6 +306,9 @@ func (s *CustomerService) Login(ctx context.Context, email, password string) (*C
 	if !utils.CheckPassword(password, customer.PasswordHash) {
 		return nil, ErrInvalidCredentials // return an error if the password is invalid
 	}
+	if customer.PasswordChangeRequired {
+		return nil, ErrPasswordChangeRequired
+	}
 
 	token, err := utils.GenerateJWT(customer.ID.String(), customer.Email, "customer", s.jwtSecret, s.jwtExpiry)
 	if err != nil {
@@ -339,11 +379,15 @@ func (s *CustomerService) Update(ctx context.Context, customerID string, in Cust
 
 	if err := s.customers.Update(ctx, customer); err != nil {
 		if errors.Is(err, repository.ErrCustomerNotFound) {
-			return nil, ErrCustomerNotFound // return an error if the customer is not found
+			return nil, ErrCustomerNotFound
 		}
-		return nil, err // return an error if the customer is not updated
+		return nil, err
 	}
-	return customer, nil // return the customer
+	updated, err := s.customers.GetByID(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *CustomerService) Delete(ctx context.Context, customerID string) error {

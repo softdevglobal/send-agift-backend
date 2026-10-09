@@ -31,6 +31,7 @@ type customerRegisterRequest struct {
 	DateOfBirth  string                  `json:"date_of_birth"`
 	Addresses    []services.AddressInput `json:"addresses"`
 	ImageURL     *string                 `json:"image_url"`
+	SignupToken  string                  `json:"signup_token"`
 }
 
 type customerUpdateRequest struct {
@@ -60,6 +61,7 @@ func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		DateOfBirth:  req.DateOfBirth,
 		Addresses:    req.Addresses,
 		ImageURL:     req.ImageURL,
+		SignupToken:  req.SignupToken,
 	})
 	if err != nil {
 		h.writeCustomerError(w, err, "could not register customer")
@@ -335,6 +337,10 @@ func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, f
 		utils.Error(w, http.StatusForbidden, "customer registration is disabled for this country")
 	case errors.Is(err, services.ErrInvalidAddress):
 		utils.Error(w, http.StatusBadRequest, "address requires country_id, line1, and city")
+	case errors.Is(err, services.ErrCodeSignupExpired):
+		utils.Error(w, http.StatusBadRequest, services.ErrCodeSignupExpired.Error())
+	case errors.Is(err, services.ErrPhoneTaken):
+		utils.Error(w, http.StatusUnprocessableEntity, services.ErrPhoneTaken.Error())
 	case errors.Is(err, services.ErrCustomerConflict):
 		utils.Error(w, http.StatusConflict, "email already registered")
 	case errors.Is(err, services.ErrSavedGiftConflict):

@@ -295,6 +295,27 @@ func renderPasswordResetCode(name, code, purpose string, validFor time.Duration)
 		"Enter this code to continue.", data, text)
 }
 
+func renderLoginCode(code string, validFor time.Duration) (*EmailContent, error) {
+	minutes := int(validFor.Round(time.Minute).Minutes())
+	if minutes < 1 {
+		minutes = 1
+	}
+	digits := make([]string, 0, len(code))
+	for _, r := range code {
+		digits = append(digits, string(r))
+	}
+	data := map[string]any{
+		"Eyebrow": "Sign in",
+		"Heading": "Your sign-in code",
+		"Intro":   fmt.Sprintf("Hi,\nEnter this code to sign in to SendAGift. It expires in %d minutes. If you didn't ask for it, you can ignore this email.", minutes),
+		"Digits":  digits,
+		"Callout": emailCallout{Label: "Keep this code private", Body: "We will never ask you to read it out or forward this email."},
+	}
+	text := fmt.Sprintf("Hi,\n\nYour SendAGift sign-in code is %s.\n\nIt expires in %d minutes.\n\nThe SendAGift team", code, minutes)
+	return renderEmail("", passwordResetCodeContent, "Your SendAGift sign-in code",
+		"Enter this code to sign in.", data, text)
+}
+
 func renderCustomerWelcome(webURL, name string) (*EmailContent, error) {
 	data := map[string]any{
 		"Intro": fmt.Sprintf("Hi %s,\nYour account is ready. Send thoughtful gifts to the people who matter, right from your phone or desktop. We'll help take care of the rest.", name),
@@ -443,18 +464,23 @@ const giftDeliveredContent = `{{define "content"}}
       <div style="margin-top:12px;font-size:12px;line-height:18px;color:{{c "muted"}};">This is a temporary password. Please change it as soon as you sign in.</div>
     </td></tr>
   </table>
+</td></tr>{{else}}<tr><td class="px" style="padding:32px 60px 0;">
+  <div style="font-size:14px;line-height:22px;color:{{c "text"}};">Open the button below and we'll send a one-time code to <strong>{{.LoginEmail}}</strong>. Enter it and you can review your gift. No password, and we'll set up your account for you.</div>
 </td></tr>{{end}}
 {{template "button" .CTA}}
 {{template "closing" .Closing}}
 {{end}}`
 
-func renderGiftDelivered(webURL string, o *repository.OrderEmailSummary, tempPassword string) (*EmailContent, error) {
+func renderGiftDelivered(webURL string, o *repository.OrderEmailSummary, tempPassword, reviewURL string) (*EmailContent, error) {
 	data := orderData(o)
 	data.Name = firstName(data.RecipientName, derefOr(o.RecipientEmail, ""))
 	data.SenderName = firstName(derefOr(o.CustomerName, ""), o.CustomerEmail)
 	data.LoginEmail = derefOr(o.RecipientEmail, "")
 	data.TempPassword = tempPassword
 	signIn := webURL + "/login?" + url.Values{"email": {data.LoginEmail}, "next": {"/account/gifts"}}.Encode()
+	if reviewURL != "" {
+		signIn = reviewURL
+	}
 	data.Eyebrow = "Special delivery"
 	data.Heading = data.SenderName + " sent you\nsomething special."
 	data.Intro = fmt.Sprintf("Hi %s,\n%s was thinking of you, and your gift has just been delivered.", data.Name, data.SenderName)
@@ -475,10 +501,47 @@ func renderGiftDelivered(webURL string, o *repository.OrderEmailSummary, tempPas
 	}
 	if tempPassword != "" {
 		fmt.Fprintf(&b, "\nWe've set up a SendAGift account for you:\n  Email: %s\n  Password: %s\nThis is a temporary password. Please change it as soon as you sign in.\n", data.LoginEmail, tempPassword)
+	} else if data.LoginEmail != "" {
+		fmt.Fprintf(&b, "\nOpen the link below and we'll send a one-time code to %s. Enter it to review your gift. No password needed.\n", data.LoginEmail)
 	}
 	fmt.Fprintf(&b, "\nSee your gift and leave a review: %s\n\nThe SendAGift team", signIn)
 	return renderEmail(webURL, giftDeliveredContent, data.SenderName+" sent you a gift",
 		"Your gift from "+data.SenderName+" has been delivered. Open to see what's inside.", data, b.String())
+}
+
+const orderDeliveredContent = `{{define "content"}}
+{{template "eyebrow" .Eyebrow}}
+{{template "heading" .Heading}}
+{{template "intro" .Intro}}
+{{template "items" .}}
+{{template "button" .CTA}}
+{{template "closing" .Closing}}
+{{end}}`
+
+// renderOrderDelivered tells the buyer their gift arrived and asks them to
+// review what they bought.
+func renderOrderDelivered(webURL string, o *repository.OrderEmailSummary) (*EmailContent, error) {
+	data := orderData(o)
+	data.Name = firstName(derefOr(o.CustomerName, ""), o.CustomerEmail)
+	recipient := data.RecipientName
+	if recipient == "" {
+		recipient = "your recipient"
+	}
+	reviewURL := webURL + "/orders/" + o.OrderID.String()
+	data.Eyebrow = "Delivered · " + o.OrderNumber
+	data.Heading = "Your gift has reached\n" + recipient + "."
+	data.Intro = fmt.Sprintf("Hi %s,\nGood news: your gift for %s has been delivered. How did the products measure up? Your review helps other shoppers and the sellers who made it.", data.Name, recipient)
+	data.CTA = emailButton{Label: "Review your order", URL: reviewURL}
+	data.Closing = emailClosing{Title: "Thank you.", Body: "A quick review only takes a minute."}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Hi %s,\n\nYour gift for %s has been delivered (order %s).\n\n", data.Name, recipient, o.OrderNumber)
+	for _, it := range data.Items {
+		fmt.Fprintf(&b, "  • %s ×%d (%s)\n", it.ProductName, it.Quantity, it.ShopName)
+	}
+	fmt.Fprintf(&b, "\nLeave a review: %s\n\nThe SendAGift team", reviewURL)
+	return renderEmail(webURL, orderDeliveredContent, "Delivered: your gift for "+recipient,
+		"Order "+o.OrderNumber+" has arrived. Tell us how it went.", data, b.String())
 }
 
 func orderData(o *repository.OrderEmailSummary) orderEmailData {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -67,13 +68,15 @@ func (r *CustomerRepository) GetByID(ctx context.Context, id string) (*models.Cu
 	err := r.db.QueryRow(ctx, `
 		select id, country_id, email, phone, password_hash, display_name, customer_type,
 		       date_of_birth, age_verified_at, identity_verified_at, status,
-		       created_at, updated_at, deleted_at, image_url, password_change_required
+		       created_at, updated_at, deleted_at, image_url, password_change_required,
+		       phone_verified_at
 		from customer.customers
 		where id = $1 and deleted_at is null`, id,
 	).Scan(
 		&c.ID, &c.CountryID, &c.Email, &c.Phone, &c.PasswordHash, &c.DisplayName, &c.CustomerType,
 		&c.DateOfBirth, &c.AgeVerifiedAt, &c.IdentityVerifiedAt, &c.Status,
 		&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt, &c.ImageURL, &c.PasswordChangeRequired,
+		&c.PhoneVerifiedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrCustomerNotFound
@@ -86,6 +89,8 @@ func (r *CustomerRepository) Update(ctx context.Context, c *models.Customer) err
 		update customer.customers
 		set country_id = $2,
 		    phone = $3,
+		    phone_e164 = case when phone is distinct from $3 then null else phone_e164 end,
+		    phone_verified_at = case when phone is distinct from $3 then null else phone_verified_at end,
 		    display_name = $4,
 		    customer_type = $5,
 		    date_of_birth = $6,
@@ -123,6 +128,88 @@ func (r *CustomerRepository) ClaimGiftAccount(ctx context.Context, c *models.Cus
 	}
 	c.PasswordChangeRequired = false
 	return true, nil
+}
+
+// CustomerIDByVerifiedPhone finds the live account that proved it holds
+// this E.164 number.
+func (r *CustomerRepository) CustomerIDByVerifiedPhone(ctx context.Context, phone string) (string, error) {
+	var id string
+	err := r.db.QueryRow(ctx, `
+		select id::text from customer.customers
+		where phone_e164 = $1 and phone_verified_at is not null
+		  and deleted_at is null and status = 'active'`, phone).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrCustomerNotFound
+	}
+	return id, err
+}
+
+// PhoneAccount is a live customer and a phone saved on that account or on a
+// recipient whose email is the same account.
+type PhoneAccount struct {
+	CustomerID string
+	Phone      string
+}
+
+// AccountsByPhoneTail returns live accounts whose own phone, or a recipient
+// phone with the same email, shares the last 9 digits of e164. The caller
+// still checks the full number.
+func (r *CustomerRepository) AccountsByPhoneTail(ctx context.Context, e164 string) ([]PhoneAccount, error) {
+	rows, err := r.db.Query(ctx, `
+		select c.id::text, c.phone
+		from customer.customers c
+		where c.deleted_at is null and c.status = 'active'
+		  and c.phone is not null and c.phone <> ''
+		  and right(regexp_replace(c.phone, '\D', '', 'g'), 9) = right(regexp_replace($1, '\D', '', 'g'), 9)
+		union
+		select c.id::text, r.phone
+		from customer.recipients r
+		join customer.customers c on c.email = r.email
+		where c.deleted_at is null and c.status = 'active'
+		  and r.phone is not null and r.phone <> ''
+		  and r.email is not null
+		  and right(regexp_replace(r.phone, '\D', '', 'g'), 9) = right(regexp_replace($1, '\D', '', 'g'), 9)`, e164)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PhoneAccount{}
+	for rows.Next() {
+		var a PhoneAccount
+		if err := rows.Scan(&a.CustomerID, &a.Phone); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SetVerifiedPhone stores a number the customer proved they hold. One that
+// another live account verified first is ErrCustomerDuplicate.
+func (r *CustomerRepository) SetVerifiedPhone(ctx context.Context, id, display, e164 string) error {
+	tag, err := r.db.Exec(ctx, `
+		update customer.customers
+		set phone = $2, phone_e164 = $3, phone_verified_at = now(), updated_at = now()
+		where id = $1 and deleted_at is null`, id, display, e164)
+	if err != nil {
+		return mapCustomerWriteError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrCustomerNotFound
+	}
+	// Gifts sent to this number are now theirs to see and review.
+	if err := r.ClaimGiftsByPhone(ctx, id, e164); err != nil {
+		log.Printf("claim gifts by phone for %s: %v", id, err)
+	}
+	return nil
+}
+
+func (r *CustomerRepository) MarkEmailVerified(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx, `
+		update customer.customers
+		set email_verified_at = coalesce(email_verified_at, now())
+		where id = $1`, id)
+	return err
 }
 
 // UpdatePassword stores a new password hash and clears any requirement to

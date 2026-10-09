@@ -78,7 +78,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidCredentials):
-			utils.Error(w, http.StatusUnauthorized, "invalid email or password")
+			utils.Error(w, http.StatusUnauthorized, "invalid email, phone or password")
+		case errors.Is(err, services.ErrPhoneTaken):
+			utils.Error(w, http.StatusConflict, services.ErrPhoneTaken.Error())
+		case errors.Is(err, services.ErrPasswordChangeRequired):
+			utils.Error(w, http.StatusForbidden, services.ErrPasswordChangeRequired.Error())
 		case errors.Is(err, services.ErrSellerEmailUnconfirmed):
 			utils.Error(w, http.StatusForbidden, services.ErrSellerEmailUnconfirmed.Error())
 		case errors.Is(err, services.ErrSellerSuspended):

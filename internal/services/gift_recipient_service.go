@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,8 +15,9 @@ import (
 	"myapp/internal/utils"
 )
 
-// GiftRecipientDefaultPassword is the password an account made for a gift
-// recipient starts with. The recipient is asked to change it when they sign in.
+// GiftRecipientDefaultPassword is the old shared password gift accounts used
+// to start with. It is no longer set on new accounts, and it cannot be chosen
+// as a password.
 const GiftRecipientDefaultPassword = "00001111"
 
 // GiftRecipientService looks after the person a gift is sent to: it gives
@@ -26,6 +28,31 @@ type GiftRecipientService struct {
 	orders    *repository.OrderRepository
 	customers *repository.CustomerRepository
 	email     *EmailService
+	sms       *SMSService
+	webURL    string
+	defaultCC string
+	reviewKey string
+}
+
+// UseReviewLinks makes the delivered notices carry a review link that signs
+// the recipient in with a one-time code. secret signs the link.
+func (s *GiftRecipientService) UseReviewLinks(secret string) { s.reviewKey = secret }
+
+// reviewLink is the link to review order o, sent to channel's destination. It
+// falls back to the sign-in page when review links are not set up.
+func (s *GiftRecipientService) reviewLink(o *repository.OrderEmailSummary, channel, dest string) string {
+	if s.reviewKey != "" {
+		if t, err := newGiftReviewToken(s.reviewKey, o.OrderID, channel, dest); err == nil {
+			return s.webURL + "/login?" + url.Values{"review": {t}, "next": {"/account/gifts?order=" + o.OrderID.String()}}.Encode()
+		}
+	}
+	return s.webURL + "/login?" + url.Values{"email": {dest}, "next": {"/account/gifts"}}.Encode()
+}
+
+// SendSMSWith lets the delivered notice text a recipient who has a phone
+// number. webURL builds the review link; defaultCC reads local numbers.
+func (s *GiftRecipientService) SendSMSWith(sms *SMSService, webURL, defaultCC string) {
+	s.sms, s.webURL, s.defaultCC = sms, strings.TrimRight(webURL, "/"), defaultCC
 }
 
 func NewGiftRecipientService(
@@ -80,7 +107,7 @@ func (s *GiftRecipientService) ensureAccount(ctx context.Context, o *repository.
 		return err
 	}
 
-	hash, err := utils.HashPassword(GiftRecipientDefaultPassword)
+	hash, err := utils.HashPassword(uuid.NewString())
 	if err != nil {
 		return err
 	}
@@ -149,6 +176,12 @@ func (s *GiftRecipientService) notifyDelivered(ctx context.Context, orderID uuid
 	if err != nil {
 		return err
 	}
+	// The buyer is asked to review too, unless they sent the gift to themselves.
+	if !sameEmail(summary.CustomerEmail, summary.RecipientEmail) {
+		if err := s.email.SendOrderDelivered(ctx, summary); err != nil {
+			return err
+		}
+	}
 	if summary.RecipientEmail != nil {
 		// Orders placed before recipient accounts existed, or whose recipient
 		// email was added later, get theirs now.
@@ -160,15 +193,35 @@ func (s *GiftRecipientService) notifyDelivered(ctx context.Context, orderID uuid
 				return err
 			}
 		}
-		tempPassword := ""
-		if summary.RecipientPasswordChangeRequired {
-			tempPassword = GiftRecipientDefaultPassword
-		}
-		if err := s.email.SendGiftDelivered(ctx, summary, tempPassword); err != nil {
+		email := normalizeEmail(*summary.RecipientEmail)
+		if err := s.email.SendGiftDelivered(ctx, summary, "", s.reviewLink(summary, ChannelEmail, email)); err != nil {
 			return err
 		}
 	}
+	if err := s.textRecipient(ctx, summary); err != nil {
+		return err
+	}
 	return s.orders.MarkRecipientNotified(ctx, orderID)
+}
+
+// textRecipient sends the review link by SMS. Signing in with the code sent
+// to that number creates the account for someone who has none.
+func (s *GiftRecipientService) textRecipient(ctx context.Context, o *repository.OrderEmailSummary) error {
+	if s.sms == nil || o.RecipientPhone == nil {
+		return nil
+	}
+	phone, err := NormalizePhone(*o.RecipientPhone, s.defaultCC)
+	if err != nil {
+		log.Printf("order %s recipient phone: %v", o.OrderID, err)
+		return nil // a bad number never fails; it would not work on a retry
+	}
+	link := s.reviewLink(o, ChannelSMS, phone)
+	return s.sms.SendGiftDelivered(ctx, o.OrderID.String(), phone,
+		firstName(derefOr(o.CustomerName, ""), o.CustomerEmail), link)
+}
+
+func sameEmail(a string, b *string) bool {
+	return b != nil && normalizeEmail(a) == normalizeEmail(*b)
 }
 
 // ReceivedGifts lists the delivered gifts sent to a customer.

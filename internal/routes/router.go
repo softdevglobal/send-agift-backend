@@ -70,6 +70,10 @@ func New(
 	push *handlers.PushHandler,
 	// Handler instance that signs customers in with Google and Facebook
 	social *handlers.SocialAuthHandler,
+	// Handler instance that signs customers in with an SMS or email code
+	loginCodes *handlers.LoginCodeHandler,
+	// Handler for the review link a gift recipient opens from email or text
+	giftReviews *handlers.GiftReviewHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -141,6 +145,11 @@ func New(
 		// Register authentication routes (login, register, refresh token, etc)
 		// Example: POST /api/v1/login, POST /api/v1/register
 		RegisterAuthRoutes(r, auth, social, jwtSecret)
+
+		// Customer sign-in with a 6-digit code by SMS (textbee) or email
+		RegisterLoginCodeRoutes(r, loginCodes, jwtSecret)
+		// Gift recipients review from a link, signing in with a one-time code
+		RegisterGiftReviewRoutes(r, giftReviews)
 
 		// Register admin-only routes (requires valid JWT token)
 		// Example: GET /api/v1/admin/dashboard, DELETE /api/v1/admin/users/:id

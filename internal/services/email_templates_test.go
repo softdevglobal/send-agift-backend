@@ -51,7 +51,9 @@ func TestEmailTemplatesRender(t *testing.T) {
 		"customer_welcome": {func() (*EmailContent, error) { return renderCustomerWelcome(web, "Sam") }, []string{"Hi Sam,", "A little something", web + "/products", "cid:" + emailLogoCID}},
 		"order_placed": {func() (*EmailContent, error) { return renderOrderPlaced(web, order) },
 			[]string{"Your gift for Alex Silva", "AUD 54.50", "AUD 74.50", "Free", "Surprise intact", "&lt;3"}},
-		"gift_delivered": {func() (*EmailContent, error) { return renderGiftDelivered(web, order, GiftRecipientDefaultPassword) },
+		"order_delivered": {func() (*EmailContent, error) { return renderOrderDelivered(web, order) },
+			[]string{"Your gift has reached", "Alex Silva", "Review your order", "/orders/"}},
+		"gift_delivered": {func() (*EmailContent, error) { return renderGiftDelivered(web, order, GiftRecipientDefaultPassword, "") },
 			[]string{"Sam sent you", "00001111", "alex@example.com", "250 points", "next=%2Faccount%2Fgifts"}},
 	}
 
@@ -81,7 +83,7 @@ func TestEmailTemplatesRender(t *testing.T) {
 	}
 
 	// Prices stay out of the recipient's email.
-	c, _ := renderGiftDelivered(web, order, "")
+	c, _ := renderGiftDelivered(web, order, "", "")
 	if strings.Contains(c.HTML, "AUD") || strings.Contains(c.HTML, "00001111") {
 		t.Error("gift_delivered: shows prices, or a password the recipient already changed")
 	}

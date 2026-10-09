@@ -115,6 +115,20 @@ func (s *EmailService) SendPasswordResetCode(ctx context.Context, subjectType st
 	return s.queue(ctx, "password_reset", key, email, name, content)
 }
 
+// SendLoginCode emails the 6-digit code a customer signs in or signs up with.
+// Each send has its own dedupe key, so a resend is delivered.
+func (s *EmailService) SendLoginCode(ctx context.Context, email, code string, validFor time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderLoginCode(code, validFor)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("login_code:%s:%d", email, time.Now().UnixNano())
+	return s.queue(ctx, "login_code", key, email, "", content)
+}
+
 // SendCustomerWelcome greets a customer who just signed up.
 func (s *EmailService) SendCustomerWelcome(ctx context.Context, c *models.Customer) error {
 	if s == nil {
@@ -143,15 +157,28 @@ func (s *EmailService) SendOrderPlaced(ctx context.Context, o *repository.OrderE
 // SendGiftDelivered tells the recipient their gift arrived. tempPassword is
 // the password their new account starts with, or empty when they already
 // chose their own.
-func (s *EmailService) SendGiftDelivered(ctx context.Context, o *repository.OrderEmailSummary, tempPassword string) error {
+func (s *EmailService) SendGiftDelivered(ctx context.Context, o *repository.OrderEmailSummary, tempPassword, reviewURL string) error {
 	if s == nil || o.RecipientEmail == nil {
 		return nil
 	}
-	content, err := renderGiftDelivered(s.webURL, o, tempPassword)
+	content, err := renderGiftDelivered(s.webURL, o, tempPassword, reviewURL)
 	if err != nil {
 		return err
 	}
 	return s.queue(ctx, "gift_delivered", "gift_delivered:"+o.OrderID.String(), *o.RecipientEmail, derefOr(o.RecipientName, ""), content)
+}
+
+// SendOrderDelivered tells the buyer their gift arrived and links to the
+// order, where each item can be reviewed.
+func (s *EmailService) SendOrderDelivered(ctx context.Context, o *repository.OrderEmailSummary) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderOrderDelivered(s.webURL, o)
+	if err != nil {
+		return err
+	}
+	return s.queue(ctx, "order_delivered", "order_delivered:"+o.OrderID.String(), o.CustomerEmail, derefOr(o.CustomerName, ""), content)
 }
 
 // ── Delivery ────────────────────────────────────────────────────────────
