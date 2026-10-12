@@ -28,6 +28,10 @@ type OrderRepository struct {
 	// rewardsAtOrder pays product reward points as soon as the order is
 	// placed, instead of when each line is delivered.
 	rewardsAtOrder bool
+	// paymentRequired: an order only counts once it has been paid. Sellers
+	// do not see or accept it before then, and its reward points are paid
+	// when the payment is confirmed rather than when it is placed.
+	paymentRequired bool
 }
 
 func NewOrderRepository(db *pgxpool.Pool) *OrderRepository {
@@ -39,6 +43,145 @@ func NewOrderRepository(db *pgxpool.Pool) *OrderRepository {
 // what lets a buyer see their points straight away; cancelling then takes
 // them back in full, and is refused once they have been spent.
 func (r *OrderRepository) PayRewardsAtOrder(on bool) { r.rewardsAtOrder = on }
+
+// RequirePayment makes orders count only once paid: a card provider is
+// connected, so an order starts as pending_payment and stays out of sellers'
+// hands, and out of the customer's reward points, until the payment succeeds.
+func (r *OrderRepository) RequirePayment(on bool) { r.paymentRequired = on }
+
+// paymentCutoffSQL is when card payments went live: the moment migration
+// 000067 was applied. Orders created before it were never paid through the
+// system and keep working as they did; only newer orders must be paid.
+const paymentCutoffSQL = `(select coalesce(max(applied_at), '-infinity'::timestamptz)
+	from schema_migrations where version = '000067_stripe_payments')`
+
+// paidOnly is the seller-side filter that hides orders still awaiting
+// payment. Empty when no payment is required.
+func (r *OrderRepository) paidOnly() string {
+	if !r.paymentRequired {
+		return ""
+	}
+	return " and not (o.status in ('draft', 'pending_payment') and o.created_at >= " + paymentCutoffSQL + ")"
+}
+
+// refreshOrderStatusForItem moves an order's status forward to match how far
+// its lines have got: accepted, preparing, then dispatched. Until now the
+// order stayed "paid" while the seller worked on it, so the customer's
+// timeline never moved and a parcel already on its way could still be
+// cancelled. It only ever advances, and only from these states, so a
+// cancelled, refunded or delivered order is never touched.
+func refreshOrderStatusForItem(ctx context.Context, q querier, itemID uuid.UUID) error {
+	_, err := q.Exec(ctx, `
+		update marketplace.orders o
+		set status = p.next, updated_at = now()
+		from (
+			select oi.order_id,
+			       case
+			         when bool_or(oi.fulfilment_status in ('dispatched', 'delivered')) then 'dispatched'
+			         when bool_or(oi.fulfilment_status in ('preparing', 'ready')) then 'preparing'
+			         when bool_or(oi.fulfilment_status = 'accepted') then 'accepted'
+			       end as next
+			from marketplace.order_items oi
+			where oi.order_id = (select order_id from marketplace.order_items where id = $1)
+			  and oi.fulfilment_status <> 'cancelled'
+			group by oi.order_id
+		) p
+		where o.id = p.order_id
+		  and p.next is not null
+		  and o.status in ('paid', 'accepted', 'preparing', 'dispatched')
+		  and array_position(array['paid', 'accepted', 'preparing', 'dispatched'], p.next)
+		    > array_position(array['paid', 'accepted', 'preparing', 'dispatched'], o.status)`, itemID)
+	return err
+}
+
+// itemTracking is the shipment a line is actually on: the latest one past
+// "pending" (a pending row is only a quote written when rates were asked for).
+func itemTracking(ctx context.Context, q querier, itemID uuid.UUID) (*models.OrderItemTracking, error) {
+	var (
+		courier, trackingNo, trackingURL, mode *string
+		status                                 string
+		deliveredAt                            *time.Time
+		shippedAt                              time.Time
+	)
+	err := q.QueryRow(ctx, `
+		select s.courier_provider, s.tracking_number, s.provider_tracking_url,
+		       s.delivery_mode, s.status, s.delivered_at, s.created_at
+		from marketplace.shipments s
+		where s.order_item_id = $1 and s.status <> 'pending'
+		order by s.created_at desc
+		limit 1`, itemID).Scan(&courier, &trackingNo, &trackingURL, &mode, &status, &deliveredAt, &shippedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t := &models.OrderItemTracking{
+		CourierProvider: courier, TrackingNumber: trackingNo, TrackingURL: trackingURL,
+		Status: status, DeliveredAt: deliveredAt, ShippedAt: shippedAt,
+	}
+	if mode != nil {
+		t.DeliveryMode = *mode
+	}
+	return t, nil
+}
+
+// PayRewardsForPaidOrder pays the reward points of a just-paid order to its
+// customer, for orders whose rewards would otherwise have been paid the
+// moment they were placed. Safe to run twice: only lines still "reserved"
+// are paid, and each payout is keyed by its line.
+func (r *OrderRepository) PayRewardsForPaidOrder(ctx context.Context, orderID uuid.UUID) error {
+	if !r.rewardsAtOrder {
+		return nil
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var customerID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		select customer_id from marketplace.orders
+		where id = $1 and status not in ('cancelled', 'refunded')
+		for update`, orderID).Scan(&customerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		select id, seller_id, reward_points from marketplace.order_items
+		where order_id = $1 and reward_status = 'reserved' and reward_points > 0
+		  and fulfilment_status <> 'cancelled'
+		order by seller_id, id`, orderID)
+	if err != nil {
+		return err
+	}
+	type line struct {
+		id, seller uuid.UUID
+		points     int64
+	}
+	var lines []line
+	for rows.Next() {
+		var l line
+		if err := rows.Scan(&l.id, &l.seller, &l.points); err != nil {
+			rows.Close()
+			return err
+		}
+		lines = append(lines, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, l := range lines {
+		if err := payLineReward(ctx, tx, l.id, l.seller, customerID, orderID, l.points); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
 
 // CheckoutProduct is the catalog row used to stamp price/shop/seller onto an order item.
 type CheckoutProduct struct {
@@ -154,7 +297,7 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 		}
 	}
 
-	if r.rewardsAtOrder {
+	if r.rewardsAtOrder && !r.paymentRequired {
 		for i := range items {
 			if items[i].RewardStatus != "reserved" {
 				continue
@@ -422,7 +565,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 		       shp.name, p.name, p.slug, p.image_url,
 		       r.name
 		`+sellerOrderItemFrom+`
-		where oi.seller_id = $1
+		where oi.seller_id = $1`+r.paidOnly()+`
 		order by oi.created_at desc`, sellerID)
 	if err != nil {
 		return nil, err
@@ -529,7 +672,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 			ra.city, ra.region, ra.postal_code, ra.latitude, ra.longitude, ra.is_default,
 			ra.created_at, ra.updated_at
 		`+sellerOrderItemFrom+`
-		where oi.id = $1 and oi.seller_id = $2`, itemID, sellerID,
+		where oi.id = $1 and oi.seller_id = $2`+r.paidOnly(), itemID, sellerID,
 	).Scan(
 		&d.ID, &d.OrderID, &d.SellerID, &d.ShopID, &d.ProductID, &d.Quantity,
 		&d.UnitAmount, &d.TotalAmount, &d.FulfilmentStatus, &d.CreatedAt, &d.UpdatedAt,
@@ -620,19 +763,32 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 		d.ShippingAddress = &addr
 	}
 
+	// The shipment this line is on, so the seller's panel knows it is a local
+	// delivery (and offers "Mark as delivered") after a reload, not only in
+	// the session that started it.
+	tracking, err := itemTracking(ctx, r.db, d.ID)
+	if err != nil {
+		return nil, err
+	}
+	d.Tracking = tracking
+
 	return d, nil
 }
 
 func (r *OrderRepository) AcceptItemForSeller(ctx context.Context, sellerID, itemID string) (*models.OrderItem, error) {
 	item := &models.OrderItem{}
 	err := r.db.QueryRow(ctx, `
-		update marketplace.order_items
+		update marketplace.order_items oi
 		set fulfilment_status = 'accepted', updated_at = now()
-		where id = $1 and seller_id = $2 and fulfilment_status = 'pending'
+		where oi.id = $1 and oi.seller_id = $2 and oi.fulfilment_status = 'pending'
+		  and ($3 or not exists (
+		        select 1 from marketplace.orders o
+		        where o.id = oi.order_id and o.status in ('draft', 'pending_payment')
+		          and o.created_at >= `+paymentCutoffSQL+`))
 		returning id, order_id, seller_id, shop_id, product_id, quantity,
 		          unit_amount, total_amount, fulfilment_status, created_at, updated_at,
 		          reward_points_per_unit, reward_points, reward_status`,
-		itemID, sellerID,
+		itemID, sellerID, !r.paymentRequired,
 	).Scan(
 		&item.ID, &item.OrderID, &item.SellerID, &item.ShopID, &item.ProductID, &item.Quantity,
 		&item.UnitAmount, &item.TotalAmount, &item.FulfilmentStatus, &item.CreatedAt, &item.UpdatedAt,
@@ -648,6 +804,11 @@ func (r *OrderRepository) AcceptItemForSeller(ctx context.Context, sellerID, ite
 			return nil, ErrOrderItemNotFound
 		}
 		return nil, ErrOrderItemNotAcceptable
+	}
+	if err == nil {
+		if rerr := refreshOrderStatusForItem(ctx, r.db, item.ID); rerr != nil {
+			return item, rerr
+		}
 	}
 	return item, err
 }

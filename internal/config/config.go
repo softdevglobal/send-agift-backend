@@ -40,6 +40,22 @@ type Config struct {
 	PointsCurrency        string
 	PointsPaymentProvider string
 	PointsWebhookSecret   string
+
+	// Stripe. Customers pay the platform account; delivered order lines are
+	// then transferred to each seller's Connect account. The two webhook
+	// secrets belong to two endpoints (events from your account, and events
+	// from connected accounts). Each endpoint has its own signing secret.
+	// StripeFeeBPS is the platform's cut of each line in basis points
+	// (100 = 1%). Without a secret key Stripe is off and orders are unchanged.
+	StripeSecretKey            string
+	StripeWebhookSecret        string
+	StripeConnectWebhookSecret string
+	StripeFeeBPS               int
+	// StripeConnectCountry overrides the country a seller's Stripe account is
+	// created in. Stripe only supports some countries (not Sri Lanka, for
+	// one), so for testing a supported one such as AU can be used instead of
+	// the seller's own. Leave empty to use the seller's country.
+	StripeConnectCountry string
 	// PointsRewardTiming is when a product's reward points reach the buyer:
 	// "order" (as soon as the order is placed. The default while there is
 	// no payment step) or "delivery".
@@ -108,6 +124,12 @@ func Load() (*Config, error) {
 		PointsPaymentProvider: envOr("POINTS_PAYMENT_PROVIDER", "instant"),
 		PointsWebhookSecret:   os.Getenv("POINTS_WEBHOOK_SECRET"),
 		PointsRewardTiming:    envOr("POINTS_REWARD_TIMING", "order"),
+
+		StripeSecretKey:            os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret:        os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		StripeConnectWebhookSecret: os.Getenv("STRIPE_CONNECT_WEBHOOK_SECRET"),
+		StripeFeeBPS:               intOr("STRIPE_PLATFORM_FEE_BPS", 0),
+		StripeConnectCountry:       strings.ToUpper(strings.TrimSpace(os.Getenv("STRIPE_CONNECT_COUNTRY"))),
 
 		FirebaseCredentialsFile: os.Getenv("FIREBASE_CREDENTIALS_FILE"),
 		FirebaseCredentialsJSON: os.Getenv("FIREBASE_CREDENTIALS_JSON"),

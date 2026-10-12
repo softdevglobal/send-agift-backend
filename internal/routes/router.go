@@ -78,6 +78,8 @@ func New(
 	emailChange *handlers.EmailChangeHandler,
 	// The same for sellers
 	sellerEmailChange *handlers.EmailChangeHandler,
+	// Handler instance that takes card payments and pays sellers via Stripe
+	stripe *handlers.StripeHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -195,6 +197,10 @@ func New(
 		// Sellers buying points, and the admin/webhook that confirm payment
 		// Example: POST /api/v1/sellers/me/points/purchases
 		RegisterSellerPointsRoutes(r, sellerPoints, jwtSecret, sellers.RequireActive)
+
+		// Card payments for orders, seller payout setup, and Stripe's webhooks
+		// Example: POST /api/v1/customers/me/orders/{id}/pay
+		RegisterStripeRoutes(r, stripe, jwtSecret, sellers.RequireActive)
 
 		// Register media routes for presigned S3 uploads (requires valid JWT token)
 		// Example: POST /api/v1/media/presign-upload

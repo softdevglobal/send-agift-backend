@@ -350,6 +350,9 @@ func (r *ShipmentRepository) AttachBoughtLabel(ctx context.Context, orderID, sel
 			where id = $1 and fulfilment_status <> 'cancelled'`, itemID); err != nil {
 			return err
 		}
+		if err := refreshOrderStatusForItem(ctx, tx, itemID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -431,6 +434,9 @@ func (r *ShipmentRepository) DispatchSellerManagedItems(ctx context.Context, s *
 			update marketplace.order_items
 			set fulfilment_status = 'dispatched', updated_at = now()
 			where id = $1`, itemID); err != nil {
+			return err
+		}
+		if err := refreshOrderStatusForItem(ctx, tx, itemID); err != nil {
 			return err
 		}
 	}
@@ -540,11 +546,13 @@ func (r *ShipmentRepository) MarkOrderDeliveredIfComplete(ctx context.Context, o
 
 // MarkOrderItemDispatched sets order_items.fulfilment_status = dispatched after label buy.
 func (r *ShipmentRepository) MarkOrderItemDispatched(ctx context.Context, orderItemID uuid.UUID) error {
-	_, err := r.db.Exec(ctx, `
+	if _, err := r.db.Exec(ctx, `
 		update marketplace.order_items
 		set fulfilment_status = 'dispatched', updated_at = now()
-		where id = $1`, orderItemID)
-	return err
+		where id = $1`, orderItemID); err != nil {
+		return err
+	}
+	return refreshOrderStatusForItem(ctx, r.db, orderItemID)
 }
 
 // GetLabelForSeller returns the stored label PDF for the seller's own order

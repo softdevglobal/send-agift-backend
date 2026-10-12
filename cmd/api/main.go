@@ -7,6 +7,8 @@ import (
 	"net/http" // net/http is used to create and manage HTTP servers and clients
 	"time"     // time is used to measure and manage time-related operations
 
+	"github.com/google/uuid"
+
 	"myapp/internal/config"     // config is used to load and manage the configuration of the application
 	"myapp/internal/database"   // database is used to connect and manage the database
 	"myapp/internal/handlers"   // handlers is used to handle the HTTP requests and responses
@@ -164,6 +166,47 @@ func main() {
 	loginCodeHandler := handlers.NewLoginCodeHandler(loginCodeService)
 	// Gift recipients review from the link in their email or text.
 	giftRecipientService.UseReviewLinks(cfg.JWTSecret)
+
+	// Stripe: customers pay the platform account, then delivered order lines
+	// are transferred to sellers' Connect accounts. Without a secret key the
+	// endpoints answer "not available" and nothing else changes.
+	stripeService := services.NewStripeService(
+		repository.NewStripeRepository(pool),
+		services.NewStripeClient(cfg.StripeSecretKey),
+		cfg.StripeWebhookSecret, cfg.StripeConnectWebhookSecret,
+		cfg.StripeFeeBPS, cfg.AppWebURL)
+	stripeService.UseConnectCountry(cfg.StripeConnectCountry)
+	if stripeService.Enabled() {
+		fmt.Println("💳 Stripe: card payments and seller payouts are on")
+		if cfg.StripeConnectCountry != "" {
+			fmt.Printf("💳 Stripe: seller payout accounts are created in %s (STRIPE_CONNECT_COUNTRY)\n", cfg.StripeConnectCountry)
+		}
+		// An order only counts once it is paid: sellers do not see it, and
+		// its confirmation email, recipient account and rewards wait.
+		orders.RequirePayment(true)
+		orderService.RequirePayment(true)
+		stripeService.OnOrderPaid(func(ctx context.Context, orderID uuid.UUID) {
+			if err := orders.PayRewardsForPaidOrder(ctx, orderID); err != nil {
+				log.Printf("order %s paid: rewards: %v", orderID, err)
+			}
+			giftRecipientService.OrderPlaced(ctx, orderID)
+		})
+		stripeService.CancelUnpaidWith(func(ctx context.Context, customerID, orderID string) error {
+			return orders.CancelForCustomer(ctx, customerID, orderID)
+		})
+		orderService.AfterCancel(func(ctx context.Context, orderID uuid.UUID) {
+			if err := stripeService.RefundOrder(ctx, orderID); err != nil {
+				log.Printf("order %s cancelled but the refund failed: %v", orderID, err)
+			}
+		})
+		go stripeService.RunPayoutLoop(context.Background(), time.Minute,
+			database.Exclusive(pool, database.LockStripePayouts))
+		go stripeService.RunExpiryLoop(context.Background(), 15*time.Minute,
+			database.Exclusive(pool, database.LockStripeExpiry))
+	} else {
+		log.Printf("⚠️  STRIPE_SECRET_KEY is not set: card payments and seller payouts are off.")
+	}
+	stripeHandler := handlers.NewStripeHandler(stripeService)
 	giftReviewHandler := handlers.NewGiftReviewHandler(services.NewGiftReviewService(orders, customers, loginCodeService, cfg.JWTSecret, cfg.JWTExpiry))
 	// Customer sign-in with Google and Facebook. A provider without keys
 	// answers 503, so its button can be shown or hidden by configuration.
@@ -217,7 +260,7 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, cfg.JWTSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name
