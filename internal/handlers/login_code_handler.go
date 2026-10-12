@@ -19,9 +19,9 @@ func NewLoginCodeHandler(codes *services.LoginCodeService) *LoginCodeHandler {
 }
 
 type loginCodeRequest struct {
-	Channel     string `json:"channel"` // email or phone
+	Channel     string `json:"channel"`     // email or phone
 	Destination string `json:"destination"` // email address or phone number
-	Code        string `json:"code"` // verification code
+	Code        string `json:"code"`        // verification code
 }
 
 type phoneCodeRequest struct {
@@ -39,7 +39,7 @@ func (h *LoginCodeHandler) RequestCode(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.codes.RequestLoginCode(r.Context(), req.Channel, req.Destination); err != nil {
 		writeLoginCodeError(w, err, "could not send a code") // return error if code could not be sent
-		return // return error if code could not be sent
+		return                                               // return error if code could not be sent
 	}
 	utils.JSON(w, http.StatusAccepted, map[string]string{"message": "If that is yours, a code is on its way."}) // return success message
 }

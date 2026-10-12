@@ -24,15 +24,14 @@ const (
 	loginPurpose       = "login"
 	verifyPhonePurpose = "verify_phone"
 
-	
-	loginCodeTTL        = 5 * time.Minute  // Login otp is valid for 5 minutes
-	loginCodeCooldown   = time.Minute // user must wait for 1 minute before requesting a new code
-	loginCodeDailySends = 5 // maximum number of codes that can be sent by a user per day
-	loginCodeDailyWrong = 10 // user can make 10 wrong attempts per day
-	loginCodeWindow     = 24 * time.Hour // user can make 10 wrong attempts per day within a 24 hour window
+	loginCodeTTL        = 5 * time.Minute // Login otp is valid for 5 minutes
+	loginCodeCooldown   = time.Minute     // user must wait for 1 minute before requesting a new code
+	loginCodeDailySends = 5               // maximum number of codes that can be sent by a user per day
+	loginCodeDailyWrong = 10              // user can make 10 wrong attempts per day
+	loginCodeWindow     = 24 * time.Hour  // user can make 10 wrong attempts per day within a 24 hour window
 
 	codeSignupTTL = 20 * time.Minute // signup token is valid for 20 minutes
-	codeSignupUse = "code_signup" // signup token is used to sign up a new user
+	codeSignupUse = "code_signup"    // signup token is used to sign up a new user
 )
 
 // customer error messages
@@ -49,21 +48,21 @@ var (
 
 // LoginCodeService signs customers in with a 6-digit code sent by SMS or
 // email, and verifies a customer's phone the same way.
-// LoginCodeService handles 
+// LoginCodeService handles
 // 1. Login using an OTP
 // 2. Email verification
 // 3. Phone verification
 // 4. Sending OTPs
 // 5. Checking OTPs
-// 6. Generating Jwt tokens 
+// 6. Generating Jwt tokens
 type LoginCodeService struct {
 	codes     *repository.LoginCodeRepository // repository for storing and retrieving OTP records
-	customers *repository.CustomerRepository // repository for storing and retrieving customer records
-	email     *EmailService // email service for sending emails
-	sms       *SMSService // sms service for sending sms
-	defaultCC string // default country code for phone numbers
-	jwtSecret string // secret key for generating jwt tokens
-	jwtExpiry time.Duration // expiration time for jwt tokens
+	customers *repository.CustomerRepository  // repository for storing and retrieving customer records
+	email     *EmailService                   // email service for sending emails
+	sms       *SMSService                     // sms service for sending sms
+	defaultCC string                          // default country code for phone numbers
+	jwtSecret string                          // secret key for generating jwt tokens
+	jwtExpiry time.Duration                   // expiration time for jwt tokens
 }
 
 func NewLoginCodeService(
@@ -71,7 +70,7 @@ func NewLoginCodeService(
 	customers *repository.CustomerRepository, // customer database repository
 	email *EmailService, // email service for sending emails
 	sms *SMSService, // sms service for sending sms
-	defaultCountryCode, jwtSecret string, // default country code for phone numbers and secret key for generating jwt tokens		
+	defaultCountryCode, jwtSecret string, // default country code for phone numbers and secret key for generating jwt tokens
 	jwtExpiry time.Duration,
 ) *LoginCodeService {
 	return &LoginCodeService{
