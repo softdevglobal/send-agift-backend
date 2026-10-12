@@ -64,6 +64,8 @@ func (h *SocialAuthHandler) writeError(w http.ResponseWriter, err error) {
 		writeCodedError(w, http.StatusConflict, "email_in_use", err.Error())
 	case errors.Is(err, services.ErrCustomerConflict):
 		writeCodedError(w, http.StatusConflict, "email_in_use", "email already registered")
+	case errors.Is(err, services.ErrEmailReserved):
+		writeCodedError(w, http.StatusConflict, "email_reserved", err.Error())
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
 	case errors.Is(err, services.ErrCustomerRegistrationDisabled):

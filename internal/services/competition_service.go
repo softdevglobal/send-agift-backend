@@ -938,6 +938,9 @@ func (s *CompetitionService) ClaimPrize(ctx context.Context, id uuid.UUID, actor
 	if customerID == nil {
 		return nil, ErrCustomerRequired
 	}
+	if err := ensureCanRedeem(ctx, s.customers, *customerID); err != nil {
+		return nil, err
+	}
 	if !in.AcceptTerms {
 		return nil, fmt.Errorf("%w: accept the prize terms to claim", ErrInvalidClaim)
 	}

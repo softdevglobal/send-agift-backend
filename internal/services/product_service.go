@@ -126,6 +126,11 @@ func (s *ProductService) Create(ctx context.Context, sellerID, shopID string, in
 	if err != nil {
 		return nil, ErrInvalidProduct
 	}
+	if in.RewardPoints > 0 {
+		if err := ensureFundingOpen(ctx, s.sellers, sid); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.requireShopCurrency(ctx, sellerID, shopID, in.Currency); err != nil {
 		return nil, err
 	}
@@ -181,6 +186,17 @@ func (s *ProductService) Update(ctx context.Context, sellerID, productID string,
 	}
 	if err := s.requireShopCurrency(ctx, sellerID, existing.ShopID.String(), in.Currency); err != nil {
 		return nil, err
+	}
+	// Raising what a unit pays out is held after an email change. Lowering it,
+	// or leaving it, is always fine.
+	if in.RewardPoints > existing.RewardPoints {
+		sid, parseErr := uuid.Parse(sellerID)
+		if parseErr != nil {
+			return nil, ErrInvalidProduct
+		}
+		if err := ensureFundingOpen(ctx, s.sellers, sid); err != nil {
+			return nil, err
+		}
 	}
 
 	replaceMedia := in.Media != nil

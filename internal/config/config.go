@@ -71,6 +71,15 @@ type Config struct {
 	GoogleClientSecret string
 	FacebookAppID      string
 	FacebookAppSecret  string
+
+	// SMS through a textbee.dev Android gateway. Without a key, messages
+	// queue up and are sent once one is set.
+	TextBeeAPIKey          string
+	TextBeeDeviceID        string
+	TextBeeAPIBase         string
+	TextBeeSIMSubscription string
+	// DefaultPhoneCountryCode reads a local number (0771234567) as E.164.
+	DefaultPhoneCountryCode string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -113,6 +122,12 @@ func Load() (*Config, error) {
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		FacebookAppID:      os.Getenv("FACEBOOK_APP_ID"),
 		FacebookAppSecret:  os.Getenv("FACEBOOK_APP_SECRET"),
+
+		TextBeeAPIKey:           os.Getenv("TEXTBEE_API_KEY"),
+		TextBeeDeviceID:         os.Getenv("TEXTBEE_DEVICE_ID"),
+		TextBeeAPIBase:          strings.TrimRight(envOr("TEXTBEE_API_BASE", "https://api.textbee.dev/api/v1"), "/"),
+		TextBeeSIMSubscription:  os.Getenv("TEXTBEE_SIM_SUBSCRIPTION_ID"),
+		DefaultPhoneCountryCode: envOr("TEXTBEE_DEFAULT_COUNTRY_CODE", "+61"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -135,6 +150,9 @@ func Load() (*Config, error) {
 	}
 	if (cfg.FacebookAppID == "") != (cfg.FacebookAppSecret == "") {
 		return nil, fmt.Errorf("set both FACEBOOK_APP_ID and FACEBOOK_APP_SECRET, or neither")
+	}
+	if (cfg.TextBeeAPIKey == "") != (cfg.TextBeeDeviceID == "") {
+		return nil, fmt.Errorf("set both TEXTBEE_API_KEY and TEXTBEE_DEVICE_ID, or neither")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")

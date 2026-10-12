@@ -232,6 +232,9 @@ func (s *SocialAuthService) Complete(ctx context.Context, in SocialCompleteInput
 	if profile.Picture != "" {
 		image = &profile.Picture
 	}
+	if err := ensureEmailFree(ctx, s.customers, profile.Email); err != nil {
+		return nil, err
+	}
 	customer := &models.Customer{
 		CountryID:    countryID,
 		Email:        profile.Email,

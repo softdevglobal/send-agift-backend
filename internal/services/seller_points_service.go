@@ -109,10 +109,17 @@ func NewPointsPaymentProvider(name string) (PointsPaymentProvider, error) {
 // SellerPointsService is sellers buying points, and the admin tools and
 // provider webhook that confirm those purchases.
 type SellerPointsService struct {
+	sellers       *repository.SellerRepository // nil skips the email-change hold
 	points        *repository.PointsRepository
 	provider      PointsPaymentProvider
 	rate          models.PointsRate
 	webhookSecret []byte
+}
+
+// HoldAfterEmailChange keeps a seller from buying points in the days after
+// their email changed.
+func (s *SellerPointsService) HoldAfterEmailChange(sellers *repository.SellerRepository) {
+	s.sellers = sellers
 }
 
 func NewSellerPointsService(points *repository.PointsRepository, provider PointsPaymentProvider, centsPerPoint int, currency, webhookSecret string) *SellerPointsService {
@@ -216,6 +223,11 @@ func (s *SellerPointsService) CreatePurchase(ctx context.Context, sellerID strin
 	id, err := parseSeller(sellerID)
 	if err != nil {
 		return nil, err
+	}
+	if s.sellers != nil {
+		if err := ensureFundingOpen(ctx, s.sellers, id); err != nil {
+			return nil, err
+		}
 	}
 	key := strings.TrimSpace(in.IdempotencyKey)
 	if key == "" || len(key) > 128 {

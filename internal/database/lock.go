@@ -18,6 +18,7 @@ const (
 	LockPushDelivery        int64 = 7_301_004
 	LockEmailDelivery       int64 = 7_301_005
 	LockGiftDeliveryNotices int64 = 7_301_006
+	LockSMSDelivery         int64 = 7_301_007
 )
 
 // WithLock runs fn while holding the advisory lock key, first waiting for any

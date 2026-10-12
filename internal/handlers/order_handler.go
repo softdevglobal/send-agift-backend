@@ -106,6 +106,8 @@ func (h *OrderHandler) writeOrderError(w http.ResponseWriter, err error, fallbac
 		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrGiftPoints):
 		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrRedemptionLocked):
+		utils.JSON(w, http.StatusLocked, map[string]any{"error": err.Error(), "code": "REDEMPTION_LOCKED"})
 	case errors.Is(err, services.ErrGiftPointsBalance):
 		utils.JSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "INSUFFICIENT_POINTS"})
 	default:

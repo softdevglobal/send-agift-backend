@@ -42,6 +42,7 @@ type OrderEmailSummary struct {
 
 	RecipientName  *string
 	RecipientEmail *string
+	RecipientPhone *string
 	RecipientCity  *string
 	// The recipient's SendAGift account, once one is linked to the order.
 	RecipientCustomerID *uuid.UUID
@@ -59,7 +60,7 @@ func (r *OrderRepository) OrderEmailSummary(ctx context.Context, orderID uuid.UU
 		       o.subtotal_amount, o.delivery_amount, o.total_amount, o.currency,
 		       o.gift_message, o.gift_points, o.created_at,
 		       c.id, c.email, c.display_name,
-		       r.name, nullif(trim(r.email), ''), ra.city,
+		       r.name, nullif(trim(r.email), ''), nullif(trim(r.phone), ''), ra.city,
 		       o.recipient_customer_id, coalesce(rc.password_change_required, false)
 		from marketplace.orders o
 		inner join customer.customers c on c.id = o.customer_id
@@ -76,7 +77,7 @@ func (r *OrderRepository) OrderEmailSummary(ctx context.Context, orderID uuid.UU
 		&s.SubtotalAmount, &s.DeliveryAmount, &s.TotalAmount, &s.Currency,
 		&s.GiftMessage, &s.GiftPoints, &s.CreatedAt,
 		&s.CustomerID, &s.CustomerEmail, &s.CustomerName,
-		&s.RecipientName, &s.RecipientEmail, &s.RecipientCity,
+		&s.RecipientName, &s.RecipientEmail, &s.RecipientPhone, &s.RecipientCity,
 		&s.RecipientCustomerID, &s.RecipientPasswordChangeRequired,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -113,6 +114,21 @@ func (r *OrderRepository) SetRecipientCustomer(ctx context.Context, orderID, cus
 	_, err := r.db.Exec(ctx, `
 		update marketplace.orders set recipient_customer_id = $2
 		where id = $1 and recipient_customer_id is distinct from $2`, orderID, customerID)
+	return err
+}
+
+// ClaimGiftsByPhone links delivered gifts addressed to a phone number (and no
+// account) to the customer who has just verified that number, so a recipient
+// reached only by text can review what they were sent.
+func (r *CustomerRepository) ClaimGiftsByPhone(ctx context.Context, customerID, e164 string) error {
+	_, err := r.db.Exec(ctx, `
+		update marketplace.orders o set recipient_customer_id = $1
+		from customer.recipients rc
+		where rc.id = o.recipient_id
+		  and o.recipient_customer_id is null and o.customer_id <> $1
+		  and rc.phone is not null and rc.phone <> ''
+		  and right(regexp_replace(rc.phone, '\D', '', 'g'), 9) = right(regexp_replace($2, '\D', '', 'g'), 9)`,
+		customerID, e164)
 	return err
 }
 

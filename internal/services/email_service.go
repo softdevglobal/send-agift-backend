@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -115,6 +116,20 @@ func (s *EmailService) SendPasswordResetCode(ctx context.Context, subjectType st
 	return s.queue(ctx, "password_reset", key, email, name, content)
 }
 
+// SendLoginCode emails the 6-digit code a customer signs in or signs up with.
+// Each send has its own dedupe key, so a resend is delivered.
+func (s *EmailService) SendLoginCode(ctx context.Context, email, code string, validFor time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderLoginCode(code, validFor)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("login_code:%s:%d", email, time.Now().UnixNano())
+	return s.queue(ctx, "login_code", key, email, "", content)
+}
+
 // SendCustomerWelcome greets a customer who just signed up.
 func (s *EmailService) SendCustomerWelcome(ctx context.Context, c *models.Customer) error {
 	if s == nil {
@@ -143,15 +158,28 @@ func (s *EmailService) SendOrderPlaced(ctx context.Context, o *repository.OrderE
 // SendGiftDelivered tells the recipient their gift arrived. tempPassword is
 // the password their new account starts with, or empty when they already
 // chose their own.
-func (s *EmailService) SendGiftDelivered(ctx context.Context, o *repository.OrderEmailSummary, tempPassword string) error {
+func (s *EmailService) SendGiftDelivered(ctx context.Context, o *repository.OrderEmailSummary, tempPassword, reviewURL string) error {
 	if s == nil || o.RecipientEmail == nil {
 		return nil
 	}
-	content, err := renderGiftDelivered(s.webURL, o, tempPassword)
+	content, err := renderGiftDelivered(s.webURL, o, tempPassword, reviewURL)
 	if err != nil {
 		return err
 	}
 	return s.queue(ctx, "gift_delivered", "gift_delivered:"+o.OrderID.String(), *o.RecipientEmail, derefOr(o.RecipientName, ""), content)
+}
+
+// SendOrderDelivered tells the buyer their gift arrived and links to the
+// order, where each item can be reviewed.
+func (s *EmailService) SendOrderDelivered(ctx context.Context, o *repository.OrderEmailSummary) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderOrderDelivered(s.webURL, o)
+	if err != nil {
+		return err
+	}
+	return s.queue(ctx, "order_delivered", "order_delivered:"+o.OrderID.String(), o.CustomerEmail, derefOr(o.CustomerName, ""), content)
 }
 
 // ── Delivery ────────────────────────────────────────────────────────────
@@ -369,4 +397,46 @@ func sellerName(s *models.Seller) string {
 // normalizeEmail is the form an address is stored and matched in.
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// SendEmailChangeCode emails the code that proves the customer owns the new
+// address. Each send has its own dedupe key, so a resend is delivered.
+func (s *EmailService) SendEmailChangeCode(ctx context.Context, newEmail, code string, validFor time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderEmailChangeCode(code, validFor)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("email_change_code:%s:%d", newEmail, time.Now().UnixNano())
+	return s.queue(ctx, "email_change_code", key, newEmail, "", content)
+}
+
+// SendEmailChangedAlert tells the old address the email was changed, with the
+// link that undoes it.
+func (s *EmailService) SendEmailChangedAlert(ctx context.Context, oldEmail, newEmail, undoToken, undoPath string) error {
+	if s == nil {
+		return nil
+	}
+	undoURL := s.webURL + undoPath + "?token=" + url.QueryEscape(undoToken)
+	content, err := renderEmailChangedAlert(newEmail, undoURL)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("email_change_alert:%s:%d", oldEmail, time.Now().UnixNano())
+	return s.queue(ctx, "email_change_alert", key, oldEmail, "", content)
+}
+
+// SendEmailChangeReverted tells the restored address the account is back on it.
+func (s *EmailService) SendEmailChangeReverted(ctx context.Context, restoredEmail, resetPath string) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderEmailChangeReverted(s.webURL, resetPath)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("email_change_reverted:%s:%d", restoredEmail, time.Now().UnixNano())
+	return s.queue(ctx, "email_change_reverted", key, restoredEmail, "", content)
 }

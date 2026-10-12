@@ -182,6 +182,8 @@ func (h *SellerPointsHandler) writeError(w http.ResponseWriter, err error, fallb
 		utils.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrPurchaseNotFound):
 		utils.Error(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, services.ErrFundingLocked):
+		utils.JSON(w, http.StatusLocked, map[string]any{"error": err.Error(), "code": "FUNDING_LOCKED"})
 	case errors.Is(err, services.ErrPurchaseState):
 		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrTestPaymentsOff):

@@ -13,9 +13,10 @@ import (
 
 // Define custom errors for the authentication failures
 var (
-	ErrBootstrapForbidden = errors.New("bootstrap already completed") // if the bootstrap is already completed
-	ErrInvalidInput       = errors.New("invalid input")               // if the input is invalid
-	ErrInvalidCredentials = errors.New("invalid email or password")   // if the email or password is invalid
+	ErrBootstrapForbidden     = errors.New("bootstrap already completed") // if the bootstrap is already completed
+	ErrInvalidInput           = errors.New("invalid input")
+	ErrInvalidCredentials     = errors.New("invalid email or password")
+	ErrPasswordChangeRequired = errors.New("this account was made for a gift. Sign in with a code sent to your email, then choose a password")
 )
 
 // Authservice handles authentication for admins, customers and sellers
@@ -23,9 +24,10 @@ type AuthService struct {
 	admins          *repository.AdminRepository    // repository for admin operations
 	customers       *repository.CustomerRepository // repository for customer operations
 	sellers         *repository.SellerRepository   // repository for seller operations
-	jwtSecret       string                         // secret for the JWT
-	jwtExpiry       time.Duration                  // expiry for the JWT
-	bootstrapSecret string                         // secret for the bootstrap
+	jwtSecret       string
+	jwtExpiry       time.Duration
+	bootstrapSecret string
+	defaultCC       string
 }
 
 // NewAuthService is a simple constructor for the AuthService
@@ -37,14 +39,18 @@ func NewAuthService(
 	jwtExpiry time.Duration, // expiry for the JWT
 ) *AuthService {
 	return &AuthService{ // returns a new AuthService
-		admins:          admins,          // repository for admin operations
-		customers:       customers,       // repository for customer operations
-		sellers:         sellers,         // repository for seller operations
-		jwtSecret:       jwtSecret,       // secret for the JWT
-		jwtExpiry:       jwtExpiry,       // expiry for the JWT
-		bootstrapSecret: bootstrapSecret, // secret for the bootstrap
+		admins:          admins,    // repository for admin operations
+		customers:       customers, // repository for customer operations
+		sellers:         sellers,   // repository for seller operations
+		jwtSecret:       jwtSecret, // secret for the JWT
+		jwtExpiry:       jwtExpiry, // expiry for the JWT
+		bootstrapSecret: bootstrapSecret,
 	}
 }
+
+// UsePhoneCountry lets a customer sign in with the phone saved on their
+// account, using the same password as their email.
+func (s *AuthService) UsePhoneCountry(code string) { s.defaultCC = code }
 
 // BootstrapInput is the input for the bootstrap operation
 type BootstrapInput struct {
@@ -103,10 +109,28 @@ func (s *AuthService) Bootstrap(ctx context.Context, in BootstrapInput) (*models
 }
 
 // Login checks admin, then customer, then seller with the same email + password.
+// A customer can use the phone saved on their account instead of the email.
 func (s *AuthService) Login(ctx context.Context, in LoginInput) (*LoginResult, error) {
-	email := strings.TrimSpace(strings.ToLower(in.Email)) // trim the email and convert it to lowercase
+	email := strings.TrimSpace(strings.ToLower(in.Email))
 	if email == "" || in.Password == "" {
-		return nil, ErrInvalidCredentials // return an error if the email or password is invalid
+		return nil, ErrInvalidCredentials
+	}
+	// A value with no @ is a phone. Admins and sellers sign in with email.
+	if !strings.Contains(email, "@") {
+		customer, err := findCustomerByPhone(ctx, s.customers, s.defaultCC, strings.TrimSpace(in.Email))
+		if errors.Is(err, repository.ErrCustomerNotFound) || errors.Is(err, ErrInvalidPhone) {
+			return nil, ErrInvalidCredentials
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !utils.CheckPassword(in.Password, customer.PasswordHash) {
+			return nil, ErrInvalidCredentials
+		}
+		if customer.PasswordChangeRequired {
+			return nil, ErrPasswordChangeRequired
+		}
+		return s.token(customer.ID.String(), customer.Email, "customer")
 	}
 	// check if the admin exists
 	if admin, err := s.admins.GetByEmail(ctx, email); err == nil {
@@ -123,7 +147,10 @@ func (s *AuthService) Login(ctx context.Context, in LoginInput) (*LoginResult, e
 	// check if the customer exists
 	if customer, err := s.customers.GetByEmail(ctx, email); err == nil {
 		if utils.CheckPassword(in.Password, customer.PasswordHash) {
-			return s.token(customer.ID.String(), customer.Email, "customer") // return the token and role
+			if customer.PasswordChangeRequired {
+				return nil, ErrPasswordChangeRequired
+			}
+			return s.token(customer.ID.String(), customer.Email, "customer")
 		}
 	} else if !errors.Is(err, repository.ErrCustomerNotFound) {
 		return nil, err // return an error if the customer is not found

@@ -120,6 +120,8 @@ func (h *ProductHandler) writeError(w http.ResponseWriter, err error, fallback s
 		utils.Error(w, http.StatusBadRequest, "currency must be the shop's country currency")
 	case errors.Is(err, services.ErrInvalidRewardPoints):
 		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrFundingLocked):
+		utils.JSON(w, http.StatusLocked, map[string]any{"error": err.Error(), "code": "FUNDING_LOCKED"})
 	case errors.Is(err, services.ErrInvalidInventory):
 		utils.Error(w, http.StatusBadRequest, "qty fields must be >= 0; unavailable_dates must be YYYY-MM-DD")
 	case errors.Is(err, services.ErrProductConflict):
