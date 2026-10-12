@@ -123,6 +123,12 @@ type StripeCheckoutSession struct {
 	URL           string `json:"url"`
 	Status        string `json:"status"` // open | complete | expired
 	PaymentStatus string `json:"payment_status"`
+	// AmountTotal is what the customer paid, in minor units of Currency.
+	AmountTotal int64  `json:"amount_total"`
+	Currency    string `json:"currency"`
+	// Metadata says what the session pays for: an order, or a seller's
+	// points purchase ("kind": "points_purchase").
+	Metadata map[string]string `json:"metadata"`
 	// PaymentIntent is the card payment behind a completed session.
 	PaymentIntent string `json:"payment_intent"`
 }
@@ -146,6 +152,9 @@ type CheckoutParams struct {
 	CustomerEmail string
 	SuccessURL    string
 	CancelURL     string
+	// Metadata is added to the session and its payment. An order's own
+	// (order_id, order_number) is set from OrderID.
+	Metadata map[string]string
 }
 
 // CreateCheckoutSession starts a hosted payment page for an order. The
@@ -169,11 +178,17 @@ func (c *StripeClient) CreateCheckoutSession(ctx context.Context, p CheckoutPara
 	}
 	form.Set("success_url", p.SuccessURL)
 	form.Set("cancel_url", p.CancelURL)
-	form.Set("client_reference_id", p.OrderID)
-	form.Set("metadata[order_id]", p.OrderID)
-	form.Set("metadata[order_number]", p.OrderNumber)
-	form.Set("payment_intent_data[transfer_group]", "order_"+p.OrderNumber)
-	form.Set("payment_intent_data[metadata][order_id]", p.OrderID)
+	if p.OrderID != "" {
+		form.Set("client_reference_id", p.OrderID)
+		form.Set("metadata[order_id]", p.OrderID)
+		form.Set("metadata[order_number]", p.OrderNumber)
+		form.Set("payment_intent_data[transfer_group]", "order_"+p.OrderNumber)
+		form.Set("payment_intent_data[metadata][order_id]", p.OrderID)
+	}
+	for k, v := range p.Metadata {
+		form.Set("metadata["+k+"]", v)
+		form.Set("payment_intent_data[metadata]["+k+"]", v)
+	}
 	if p.CustomerEmail != "" {
 		form.Set("customer_email", p.CustomerEmail)
 	}

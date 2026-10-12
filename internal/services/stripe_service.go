@@ -45,6 +45,8 @@ type StripeService struct {
 
 	// onPaid runs once when an order's payment is confirmed.
 	onPaid func(ctx context.Context, orderID uuid.UUID)
+	// onPointsCheckout applies a session that pays for a seller's points.
+	onPointsCheckout func(ctx context.Context, cs StripeCheckoutSession) error
 	// cancelUnpaid cancels an order nobody paid for.
 	cancelUnpaid func(ctx context.Context, customerID, orderID string) error
 }
@@ -68,6 +70,12 @@ func (s *StripeService) UseConnectCountry(iso string) {
 // OnOrderPaid sets what happens once, when an order's payment is confirmed:
 // its confirmation email, the recipient's account, reward points.
 func (s *StripeService) OnOrderPaid(fn func(ctx context.Context, orderID uuid.UUID)) { s.onPaid = fn }
+
+// OnPointsCheckout sets how a Checkout Session paying for a seller's points
+// is applied (see SellerPointsService.HandleStripeCheckout).
+func (s *StripeService) OnPointsCheckout(fn func(ctx context.Context, cs StripeCheckoutSession) error) {
+	s.onPointsCheckout = fn
+}
 
 // CancelUnpaidWith sets how an abandoned, unpaid order is cancelled.
 func (s *StripeService) CancelUnpaidWith(fn func(ctx context.Context, customerID, orderID string) error) {
@@ -254,6 +262,12 @@ func (s *StripeService) HandlePlatformWebhook(ctx context.Context, body []byte, 
 			if err := json.Unmarshal(ev.Data.Object, &cs); err != nil {
 				return err
 			}
+			if cs.Metadata["kind"] == pointsCheckoutKind {
+				if s.onPointsCheckout == nil {
+					return nil
+				}
+				return s.onPointsCheckout(ctx, cs)
+			}
 			if cs.PaymentStatus != "paid" {
 				return nil // card still pending (a bank step); a later event settles it
 			}
@@ -262,6 +276,12 @@ func (s *StripeService) HandlePlatformWebhook(ctx context.Context, body []byte, 
 			var cs StripeCheckoutSession
 			if err := json.Unmarshal(ev.Data.Object, &cs); err != nil {
 				return err
+			}
+			if cs.Metadata["kind"] == pointsCheckoutKind {
+				if s.onPointsCheckout == nil {
+					return nil
+				}
+				return s.onPointsCheckout(ctx, cs)
 			}
 			return s.repo.MarkCheckoutExpired(ctx, cs.ID)
 		case "charge.refunded":

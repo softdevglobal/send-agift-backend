@@ -144,13 +144,25 @@ type SellerPointsWallet struct {
 	// Reserved is promised as rewards on orders not yet delivered.
 	Reserved int64 `json:"reserved"`
 	// Available is what can still be promised: Balance - Reserved.
-	Available         int64         `json:"available"`
-	LifetimePurchased int64         `json:"lifetime_purchased"`
-	LifetimeSpent     int64         `json:"lifetime_spent"`
-	Rate              PointsRate    `json:"rate"`
-	PaymentProvider   string        `json:"payment_provider"`
-	TestPayments      bool          `json:"test_payments"`
-	Entries           []PointsEntry `json:"entries"`
+	Available         int64 `json:"available"`
+	LifetimePurchased int64 `json:"lifetime_purchased"`
+	LifetimeSpent     int64 `json:"lifetime_spent"`
+	// Owed is what the platform has fronted for rewards the seller could not
+	// cover (paid out, or promised on open orders). It is taken from their
+	// next purchase first.
+	Owed int64 `json:"owed"`
+	// CreditLimit is how far below zero Available may go; CreditLeft is
+	// what is still free: Available + CreditLimit.
+	CreditLimit int64 `json:"credit_limit"`
+	CreditLeft  int64 `json:"credit_left"`
+	// LargestReward is the biggest reward on the seller's live products, and
+	// LowBalance flags a balance that covers few more orders, or a debt.
+	LargestReward   int64         `json:"largest_reward"`
+	LowBalance      bool          `json:"low_balance"`
+	Rate            PointsRate    `json:"rate"`
+	PaymentProvider string        `json:"payment_provider"`
+	TestPayments    bool          `json:"test_payments"`
+	Entries         []PointsEntry `json:"entries"`
 }
 
 // Points purchase statuses.
@@ -163,12 +175,18 @@ const (
 
 // PointsPurchase maps to points.points_purchases: a seller buying points.
 type PointsPurchase struct {
-	ID                uuid.UUID  `json:"id"`
-	SellerID          uuid.UUID  `json:"seller_id"`
-	AmountCents       int64      `json:"amount_cents"`
-	Currency          string     `json:"currency"`
-	CentsPerPoint     int        `json:"cents_per_point"`
-	Points            int64      `json:"points"`
+	ID            uuid.UUID `json:"id"`
+	SellerID      uuid.UUID `json:"seller_id"`
+	AmountCents   int64     `json:"amount_cents"`
+	Currency      string    `json:"currency"`
+	CentsPerPoint int       `json:"cents_per_point"`
+	// Points includes BonusPoints.
+	Points      int64      `json:"points"`
+	BonusPoints int64      `json:"bonus_points"`
+	PackageID   *uuid.UUID `json:"package_id,omitempty"`
+	PackageName *string    `json:"package_name,omitempty"`
+	// PointsSettled is how much of what was credited paid off owed points.
+	PointsSettled     int64      `json:"points_settled"`
 	PaidAmountCents   *int64     `json:"paid_amount_cents,omitempty"`
 	PointsCredited    *int64     `json:"points_credited,omitempty"`
 	Status            string     `json:"status"`
@@ -186,6 +204,26 @@ type PointsPurchase struct {
 	SellerName  *string `json:"seller_name,omitempty"`
 	SellerEmail *string `json:"seller_email,omitempty"`
 }
+
+// PointPackage is a ready-made bundle of points a seller can buy, set up by
+// a Super Admin. BonusPoints come on top of Points.
+type PointPackage struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Description *string   `json:"description,omitempty"`
+	Points      int64     `json:"points"`
+	BonusPoints int64     `json:"bonus_points"`
+	PriceCents  int64     `json:"price_cents"`
+	Currency    string    `json:"currency"`
+	Badge       *string   `json:"badge,omitempty"`
+	IsActive    bool      `json:"is_active"`
+	SortOrder   int       `json:"sort_order"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// TotalPoints is what the package credits.
+func (p PointPackage) TotalPoints() int64 { return p.Points + p.BonusPoints }
 
 // CustomerPointsSummary is one customer in the admin points search.
 type CustomerPointsSummary struct {

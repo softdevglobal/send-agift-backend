@@ -102,7 +102,7 @@ func NewPointsPaymentProvider(name string) (PointsPaymentProvider, error) {
 	case "instant":
 		return instantPayments{}, nil
 	default:
-		return nil, fmt.Errorf("unknown POINTS_PAYMENT_PROVIDER %q (use instant, manual or test)", name)
+		return nil, fmt.Errorf("unknown POINTS_PAYMENT_PROVIDER %q (use stripe, instant, manual or test)", name)
 	}
 }
 
@@ -184,10 +184,11 @@ func (s *SellerPointsService) Purchases(ctx context.Context, sellerID string) ([
 	return s.points.ListSellerPurchases(ctx, id, 100)
 }
 
-// PurchaseInput is a seller asking to buy points: either the amount to pay
-// or the number of points (or both, when they agree). The idempotency key
-// makes a double-clicked Buy one purchase.
+// PurchaseInput is a seller asking to buy points: a package, or an amount
+// to pay or a number of points (or both, when they agree). The idempotency
+// key makes a double-clicked Buy one purchase.
 type PurchaseInput struct {
+	PackageID      string `json:"package_id"`
 	AmountCents    int64  `json:"amount_cents"`
 	Points         int64  `json:"points"`
 	IdempotencyKey string `json:"idempotency_key"`
@@ -233,14 +234,29 @@ func (s *SellerPointsService) CreatePurchase(ctx context.Context, sellerID strin
 	if key == "" || len(key) > 128 {
 		return nil, fmt.Errorf("%w: idempotency_key of 1 to 128 characters is required", ErrInvalidPurchase)
 	}
-	amount, points, err := s.quote(in)
-	if err != nil {
-		return nil, err
+	draft := &models.PointsPurchase{
+		SellerID: id, Currency: s.rate.Currency,
+		CentsPerPoint: s.rate.CentsPerPoint, Provider: s.provider.Name(),
 	}
-	p, err := s.points.CreatePurchase(ctx, &models.PointsPurchase{
-		SellerID: id, AmountCents: amount, Currency: s.rate.Currency,
-		CentsPerPoint: s.rate.CentsPerPoint, Points: points, Provider: s.provider.Name(),
-	}, key)
+	if strings.TrimSpace(in.PackageID) != "" {
+		pkg, err := s.packageToBuy(ctx, in.PackageID)
+		if err != nil {
+			return nil, err
+		}
+		// A package is bought at its own price; the bonus comes on top.
+		draft.AmountCents = pkg.PriceCents
+		draft.Points = pkg.TotalPoints()
+		draft.BonusPoints = pkg.BonusPoints
+		draft.PackageID = &pkg.ID
+		draft.PackageName = &pkg.Name
+	} else {
+		amount, points, err := s.quote(in)
+		if err != nil {
+			return nil, err
+		}
+		draft.AmountCents, draft.Points = amount, points
+	}
+	p, err := s.points.CreatePurchase(ctx, draft, key)
 	if err != nil {
 		return nil, mapPurchaseError(err)
 	}
