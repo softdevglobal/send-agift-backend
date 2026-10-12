@@ -383,6 +383,7 @@ type SellerPayouts struct {
 	PayoutsEnabled   bool   `json:"payouts_enabled"`
 	DetailsSubmitted bool   `json:"details_submitted"`
 	AccountID        string `json:"account_id,omitempty"`
+	PayoutMode       string `json:"payout_mode"` // automatic | manual
 }
 
 // SellerStatus reads the seller's account, refreshing it from Stripe when
@@ -402,6 +403,7 @@ func (s *StripeService) SellerStatus(ctx context.Context, sellerID string) (*Sel
 		Enabled: s.client != nil, Connected: st.AccountID != "",
 		ChargesEnabled: st.ChargesEnabled, PayoutsEnabled: st.PayoutsEnabled,
 		DetailsSubmitted: st.DetailsSubmitted, AccountID: st.AccountID,
+		PayoutMode: st.PayoutMode,
 	}, nil
 }
 
@@ -465,9 +467,9 @@ func platformFee(amount, bps int) int {
 	return amount * bps / 10000
 }
 
-// PayDueTransfers pays out delivered lines. It returns how many it sent.
-// A line that cannot be sent now (say the platform balance is short) is
-// logged and retried on the next round.
+// PayDueTransfers pays out delivered lines of sellers on automatic payouts.
+// It returns how many it sent. A line that cannot be sent now (say the
+// platform balance is short) is logged and retried on the next round.
 func (s *StripeService) PayDueTransfers(ctx context.Context, limit int) (int, error) {
 	if s.client == nil {
 		return 0, nil
@@ -476,21 +478,38 @@ func (s *StripeService) PayDueTransfers(ctx context.Context, limit int) (int, er
 	if err != nil {
 		return 0, err
 	}
-	sent := 0
+	sent, _ := s.sendTransfers(ctx, due)
+	return sent, nil
+}
+
+// sendTransfers sends each due line to its seller. It returns how many went
+// out and the net amount of those, in minor units.
+func (s *StripeService) sendTransfers(ctx context.Context, due []repository.DueTransfer) (int, int) {
+	sent, total := 0, 0
+	charges := map[string]string{} // payment intent -> its charge
 	for _, d := range due {
 		fee := platformFee(d.Amount, s.feeBPS)
 		net := d.Amount - fee
 		if net <= 0 {
 			continue
 		}
-		tr, err := s.client.CreateTransfer(ctx, net, d.Currency, d.AccountID,
-			"order_"+d.OrderNumber,
+		charge, ok := charges[d.PaymentIntentID]
+		if !ok && d.PaymentIntentID != "" {
+			if pi, err := s.client.GetPaymentIntent(ctx, d.PaymentIntentID); err == nil {
+				charge = pi.LatestCharge
+			} else {
+				log.Printf("stripe: read payment %s for its charge: %v", d.PaymentIntentID, err)
+			}
+			charges[d.PaymentIntentID] = charge
+		}
+		tr, err := s.client.CreateTransferFrom(ctx, net, d.Currency, d.AccountID,
+			"order_"+d.OrderNumber, charge,
 			map[string]string{
 				"order_item_id": d.OrderItemID.String(),
 				"order_id":      d.OrderID.String(),
 				"seller_id":     d.SellerID.String(),
 			},
-			"transfer-"+d.OrderItemID.String())
+			transferKey(d.OrderItemID.String(), charge))
 		if err != nil {
 			log.Printf("stripe transfer for item %s: %v", d.OrderItemID, err)
 			continue
@@ -500,8 +519,69 @@ func (s *StripeService) PayDueTransfers(ctx context.Context, limit int) (int, er
 			continue
 		}
 		sent++
+		total += net
 	}
-	return sent, nil
+	return sent, total
+}
+
+// transferKey is the idempotency key for paying one line. A transfer tied
+// to a charge gets its own key: Stripe keeps the answer to a keyed request
+// (a refusal for lack of balance included) and rejects the same key with
+// different parameters, so an earlier attempt must not block this one.
+func transferKey(orderItemID, charge string) string {
+	if charge == "" {
+		return "transfer-" + orderItemID
+	}
+	return "transfer-src-" + orderItemID
+}
+
+// ErrInvalidPayoutMode is returned for a mode other than automatic or manual.
+var ErrInvalidPayoutMode = errors.New("payout mode must be automatic or manual")
+
+// ErrNoPayoutAccount is returned when a seller has not set up payouts yet.
+var ErrNoPayoutAccount = errors.New("set up your payout account first")
+
+// SetPayoutMode chooses between automatic payouts and withdrawing by hand.
+func (s *StripeService) SetPayoutMode(ctx context.Context, sellerID, mode string) (*SellerPayouts, error) {
+	if mode != "automatic" && mode != "manual" {
+		return nil, ErrInvalidPayoutMode
+	}
+	ok, err := s.repo.SetPayoutMode(ctx, sellerID, mode)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNoPayoutAccount
+	}
+	return s.SellerStatus(ctx, sellerID)
+}
+
+// Withdrawal is what one "Withdraw" sent.
+type Withdrawal struct {
+	Sent   int `json:"sent"`   // order lines paid out
+	Failed int `json:"failed"` // lines Stripe could not send yet
+	Amount int `json:"amount"` // net, in minor units, of those sent
+}
+
+// Withdraw pays out everything delivered and not yet paid for one seller,
+// now, whatever their payout mode.
+func (s *StripeService) Withdraw(ctx context.Context, sellerID string) (*Withdrawal, error) {
+	if s.client == nil {
+		return nil, ErrStripeNotConfigured
+	}
+	st, err := s.repo.GetSellerStripe(ctx, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	if st.AccountID == "" || !st.PayoutsEnabled {
+		return nil, ErrNoPayoutAccount
+	}
+	due, err := s.repo.DueTransfersForSeller(ctx, sellerID, 100)
+	if err != nil {
+		return nil, err
+	}
+	sent, total := s.sendTransfers(ctx, due)
+	return &Withdrawal{Sent: sent, Failed: len(due) - sent, Amount: total}, nil
 }
 
 // RunPayoutLoop pays out delivered lines on an interval until ctx ends. With

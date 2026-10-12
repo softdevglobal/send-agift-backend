@@ -264,6 +264,7 @@ type SellerStripe struct {
 	ChargesEnabled   bool
 	PayoutsEnabled   bool
 	DetailsSubmitted bool
+	PayoutMode       string // automatic | manual
 }
 
 func (r *StripeRepository) GetSellerStripe(ctx context.Context, sellerID string) (*SellerStripe, error) {
@@ -273,14 +274,15 @@ func (r *StripeRepository) GetSellerStripe(ctx context.Context, sellerID string)
 		       coalesce(a.provider_account_id, ''),
 		       coalesce(a.charges_enabled, false),
 		       coalesce(a.payouts_enabled, false),
-		       coalesce(a.details_submitted, false)
+		       coalesce(a.details_submitted, false),
+		       coalesce(a.payout_mode, 'automatic')
 		from seller.sellers s
 		join core.countries c on c.id = s.country_id
 		left join seller.seller_payout_accounts a
 		       on a.seller_id = s.id and a.provider = $2
 		where s.id = $1`, sellerID, stripeProvider,
 	).Scan(&s.SellerID, &s.Email, &s.CountryISO, &s.AccountID,
-		&s.ChargesEnabled, &s.PayoutsEnabled, &s.DetailsSubmitted)
+		&s.ChargesEnabled, &s.PayoutsEnabled, &s.DetailsSubmitted, &s.PayoutMode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrStripeSellerNotFound
 	}
@@ -344,26 +346,49 @@ type DueTransfer struct {
 	AccountID   string
 	Amount      int
 	Currency    string
+	// The customer's Stripe payment (pi_...), so the transfer can draw on
+	// its charge. Empty for payments recorded some other way.
+	PaymentIntentID string
 }
 
-// DueTransfers lists delivered lines of paid orders whose seller can be
-// paid and who have not been paid for them yet.
+// DueTransfers lists delivered lines of paid orders that the automatic
+// payout loop should send: the seller can be paid, has not been paid for
+// them yet, and has not chosen to withdraw by hand.
 func (r *StripeRepository) DueTransfers(ctx context.Context, limit int) ([]DueTransfer, error) {
+	return r.dueTransfers(ctx, "a.payout_mode = 'automatic'", limit, "")
+}
+
+// DueTransfersForSeller lists one seller's lines that are ready to pay out,
+// whatever their payout mode. It backs the seller's own "Withdraw" button.
+func (r *StripeRepository) DueTransfersForSeller(ctx context.Context, sellerID string, limit int) ([]DueTransfer, error) {
+	return r.dueTransfers(ctx, "oi.seller_id = $3::uuid", limit, sellerID)
+}
+
+func (r *StripeRepository) dueTransfers(ctx context.Context, cond string, limit int, sellerID string) ([]DueTransfer, error) {
+	args := []any{stripeProvider, limit}
+	if sellerID != "" {
+		args = append(args, sellerID)
+	}
 	rows, err := r.db.Query(ctx, `
 		select oi.id, oi.order_id, o.order_number, oi.seller_id,
-		       a.provider_account_id, oi.total_amount, o.currency
+		       a.provider_account_id, oi.total_amount, o.currency,
+		       coalesce((select p.provider_payment_id from finance.payments p
+		                 where p.order_id = o.id and p.status = 'succeeded'
+		                   and p.provider_payment_id like 'pi\_%'
+		                 order by p.paid_at desc nulls last limit 1), '')
 		from marketplace.order_items oi
 		join marketplace.orders o on o.id = oi.order_id
 		join seller.seller_payout_accounts a
 		     on a.seller_id = oi.seller_id and a.provider = $1 and a.payouts_enabled
 		where oi.fulfilment_status = 'delivered'
 		  and o.status <> 'refunded'
+		  and `+cond+`
 		  and exists (select 1 from finance.payments p
 		              where p.order_id = o.id and p.status = 'succeeded')
 		  and not exists (select 1 from finance.payouts t
 		                  where t.order_item_id = oi.id)
 		order by oi.updated_at
-		limit $2`, stripeProvider, limit)
+		limit $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -372,12 +397,25 @@ func (r *StripeRepository) DueTransfers(ctx context.Context, limit int) ([]DueTr
 	for rows.Next() {
 		var d DueTransfer
 		if err := rows.Scan(&d.OrderItemID, &d.OrderID, &d.OrderNumber, &d.SellerID,
-			&d.AccountID, &d.Amount, &d.Currency); err != nil {
+			&d.AccountID, &d.Amount, &d.Currency, &d.PaymentIntentID); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// SetPayoutMode stores how a seller wants to be paid. It reports false when
+// the seller has no payout account yet.
+func (r *StripeRepository) SetPayoutMode(ctx context.Context, sellerID, mode string) (bool, error) {
+	tag, err := r.db.Exec(ctx, `
+		update seller.seller_payout_accounts
+		set payout_mode = $3
+		where seller_id = $1 and provider = $2`, sellerID, stripeProvider, mode)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // RecordTransfer stores a settlement Stripe accepted: the payout row, and

@@ -92,6 +92,37 @@ func TestStripeClientTransferSendsIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestStripeClientTransferCanDrawOnTheCharge(t *testing.T) {
+	var gotBody, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("Idempotency-Key")
+		_ = r.ParseForm()
+		gotBody = r.PostForm.Encode()
+		_, _ = w.Write([]byte(`{"id":"tr_9"}`))
+	}))
+	defer srv.Close()
+
+	c := NewStripeClient("sk_test_x")
+	c.base = srv.URL
+	if _, err := c.CreateTransferFrom(context.Background(), 500, "aud", "acct_1", "order_X",
+		"ch_42", nil, transferKey("it-1", "ch_42")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, "source_transaction=ch_42") {
+		t.Errorf("body %q missing source_transaction", gotBody)
+	}
+	if gotKey != "transfer-src-it-1" {
+		t.Errorf("key = %q; want a key apart from the plain transfer's", gotKey)
+	}
+	// Without a charge the body and key are as before.
+	if _, err := c.CreateTransfer(context.Background(), 500, "aud", "acct_1", "", nil, transferKey("it-1", "")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotBody, "source_transaction") || gotKey != "transfer-it-1" {
+		t.Errorf("plain transfer body=%q key=%q", gotBody, gotKey)
+	}
+}
+
 func TestStripeClientMapsAPIErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

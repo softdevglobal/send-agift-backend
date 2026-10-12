@@ -22,6 +22,8 @@ import (
 //	GET  /sellers/me/stripe              . Payout account status
 //	GET  /sellers/me/payouts             . Account, totals and payout history
 //	POST /sellers/me/stripe/onboarding   . Stripe-hosted page for bank and identity details
+//	PUT  /sellers/me/payouts/mode        . Automatic payouts, or withdraw by hand
+//	POST /sellers/me/payouts/withdraw    . Pay out the available balance now
 //
 // Stripe (signed with Stripe-Signature, no JWT), one endpoint and one
 // signing secret each:
@@ -45,6 +47,9 @@ func RegisterStripeRoutes(r chi.Router, h *handlers.StripeHandler, jwtSecret str
 		r.Get("/sellers/me/payouts", h.PayoutHistory)
 		r.With(middleware.RateLimitByUser(10, time.Minute)).
 			Post("/sellers/me/stripe/onboarding", h.SellerConnect)
+		r.Put("/sellers/me/payouts/mode", h.SetPayoutMode)
+		r.With(middleware.RateLimitByUser(10, time.Minute)).
+			Post("/sellers/me/payouts/withdraw", h.Withdraw)
 	})
 
 	r.Post("/payments/stripe/webhook", h.PlatformWebhook)

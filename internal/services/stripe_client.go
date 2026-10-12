@@ -213,6 +213,8 @@ func (c *StripeClient) GetCheckoutSession(ctx context.Context, id string) (*Stri
 type StripePaymentIntent struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
+	// The charge that took the money; a transfer can be tied to it.
+	LatestCharge string `json:"latest_charge"`
 }
 
 // GetPaymentIntent reads a card payment's current state.
@@ -307,7 +309,17 @@ type StripeTransfer struct {
 // CreateTransfer sends amount to a connected account. The idempotency key is
 // the order line, so a retry can never pay it twice.
 func (c *StripeClient) CreateTransfer(ctx context.Context, amount int, currency, destination, transferGroup string, metadata map[string]string, idempotencyKey string) (*StripeTransfer, error) {
+	return c.CreateTransferFrom(ctx, amount, currency, destination, transferGroup, "", metadata, idempotencyKey)
+}
+
+// CreateTransferFrom is CreateTransfer tied to the customer's charge
+// (source_transaction). Stripe then sends it even while that charge's money
+// is still pending, instead of refusing for lack of available balance.
+func (c *StripeClient) CreateTransferFrom(ctx context.Context, amount int, currency, destination, transferGroup, sourceCharge string, metadata map[string]string, idempotencyKey string) (*StripeTransfer, error) {
 	form := url.Values{}
+	if sourceCharge != "" {
+		form.Set("source_transaction", sourceCharge)
+	}
 	form.Set("amount", strconv.Itoa(amount))
 	form.Set("currency", strings.ToLower(currency))
 	form.Set("destination", destination)

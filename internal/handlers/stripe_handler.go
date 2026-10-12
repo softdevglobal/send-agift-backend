@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -128,6 +129,10 @@ func (h *StripeHandler) writeError(w http.ResponseWriter, err error, fallback st
 		utils.Error(w, http.StatusServiceUnavailable, "card payments are not available yet")
 	case errors.Is(err, repository.ErrStripeOrderNotFound), errors.Is(err, repository.ErrStripeSellerNotFound):
 		utils.Error(w, http.StatusNotFound, "not found")
+	case errors.Is(err, services.ErrInvalidPayoutMode):
+		utils.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrNoPayoutAccount):
+		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrOrderAlreadyPaid), errors.Is(err, services.ErrOrderNotPayable):
 		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.As(err, &apiErr) && apiErr.Code == "country_unsupported":
@@ -141,4 +146,32 @@ func (h *StripeHandler) writeError(w http.ResponseWriter, err error, fallback st
 		log.Printf("stripe: %s: %v", fallback, err)
 		utils.Error(w, http.StatusInternalServerError, fallback)
 	}
+}
+
+// SetPayoutMode handles PUT /sellers/me/payouts/mode.
+func (h *StripeHandler) SetPayoutMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	out, err := h.stripe.SetPayoutMode(r.Context(), sellerID(r), body.Mode)
+	if err != nil {
+		h.writeError(w, err, "could not change how you are paid")
+		return
+	}
+	utils.JSON(w, http.StatusOK, out)
+}
+
+// Withdraw handles POST /sellers/me/payouts/withdraw: pays out everything
+// delivered and not yet paid.
+func (h *StripeHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
+	out, err := h.stripe.Withdraw(r.Context(), sellerID(r))
+	if err != nil {
+		h.writeError(w, err, "could not withdraw")
+		return
+	}
+	utils.JSON(w, http.StatusOK, out)
 }

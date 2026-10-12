@@ -553,3 +553,44 @@ func containsItem(due []repository.DueTransfer, item uuid.UUID) bool {
 	}
 	return false
 }
+
+func TestStripeManualPayoutsAreHeldUntilTheSellerWithdraws(t *testing.T) {
+	f := newStripeFixture(t)
+	shop := f.shop(f.seller(), 5000)
+	res := f.place(shop)
+	item := res.itemsByShop[shop.shop][0]
+
+	session, intent := "cs_test_"+uuid.NewString(), "pi_test_"+uuid.NewString()
+	if err := f.stripe.SavePayment(f.ctx, res.id, f.customer, session, res.total, "USD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.stripe.MarkCheckoutPaid(f.ctx, session, intent); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`update marketplace.order_items set fulfilment_status = 'delivered' where id = $1`, item)
+	f.exec(`insert into seller.seller_payout_accounts
+		(seller_id, provider, provider_account_id, country_id, payouts_enabled, charges_enabled, capabilities_status)
+		values ($1, 'stripe', $2, $3, true, true, 'enabled')`,
+		shop.seller, "acct_test_"+uuid.NewString()[:8], f.country)
+
+	// Automatic is the default: the loop picks the line up.
+	if due, err := f.stripe.DueTransfers(f.ctx, 50); err != nil || !containsItem(due, item) {
+		t.Fatalf("automatic due = %v, %v", due, err)
+	}
+	ok, err := f.stripe.SetPayoutMode(f.ctx, shop.seller.String(), "manual")
+	if err != nil || !ok {
+		t.Fatalf("set manual = %v, %v", ok, err)
+	}
+	// Manual: the loop leaves it, the seller's own withdrawal still sees it.
+	if due, err := f.stripe.DueTransfers(f.ctx, 50); err != nil || containsItem(due, item) {
+		t.Fatalf("manual due = %v, %v; want it held", due, err)
+	}
+	mine, err := f.stripe.DueTransfersForSeller(f.ctx, shop.seller.String(), 50)
+	if err != nil || !containsItem(mine, item) {
+		t.Fatalf("withdrawable = %v, %v", mine, err)
+	}
+	// A seller with no payout account cannot pick a mode.
+	if ok, err := f.stripe.SetPayoutMode(f.ctx, uuid.NewString(), "manual"); err != nil || ok {
+		t.Fatalf("mode for unknown seller = %v, %v", ok, err)
+	}
+}
