@@ -100,6 +100,14 @@ func (s *PushService) MarkRead(ctx context.Context, customerID uuid.UUID, ids []
 	return s.repo.MarkRead(ctx, customerID, ids)
 }
 
+// Dismiss clears notifications from the inbox; no ids means all of them.
+func (s *PushService) Dismiss(ctx context.Context, customerID uuid.UUID, ids []uuid.UUID) error {
+	if ids == nil {
+		ids = []uuid.UUID{}
+	}
+	return s.repo.Dismiss(ctx, customerID, ids)
+}
+
 // RunDeliveryLoop sends due notifications on a timer until ctx ends. With
 // several API servers, only the one holding the lock sends.
 func (s *PushService) RunDeliveryLoop(ctx context.Context, every time.Duration, exclusive Exclusive) {

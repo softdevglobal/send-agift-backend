@@ -120,3 +120,34 @@ func (h *PushHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// Dismiss handles DELETE /customers/me/notifications with {"ids": ["..."]} to
+// clear some, or {"all": true} to clear the whole inbox. An empty request
+// clears nothing, so a stray call cannot wipe the inbox.
+func (h *PushHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
+	customerID, ok := pushCustomer(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		IDs []uuid.UUID `json:"ids"`
+		All bool        `json:"all"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		utils.Error(w, http.StatusBadRequest, "send ids, or all: true")
+		return
+	}
+	if len(in.IDs) == 0 && !in.All {
+		utils.Error(w, http.StatusBadRequest, "send ids, or all: true")
+		return
+	}
+	ids := in.IDs
+	if in.All {
+		ids = nil
+	}
+	if err := h.push.Dismiss(r.Context(), customerID, ids); err != nil {
+		h.writeError(w, err, "could not clear notifications")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
