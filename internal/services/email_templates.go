@@ -631,3 +631,61 @@ func groupThousands(n int) string {
 	}
 	return b.String()
 }
+
+// ── Email change ────────────────────────────────────────────────────────
+
+func renderEmailChangeCode(code string, validFor time.Duration) (*EmailContent, error) {
+	minutes := int(validFor.Round(time.Minute).Minutes())
+	if minutes < 1 {
+		minutes = 1
+	}
+	digits := make([]string, 0, len(code))
+	for _, r := range code {
+		digits = append(digits, string(r))
+	}
+	data := map[string]any{
+		"Eyebrow": "Email change",
+		"Heading": "Confirm your new email",
+		"Intro":   fmt.Sprintf("Hi,\nEnter this code to use this address for your SendAGift account. It expires in %d minutes. If you didn't ask for this, you can ignore the email.", minutes),
+		"Digits":  digits,
+		"Callout": emailCallout{Label: "Keep this code private", Body: "We will never ask you to read it out or forward this email."},
+	}
+	text := fmt.Sprintf("Hi,\n\nYour SendAGift email change code is %s.\n\nIt expires in %d minutes.\n\nThe SendAGift team", code, minutes)
+	return renderEmail("", passwordResetCodeContent, "Confirm your new SendAGift email",
+		"Enter this code to confirm your new email.", data, text)
+}
+
+const emailChangeNoticeContent = `{{define "content"}}
+{{template "eyebrow" .Eyebrow}}
+{{template "heading" .Heading}}
+{{template "intro" .Intro}}
+{{if .CTA.URL}}{{template "button" .CTA}}{{end}}
+{{template "callout" .Callout}}
+{{template "spacer"}}
+{{end}}`
+
+func renderEmailChangedAlert(newEmail, undoURL string) (*EmailContent, error) {
+	data := map[string]any{
+		"Eyebrow": "Security alert",
+		"Heading": "Your email was changed",
+		"Intro":   fmt.Sprintf("Hi,\nThe email on your SendAGift account was changed to %s. If this was you, there is nothing to do.", newEmail),
+		"CTA":     emailButton{Label: "This wasn't me. Undo it", URL: undoURL},
+		"Callout": emailCallout{Label: "You have 7 days", Body: "After that this link stops working. Undoing it signs out every device and asks for a new password."},
+	}
+	text := fmt.Sprintf("Hi,\n\nThe email on your SendAGift account was changed to %s.\n\nIf this was you, there is nothing to do.\n\nIf it wasn't you, undo it within 7 days: %s\n\nThe SendAGift team", newEmail, undoURL)
+	return renderEmail("", emailChangeNoticeContent, "Your SendAGift email was changed",
+		"If this wasn't you, you can undo it.", data, text)
+}
+
+func renderEmailChangeReverted(webURL, resetPath string) (*EmailContent, error) {
+	data := map[string]any{
+		"Eyebrow": "Security alert",
+		"Heading": "Your email is restored",
+		"Intro":   "Hi,\nYour SendAGift account is back on this email and every device was signed out. Reset your password to sign in again.",
+		"CTA":     emailButton{Label: "Reset my password", URL: webURL + resetPath},
+		"Callout": emailCallout{Label: "Some actions are on hold", Body: "Prizes, gift points, buying points and raising rewards stay on hold for a few days as a precaution."},
+	}
+	text := fmt.Sprintf("Hi,\n\nYour SendAGift account is back on this email and every device was signed out.\n\nReset your password to sign in again: %s%s\n\nThe SendAGift team", webURL, resetPath)
+	return renderEmail(webURL, emailChangeNoticeContent, "Your SendAGift email is restored",
+		"Your account is back on this email.", data, text)
+}

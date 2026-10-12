@@ -4,6 +4,8 @@ import (
 	"context"  // context is used to manage the lifecycle of a request
 	"net/http" // net/http is used to create and manage HTTP servers and clients
 	"strings"  // strings is used to manipulate strings
+	"sync"     // sync guards the session checker set at start-up
+	"time"     // time compares a token's issue time with the account cut-off
 
 	"github.com/google/uuid"
 
@@ -18,6 +20,47 @@ const (
 	RoleContextKey       contextKey = "role"        // RoleContextKey is a key for the role in the context
 	GuestTokenContextKey contextKey = "guest_token" // GuestTokenContextKey is X-Guest-Token for anonymous social actions
 )
+
+// SessionChecker tells when an account's older tokens stop working. The zero
+// time means no cut-off is set.
+type SessionChecker interface {
+	SessionsValidAfter(ctx context.Context, role, id string) (time.Time, error)
+}
+
+var (
+	sessionMu      sync.RWMutex
+	sessionChecker SessionChecker
+)
+
+// UseSessionChecker turns on the customer and seller session cut-off set by an
+// email change or its undo. Call it once at start-up. Without it tokens only expire.
+func UseSessionChecker(c SessionChecker) {
+	sessionMu.Lock()
+	sessionChecker = c
+	sessionMu.Unlock()
+}
+
+// sessionEnded reports whether a customer or seller token was issued before
+// the account's cut-off. Admin tokens are never checked.
+func sessionEnded(ctx context.Context, claims *utils.Claims) (bool, error) {
+	if claims.Role != "customer" && claims.Role != "seller" {
+		return false, nil
+	}
+	sessionMu.RLock()
+	c := sessionChecker
+	sessionMu.RUnlock()
+	if c == nil {
+		return false, nil
+	}
+	after, err := c.SessionsValidAfter(ctx, claims.Role, claims.Subject)
+	if err != nil {
+		return false, err
+	}
+	if after.IsZero() {
+		return false, nil
+	}
+	return claims.IssuedAt == nil || claims.IssuedAt.Time.Before(after), nil
+}
 
 // GuestTokenHeader is the header guests send so they can like/comment without registering.
 const GuestTokenHeader = "X-Guest-Token"
@@ -39,6 +82,16 @@ func RequireAuth(secret string) func(http.Handler) http.Handler {
 			if err != nil { // if the token is invalid or expired, return an error
 				utils.Error(w, http.StatusUnauthorized, "invalid or expired token")
 				return // return the error
+			}
+
+			ended, err := sessionEnded(r.Context(), claims)
+			if err != nil {
+				utils.Error(w, http.StatusInternalServerError, "could not check session")
+				return
+			}
+			if ended { // an email change signed this device out
+				utils.Error(w, http.StatusUnauthorized, "session ended. Sign in again")
+				return
 			}
 
 			ctx := context.WithValue(r.Context(), AdminIDContextKey, claims.Subject) // add the admin ID to the context
@@ -65,10 +118,13 @@ func OptionalCustomerOrGuest(secret string, requireIdentity bool) func(http.Hand
 			if strings.HasPrefix(header, "Bearer ") {
 				tokenStr := strings.TrimPrefix(header, "Bearer ")
 				if claims, err := utils.ParseJWT(tokenStr, secret); err == nil && claims.Role == "customer" {
-					ctx = context.WithValue(ctx, UserIDContextKey, claims.Subject)
-					ctx = context.WithValue(ctx, RoleContextKey, claims.Role)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
+					// A token an email change ended falls through to the guest path.
+					if ended, err := sessionEnded(ctx, claims); err == nil && !ended {
+						ctx = context.WithValue(ctx, UserIDContextKey, claims.Subject)
+						ctx = context.WithValue(ctx, RoleContextKey, claims.Role)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
 				}
 				// Invalid/non-customer JWT: fall through to guest token.
 			}

@@ -15,6 +15,7 @@ func RegisterSellerRoutes(
 	sellers *handlers.SellerHandler,
 	sellerOrders *handlers.SellerOrderHandler,
 	products *handlers.ProductHandler,
+	emailChange *handlers.EmailChangeHandler,
 	jwtSecret string,
 ) {
 	r.Post("/sellers/register", sellers.Register)
@@ -25,6 +26,9 @@ func RegisterSellerRoutes(
 		r.Post("/sellers/verify-email/resend", sellers.ResendEmailCode)
 		r.Post("/sellers/forgot-password", sellers.ForgotPassword)
 		r.Post("/sellers/reset-password", sellers.ResetPassword)
+		// "This wasn't me" link from the old inbox. A POST so a mail scanner
+		// opening the link cannot trigger it.
+		r.Post("/sellers/email/undo", emailChange.Undo)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -43,6 +47,8 @@ func RegisterSellerRoutes(
 		r.Get("/sellers/me", sellers.Me)
 		r.Post("/sellers/me/password/code", sellers.SendPasswordCode)
 		r.Post("/sellers/me/password/reset", sellers.ResetProfilePassword)
+		r.With(middleware.RateLimitByIP(5, time.Minute)).Post("/sellers/me/email/change", emailChange.Request)
+		r.With(middleware.RateLimitByIP(10, time.Minute)).Post("/sellers/me/email/confirm", emailChange.Confirm)
 		r.Put("/sellers/me", sellers.UpdateMe)
 		r.Delete("/sellers/me", sellers.DeleteMe)
 

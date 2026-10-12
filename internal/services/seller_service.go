@@ -34,6 +34,7 @@ type SellerService struct {
 	resets       *repository.PasswordResetRepository
 	products     *repository.ProductRepository
 	orders       *repository.OrderRepository
+	emailChanges *repository.SellerEmailChangeRepository
 	jwtSecret    string        // secret for the JWT
 	jwtExpiry    time.Duration // expiry for the JWT
 }
@@ -164,6 +165,12 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 	}
 	if err := s.capabilities.EnsureSellerRegistrationAllowed(ctx, countryID.String()); err != nil {
 		return nil, err
+	}
+	// An address someone just changed away from stays theirs while they can undo it.
+	if reserved, err := s.sellers.EmailReserved(ctx, in.Email, uuid.Nil); err != nil {
+		return nil, err
+	} else if reserved {
+		return nil, ErrEmailReserved
 	}
 
 	hash, err := utils.HashPassword(in.Password)

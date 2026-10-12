@@ -343,6 +343,8 @@ func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, f
 		utils.Error(w, http.StatusUnprocessableEntity, services.ErrPhoneTaken.Error())
 	case errors.Is(err, services.ErrCustomerConflict):
 		utils.Error(w, http.StatusConflict, "email already registered")
+	case errors.Is(err, services.ErrEmailReserved):
+		utils.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrSavedGiftConflict):
 		utils.Error(w, http.StatusConflict, "product already saved")
 	case errors.Is(err, services.ErrSavedGiftProduct):

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -396,4 +397,46 @@ func sellerName(s *models.Seller) string {
 // normalizeEmail is the form an address is stored and matched in.
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// SendEmailChangeCode emails the code that proves the customer owns the new
+// address. Each send has its own dedupe key, so a resend is delivered.
+func (s *EmailService) SendEmailChangeCode(ctx context.Context, newEmail, code string, validFor time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderEmailChangeCode(code, validFor)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("email_change_code:%s:%d", newEmail, time.Now().UnixNano())
+	return s.queue(ctx, "email_change_code", key, newEmail, "", content)
+}
+
+// SendEmailChangedAlert tells the old address the email was changed, with the
+// link that undoes it.
+func (s *EmailService) SendEmailChangedAlert(ctx context.Context, oldEmail, newEmail, undoToken, undoPath string) error {
+	if s == nil {
+		return nil
+	}
+	undoURL := s.webURL + undoPath + "?token=" + url.QueryEscape(undoToken)
+	content, err := renderEmailChangedAlert(newEmail, undoURL)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("email_change_alert:%s:%d", oldEmail, time.Now().UnixNano())
+	return s.queue(ctx, "email_change_alert", key, oldEmail, "", content)
+}
+
+// SendEmailChangeReverted tells the restored address the account is back on it.
+func (s *EmailService) SendEmailChangeReverted(ctx context.Context, restoredEmail, resetPath string) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderEmailChangeReverted(s.webURL, resetPath)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("email_change_reverted:%s:%d", restoredEmail, time.Now().UnixNano())
+	return s.queue(ctx, "email_change_reverted", key, restoredEmail, "", content)
 }

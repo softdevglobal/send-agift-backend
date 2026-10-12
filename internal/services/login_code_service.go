@@ -132,6 +132,11 @@ func (s *LoginCodeService) VerifyLoginCode(ctx context.Context, channel, raw, co
 
 	customer, err := s.findCustomer(ctx, channel, dest)
 	if errors.Is(err, repository.ErrCustomerNotFound) {
+		if channel == ChannelEmail {
+			if err := ensureEmailFree(ctx, s.customers, dest); err != nil {
+				return nil, err
+			}
+		}
 		signup, err := s.signupToken(channel, dest)
 		if err != nil {
 			return nil, err

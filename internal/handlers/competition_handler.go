@@ -456,6 +456,8 @@ func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallba
 		utils.Error(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, services.ErrCustomerRequired):
 		utils.Error(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, services.ErrRedemptionLocked):
+		utils.JSON(w, http.StatusLocked, map[string]any{"error": err.Error(), "code": "REDEMPTION_LOCKED"})
 	case errors.Is(err, services.ErrNotEligible), errors.Is(err, services.ErrSuperAdminOnly):
 		utils.Error(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, services.ErrInvalidCompetition), errors.Is(err, services.ErrInvalidReview),

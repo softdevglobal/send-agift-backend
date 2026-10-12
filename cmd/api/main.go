@@ -10,6 +10,7 @@ import (
 	"myapp/internal/config"     // config is used to load and manage the configuration of the application
 	"myapp/internal/database"   // database is used to connect and manage the database
 	"myapp/internal/handlers"   // handlers is used to handle the HTTP requests and responses
+	"myapp/internal/middleware" // middleware guards routes, including the customer session cut-off
 	"myapp/internal/repository" // repository is used to manage the data access layer of the application
 	"myapp/internal/routes"     // routes is used to manage the routing of the application
 	"myapp/internal/services"   // services is used to manage the business logic of the project
@@ -105,6 +106,7 @@ func main() {
 		log.Printf("⚠️  POINTS_PAYMENT_PROVIDER=%s: seller points are credited without a confirmed payment. Connect a card provider before going live.", pointsProvider.Name())
 	}
 	sellerPointsService := services.NewSellerPointsService(pointsRepo, pointsProvider, cfg.PointsCentsPerPoint, cfg.PointsCurrency, cfg.PointsWebhookSecret)
+	sellerPointsService.HoldAfterEmailChange(sellers) // buying points waits a few days after an email change
 	shippingService := services.NewShippingService(shipments, orders)
 
 	// Transactional email through ZeptoMail: rendered into an outbox when
@@ -150,6 +152,15 @@ func main() {
 	loginCodeService := services.NewLoginCodeService(repository.NewLoginCodeRepository(pool), customers,
 		emailService, smsService, cfg.DefaultPhoneCountryCode, cfg.JWTSecret, cfg.JWTExpiry)
 	customerService.UseCodeSignups(loginCodeService)
+	// Changing the login email: a code to the new address, an undo link to the
+	// old one, and a cut-off that signs out every other device.
+	emailChanges := repository.NewEmailChangeRepository(pool)
+	customerService.UseEmailChanges(emailChanges)
+	middleware.UseSessionChecker(repository.NewSessionRepository(pool))
+	emailChangeHandler := handlers.NewEmailChangeHandler(customerService)
+	sellerEmailChanges := repository.NewSellerEmailChangeRepository(pool)
+	sellerService.UseEmailChanges(sellerEmailChanges)
+	sellerEmailChangeHandler := handlers.NewSellerEmailChangeHandler(sellerService)
 	loginCodeHandler := handlers.NewLoginCodeHandler(loginCodeService)
 	// Gift recipients review from the link in their email or text.
 	giftRecipientService.UseReviewLinks(cfg.JWTSecret)
@@ -206,7 +217,7 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, cfg.JWTSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -702,4 +703,22 @@ func ParseDate(value string) (*time.Time, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// EmailReserved reports whether another customer changed away from this email
+// and can still undo it, so nobody else may sign up with it yet.
+func (r *CustomerRepository) EmailReserved(ctx context.Context, email string, except uuid.UUID) (bool, error) {
+	return emailReserved(ctx, r.db, email, except)
+}
+
+// RedemptionLockedUntil is when prize claims and gift points open up again
+// after an email change, or nil when nothing is locked.
+func (r *CustomerRepository) RedemptionLockedUntil(ctx context.Context, id uuid.UUID) (*time.Time, error) {
+	var t *time.Time
+	err := r.db.QueryRow(ctx, `
+		select redemption_locked_until from customer.customers where id = $1`, id).Scan(&t)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrCustomerNotFound
+	}
+	return t, err
 }

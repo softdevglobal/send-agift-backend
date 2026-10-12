@@ -74,6 +74,10 @@ func New(
 	loginCodes *handlers.LoginCodeHandler,
 	// Handler for the review link a gift recipient opens from email or text
 	giftReviews *handlers.GiftReviewHandler,
+	// Handler for changing the login email and undoing the change
+	emailChange *handlers.EmailChangeHandler,
+	// The same for sellers
+	sellerEmailChange *handlers.EmailChangeHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -160,11 +164,11 @@ func New(
 
 		// Register customer-related routes (requires valid JWT token)
 		// Example: GET /api/v1/customers, POST /api/v1/customers
-		RegisterCustomerRoutes(r, customers, orders, jwtSecret)
+		RegisterCustomerRoutes(r, customers, orders, emailChange, jwtSecret)
 
 		// Register seller-related routes (requires valid JWT token)
 		// Example: GET /api/v1/sellers, POST /api/v1/sellers
-		RegisterSellerRoutes(r, sellers, sellerOrders, products, jwtSecret)
+		RegisterSellerRoutes(r, sellers, sellerOrders, products, sellerEmailChange, jwtSecret)
 
 		// Public reel feed (no JWT) + seller reel CRUD (seller JWT)
 		// Example: GET /api/v1/reels, POST /api/v1/sellers/me/shops/{shopID}/reels

@@ -130,6 +130,16 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		return nil, fmt.Errorf("%w: gift_points must be 0 to %d", ErrGiftPoints, maxGiftPoints)
 	}
 
+	if in.GiftPoints > 0 {
+		id, err := uuid.Parse(customerID)
+		if err != nil {
+			return nil, ErrCustomerNotFound
+		}
+		if err := ensureCanRedeem(ctx, s.customers, id); err != nil {
+			return nil, err
+		}
+	}
+
 	var recipientID *uuid.UUID
 	if in.RecipientID != nil && strings.TrimSpace(*in.RecipientID) != "" {
 		rec, err := s.customers.GetRecipientByID(ctx, customerID, strings.TrimSpace(*in.RecipientID))

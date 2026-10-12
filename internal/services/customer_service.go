@@ -40,6 +40,7 @@ type CustomerService struct {
 	email        *EmailService // welcome emails; nil sends none
 	resets       *repository.PasswordResetRepository
 	codeSignups  *LoginCodeService // sign-ups proven by an SMS or email code
+	emailChanges *repository.EmailChangeRepository
 }
 
 // SendEmailsWith turns on the welcome email for new customers.
@@ -173,6 +174,9 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 		return nil, err // return an error if the country is not found
 	}
 	if err := s.capabilities.EnsureCustomerRegistrationAllowed(ctx, countryID.String()); err != nil {
+		return nil, err
+	}
+	if err := ensureEmailFree(ctx, s.customers, in.Email); err != nil {
 		return nil, err
 	}
 

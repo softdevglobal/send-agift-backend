@@ -100,7 +100,7 @@ func writeLoginCodeError(w http.ResponseWriter, err error, fallback string) {
 		utils.Error(w, http.StatusTooManyRequests, err.Error())
 	case errors.Is(err, services.ErrLoginCodeWrong), errors.Is(err, services.ErrLoginCodeExpired):
 		utils.Error(w, http.StatusUnprocessableEntity, err.Error())
-	case errors.Is(err, services.ErrPhoneTaken):
+	case errors.Is(err, services.ErrPhoneTaken), errors.Is(err, services.ErrEmailReserved):
 		utils.Error(w, http.StatusConflict, err.Error())
 	default:
 		utils.Error(w, http.StatusInternalServerError, fallback)
