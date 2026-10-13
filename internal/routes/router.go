@@ -80,6 +80,8 @@ func New(
 	sellerEmailChange *handlers.EmailChangeHandler,
 	// Handler instance that takes card payments and pays sellers via Stripe
 	stripe *handlers.StripeHandler,
+	// Handler for the first free gift program (off unless FREE_GIFT_ENABLED)
+	freeGifts *handlers.FreeGiftHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -219,6 +221,11 @@ func New(
 		// Push notifications: the app registers its Firebase token after sign-in
 		// Example: POST /api/v1/customers/me/push-devices
 		RegisterPushRoutes(r, push, jwtSecret)
+
+		// First free gift program: one free gift per customer, funded by the
+		// seller's marketing budget
+		// Example: POST /api/v1/customers/me/free-gifts
+		RegisterFreeGiftRoutes(r, freeGifts, jwtSecret, sellers.RequireActive)
 	})
 
 	// Return the fully configured router

@@ -90,6 +90,10 @@ func (h *OrderHandler) writeOrderError(w http.ResponseWriter, err error, fallbac
 		utils.Error(w, http.StatusNotFound, "order not found")
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
+	case errors.Is(err, services.ErrDeliveryDate):
+		utils.JSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": err.Error(), "code": "DELIVERY_DATE_UNAVAILABLE",
+		})
 	case errors.Is(err, services.ErrOutsideDeliveryZone):
 		utils.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrInvalidOrder):

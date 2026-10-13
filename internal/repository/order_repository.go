@@ -21,6 +21,9 @@ var (
 	ErrOrderDuplicate         = errors.New("order number already exists")
 	ErrOrderProductNotFound   = errors.New("product not found")
 	ErrOrderNotCancellable    = errors.New("order cannot be cancelled")
+	// ErrOrderIdempotencyDuplicate is a second order from the same customer
+	// with an Idempotency-Key already used.
+	ErrOrderIdempotencyDuplicate = errors.New("an order with this idempotency key already exists")
 )
 
 type OrderRepository struct {
@@ -242,19 +245,8 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 	if order.GiftPoints > 0 {
 		order.GiftPointsStatus = "held"
 	}
-	err = tx.QueryRow(ctx, `
-		insert into marketplace.orders (
-			order_number, customer_id, recipient_id, country_id, customer_type,
-			delivery_date, status, subtotal_amount, delivery_amount, total_amount,
-			currency, gift_message, media_greeting_id, gift_points, gift_points_status
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-		returning id, created_at, updated_at`,
-		order.OrderNumber, order.CustomerID, order.RecipientID, order.CountryID, order.CustomerType,
-		order.DeliveryDate, order.Status, order.SubtotalAmount, order.DeliveryAmount, order.TotalAmount,
-		order.Currency, order.GiftMessage, order.MediaGreetingID, order.GiftPoints, order.GiftPointsStatus,
-	).Scan(&order.ID, &order.CreatedAt, &order.UpdatedAt)
-	if err != nil {
-		return mapOrderWriteError(err)
+	if err := insertOrderHeader(ctx, tx, order); err != nil {
+		return err
 	}
 
 	// Sellers' accounts are locked before the customer's, the same order
@@ -263,38 +255,8 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 		return err
 	}
 
-	for i := range items {
-		items[i].OrderID = order.ID
-		if items[i].FulfilmentStatus == "" {
-			items[i].FulfilmentStatus = "pending"
-		}
-		err = tx.QueryRow(ctx, `
-			insert into marketplace.order_items (
-				order_id, seller_id, shop_id, product_id, quantity,
-				unit_amount, total_amount, fulfilment_status,
-				reward_points_per_unit, reward_points, reward_status
-			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-			returning id, created_at, updated_at`,
-			items[i].OrderID, items[i].SellerID, items[i].ShopID, items[i].ProductID, items[i].Quantity,
-			items[i].UnitAmount, items[i].TotalAmount, items[i].FulfilmentStatus,
-			items[i].RewardPointsPerUnit, items[i].RewardPoints, items[i].RewardStatus,
-		).Scan(&items[i].ID, &items[i].CreatedAt, &items[i].UpdatedAt)
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, d := range deliveries {
-		if _, err := tx.Exec(ctx, `
-			insert into marketplace.order_shop_deliveries (
-				order_id, shop_id, seller_id, mode, provider, service_name,
-				amount, currency, estimated_days, distance_km
-			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			order.ID, d.ShopID, d.SellerID, d.Mode, d.Provider, d.ServiceName,
-			d.Amount, d.Currency, d.EstimatedDays, d.DistanceKm,
-		); err != nil {
-			return err
-		}
+	if err := insertOrderLines(ctx, tx, order.ID, items, deliveries); err != nil {
+		return err
 	}
 
 	if r.rewardsAtOrder && !r.paymentRequired {
@@ -315,6 +277,75 @@ func (r *OrderRepository) Create(ctx context.Context, order *models.Order, items
 	}
 
 	return tx.Commit(ctx)
+}
+
+// insertOrderHeader writes the marketplace.orders row and fills in its id. A
+// paid order leaves the free gift columns at their defaults.
+func insertOrderHeader(ctx context.Context, q querier, order *models.Order) error {
+	if order.OrderKind == "" {
+		order.OrderKind = models.OrderKindPaid
+	}
+	if order.FreeGiftBudgetStatus == "" {
+		order.FreeGiftBudgetStatus = "none"
+	}
+	if order.GiftPointsStatus == "" {
+		order.GiftPointsStatus = "none"
+	}
+	err := q.QueryRow(ctx, `
+		insert into marketplace.orders (
+			order_number, customer_id, recipient_id, country_id, customer_type,
+			delivery_date, status, subtotal_amount, delivery_amount, total_amount,
+			currency, gift_message, media_greeting_id, gift_points, gift_points_status,
+			order_kind, free_gift_cost, free_gift_budget_status, idempotency_key
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		returning id, created_at, updated_at`,
+		order.OrderNumber, order.CustomerID, order.RecipientID, order.CountryID, order.CustomerType,
+		order.DeliveryDate, order.Status, order.SubtotalAmount, order.DeliveryAmount, order.TotalAmount,
+		order.Currency, order.GiftMessage, order.MediaGreetingID, order.GiftPoints, order.GiftPointsStatus,
+		order.OrderKind, order.FreeGiftCost, order.FreeGiftBudgetStatus, order.IdempotencyKey,
+	).Scan(&order.ID, &order.CreatedAt, &order.UpdatedAt)
+	return mapOrderWriteError(err)
+}
+
+// insertOrderLines writes an order's lines and each shop's delivery.
+func insertOrderLines(ctx context.Context, q querier, orderID uuid.UUID, items []models.OrderItem, deliveries []models.OrderShopDelivery) error {
+	for i := range items {
+		items[i].OrderID = orderID
+		if items[i].FulfilmentStatus == "" {
+			items[i].FulfilmentStatus = "pending"
+		}
+		if items[i].RewardStatus == "" {
+			items[i].RewardStatus = "none"
+		}
+		err := q.QueryRow(ctx, `
+			insert into marketplace.order_items (
+				order_id, seller_id, shop_id, product_id, quantity,
+				unit_amount, total_amount, fulfilment_status,
+				reward_points_per_unit, reward_points, reward_status
+			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			returning id, created_at, updated_at`,
+			items[i].OrderID, items[i].SellerID, items[i].ShopID, items[i].ProductID, items[i].Quantity,
+			items[i].UnitAmount, items[i].TotalAmount, items[i].FulfilmentStatus,
+			items[i].RewardPointsPerUnit, items[i].RewardPoints, items[i].RewardStatus,
+		).Scan(&items[i].ID, &items[i].CreatedAt, &items[i].UpdatedAt)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, d := range deliveries {
+		if _, err := q.Exec(ctx, `
+			insert into marketplace.order_shop_deliveries (
+				order_id, shop_id, seller_id, mode, provider, service_name,
+				amount, currency, estimated_days, distance_km
+			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			orderID, d.ShopID, d.SellerID, d.Mode, d.Provider, d.ServiceName,
+			d.Amount, d.Currency, d.EstimatedDays, d.DistanceKm,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const shopDeliverySelect = `
@@ -369,6 +400,7 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string)
 		select id, order_number, customer_id, recipient_id, country_id, customer_type,
 		       delivery_date, status, subtotal_amount, delivery_amount, total_amount,
 		       currency, gift_message, media_greeting_id, gift_points, gift_points_status,
+		       order_kind, free_gift_cost,
 		       created_at, updated_at
 		from marketplace.orders
 		where customer_id = $1
@@ -385,6 +417,7 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string)
 			&o.ID, &o.OrderNumber, &o.CustomerID, &o.RecipientID, &o.CountryID, &o.CustomerType,
 			&o.DeliveryDate, &o.Status, &o.SubtotalAmount, &o.DeliveryAmount, &o.TotalAmount,
 			&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.GiftPoints, &o.GiftPointsStatus,
+			&o.OrderKind, &o.FreeGiftCost,
 			&o.CreatedAt, &o.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -400,6 +433,7 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 		select id, order_number, customer_id, recipient_id, country_id, customer_type,
 		       delivery_date, status, subtotal_amount, delivery_amount, total_amount,
 		       currency, gift_message, media_greeting_id, gift_points, gift_points_status,
+		       order_kind, free_gift_cost,
 		       created_at, updated_at
 		from marketplace.orders
 		where id = $1 and customer_id = $2`, orderID, customerID,
@@ -407,6 +441,7 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 		&o.ID, &o.OrderNumber, &o.CustomerID, &o.RecipientID, &o.CountryID, &o.CustomerType,
 		&o.DeliveryDate, &o.Status, &o.SubtotalAmount, &o.DeliveryAmount, &o.TotalAmount,
 		&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.GiftPoints, &o.GiftPointsStatus,
+		&o.OrderKind, &o.FreeGiftCost,
 		&o.CreatedAt, &o.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -490,12 +525,12 @@ func (r *OrderRepository) CancelForCustomer(ctx context.Context, customerID, ord
 	}
 	defer tx.Rollback(ctx)
 
-	var status string
+	var status, kind string
 	err = tx.QueryRow(ctx, `
-		select status from marketplace.orders
+		select status, order_kind from marketplace.orders
 		where id = $1 and customer_id = $2
 		for update`, orderID, customerID,
-	).Scan(&status)
+	).Scan(&status, &kind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrOrderNotFound
 	}
@@ -504,9 +539,24 @@ func (r *OrderRepository) CancelForCustomer(ctx context.Context, customerID, ord
 	}
 
 	switch status {
-	case "draft", "pending_payment", "paid", "accepted", "preparing":
+	case "draft", "pending_payment", "paid", "confirmed", "accepted", "preparing":
 	default:
 		return ErrOrderNotCancellable
+	}
+	// A free gift stays 'confirmed' on the order while its line moves, so the
+	// line decides: once the seller has dispatched it, the seller has paid.
+	if kind == models.OrderKindFreeGift {
+		var shipped bool
+		if err := tx.QueryRow(ctx, `
+			select exists(
+				select 1 from marketplace.order_items
+				where order_id = $1 and fulfilment_status in ('dispatched', 'delivered'))`,
+			orderID).Scan(&shipped); err != nil {
+			return err
+		}
+		if shipped {
+			return ErrOrderNotCancellable
+		}
 	}
 
 	tag, err := tx.Exec(ctx, `
@@ -540,6 +590,11 @@ func (r *OrderRepository) CancelForCustomer(ctx context.Context, customerID, ord
 	if err := takeBackCancelledRewards(ctx, tx, oid); err != nil {
 		return err
 	}
+	// A free gift gives back the seller's budget and stock, and the sender's
+	// and recipient's one-time rights.
+	if err := releaseFreeGift(ctx, tx, oid); err != nil {
+		return err
+	}
 
 	return tx.Commit(ctx)
 }
@@ -561,7 +616,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 		select oi.id, oi.order_id, oi.seller_id, oi.shop_id, oi.product_id, oi.quantity,
 		       oi.unit_amount, oi.total_amount, oi.fulfilment_status, oi.created_at, oi.updated_at,
 		       oi.reward_points_per_unit, oi.reward_points, oi.reward_status,
-		       o.order_number, o.status, o.delivery_date,
+		       o.order_number, o.status, o.order_kind, o.delivery_date,
 		       shp.name, p.name, p.slug, p.image_url,
 		       r.name
 		`+sellerOrderItemFrom+`
@@ -579,7 +634,7 @@ func (r *OrderRepository) ListItemsBySeller(ctx context.Context, sellerID string
 			&it.ID, &it.OrderID, &it.SellerID, &it.ShopID, &it.ProductID, &it.Quantity,
 			&it.UnitAmount, &it.TotalAmount, &it.FulfilmentStatus, &it.CreatedAt, &it.UpdatedAt,
 			&it.RewardPointsPerUnit, &it.RewardPoints, &it.RewardStatus,
-			&it.OrderNumber, &it.OrderStatus, &it.DeliveryDate,
+			&it.OrderNumber, &it.OrderStatus, &it.OrderKind, &it.DeliveryDate,
 			&it.ShopName, &it.ProductName, &it.ProductSlug, &it.ProductImageURL,
 			&it.RecipientName,
 		); err != nil {
@@ -660,6 +715,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 			o.id, o.order_number, o.customer_id, o.recipient_id, o.country_id, o.customer_type,
 			o.delivery_date, o.status, o.subtotal_amount, o.delivery_amount, o.total_amount,
 			o.currency, o.gift_message, o.media_greeting_id, o.gift_points, o.gift_points_status,
+			o.order_kind, o.free_gift_cost,
 			o.created_at, o.updated_at,
 			p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 			p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
@@ -681,6 +737,7 @@ func (r *OrderRepository) GetItemBySeller(ctx context.Context, sellerID, itemID 
 		&d.Order.ID, &d.Order.OrderNumber, &d.Order.CustomerID, &d.Order.RecipientID, &d.Order.CountryID, &d.Order.CustomerType,
 		&d.Order.DeliveryDate, &d.Order.Status, &d.Order.SubtotalAmount, &d.Order.DeliveryAmount, &d.Order.TotalAmount,
 		&d.Order.Currency, &d.Order.GiftMessage, &d.Order.MediaGreetingID, &d.Order.GiftPoints, &d.Order.GiftPointsStatus,
+		&d.Order.OrderKind, &d.Order.FreeGiftCost,
 		&d.Order.CreatedAt, &d.Order.UpdatedAt,
 		&d.Product.ID, &d.Product.ShopID, &d.Product.Name, &d.Product.Slug, &d.Product.Description, &d.Product.ProductType, &d.Product.PriceAmount,
 		&d.Product.Currency, &d.Product.Status, &d.Product.OccasionTags, &d.Product.CustomerTypeVisibility,
@@ -819,7 +876,71 @@ func mapOrderWriteError(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if pgErr.ConstraintName == "orders_customer_idempotency_uq" {
+			return ErrOrderIdempotencyDuplicate
+		}
 		return ErrOrderDuplicate
 	}
 	return err
+}
+
+// ProductDateRules is what decides whether a product can be delivered on a
+// given day: how long it takes to prepare, how many are left, and the days the
+// seller blocked.
+type ProductDateRules struct {
+	Name             string
+	PrepMinutes      int
+	HasInventory     bool
+	AvailableQty     int
+	ReservedQty      int
+	UnavailableDates []time.Time
+}
+
+// IsUnavailableOn reports whether the seller blocked date (yyyy-mm-dd).
+func (p ProductDateRules) IsUnavailableOn(date string) bool {
+	for _, blocked := range p.UnavailableDates {
+		if blocked.UTC().Format("2006-01-02") == date {
+			return true
+		}
+	}
+	return false
+}
+
+// ProductDateRules loads the delivery-date facts for these products, keyed by
+// product id. A product with no inventory row has HasInventory false: its
+// stock was never set, and the gift search lists it too.
+func (r *OrderRepository) ProductDateRules(ctx context.Context, productIDs []string) (map[string]ProductDateRules, error) {
+	out := map[string]ProductDateRules{}
+	if len(productIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		select p.id::text, p.name, p.prep_minutes,
+		       i.available_qty, i.reserved_qty, i.unavailable_dates
+		from seller.products p
+		left join seller.inventory i on i.product_id = p.id
+		where p.id::text = any($1)`, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var rule ProductDateRules
+		var available, reserved *int
+		var blocked []time.Time
+		if err := rows.Scan(&id, &rule.Name, &rule.PrepMinutes, &available, &reserved, &blocked); err != nil {
+			return nil, err
+		}
+		if available != nil {
+			rule.HasInventory = true
+			rule.AvailableQty = *available
+			if reserved != nil {
+				rule.ReservedQty = *reserved
+			}
+			rule.UnavailableDates = blocked
+		}
+		out[id] = rule
+	}
+	return out, rows.Err()
 }

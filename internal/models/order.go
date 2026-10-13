@@ -26,10 +26,17 @@ type Order struct {
 	// none | held (taken from the sender, not yet delivered) | delivered
 	// (reached the recipient's account) | returned (back to the sender) |
 	// reversed (taken back after a refund).
-	GiftPoints       int64     `json:"gift_points"`
-	GiftPointsStatus string    `json:"gift_points_status"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	GiftPoints       int64  `json:"gift_points"`
+	GiftPointsStatus string `json:"gift_points_status"`
+	// paid | free_gift. A free gift has TotalAmount 0: the seller funds
+	// FreeGiftCost (item plus delivery) from their free gift budget.
+	OrderKind    string `json:"order_kind"`
+	FreeGiftCost int    `json:"free_gift_cost"`
+	// none | held | spent | released. Where the seller's budget for it is.
+	FreeGiftBudgetStatus string    `json:"-"`
+	IdempotencyKey       *string   `json:"-"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // OrderItemTracking is the part of a shipment a customer is allowed to see:
@@ -107,6 +114,7 @@ type SellerOrderItemSummary struct {
 	OrderItem
 	OrderNumber     string    `json:"order_number"`
 	OrderStatus     string    `json:"order_status"`
+	OrderKind       string    `json:"order_kind"`
 	DeliveryDate    time.Time `json:"delivery_date"`
 	ShopName        string    `json:"shop_name"`
 	ProductName     string    `json:"product_name"`

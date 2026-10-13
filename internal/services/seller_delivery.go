@@ -32,6 +32,12 @@ type SellerDeliveryOption struct {
 	EstimatedDays         int      `json:"estimated_days"`                    // 0 = same day
 	CutoffTime            string   `json:"cutoff_time,omitempty"`             // HH:MM when the zone is same-day
 	EstimatedDeliveryDate string   `json:"estimated_delivery_date,omitempty"` // YYYY-MM-DD
+
+	// localNow is the shop's wall clock the option was built with. Delivery-date
+	// checks need the same "now" the zone's cutoff was judged against.
+	localNow time.Time
+	// shopName is only for messages that name the shop.
+	shopName string
 }
 
 // hasZoneAndPoints is true when a distance check is meaningful (both points and zones exist).
@@ -42,7 +48,7 @@ func (o *SellerDeliveryOption) hasZoneAndPoints() bool {
 // buildSellerDeliveryOption picks the smallest zone whose max_km covers the
 // distance from the shop to the recipient. zones must be sorted by max_km asc.
 func buildSellerDeliveryOption(fromLat, fromLng, toLat, toLng *float64, zones []models.ShopDeliveryZone, now time.Time) *SellerDeliveryOption {
-	opt := &SellerDeliveryOption{Mode: SellerDeliveryModeName}
+	opt := &SellerDeliveryOption{Mode: SellerDeliveryModeName, localNow: now}
 	if len(zones) == 0 {
 		opt.Reason = "shop has no delivery zones"
 		return opt
