@@ -35,3 +35,6 @@ Desktop.ini
 *.log
 debug
 __debug_bin*
+
+# Service-account keys (Firebase etc.)
+secrets/
