@@ -154,6 +154,14 @@ func (f *pointsFixture) fund(seller uuid.UUID, points int64) {
 	}
 }
 
+// noCredit takes away a seller's credit, so rewards stop at what they hold:
+// the rule before rewards on credit existed.
+func (f *pointsFixture) noCredit(seller uuid.UUID) {
+	f.t.Helper()
+	f.exec(`insert into points.seller_points_accounts (seller_id, credit_limit) values ($1, 0)
+		on conflict (seller_id) do update set credit_limit = 0`, seller)
+}
+
 // grant gives a customer points.
 func (f *pointsFixture) grant(customer uuid.UUID, points int64) {
 	f.t.Helper()
@@ -430,6 +438,7 @@ func TestPointsPurchaseWebhook(t *testing.T) {
 func TestPointsProductRewardLifecycle(t *testing.T) {
 	f := newPointsFixture(t, "manual")
 	seller := f.seller()
+	f.noCredit(seller) // the rules without credit; credit has its own tests
 	product := f.product(seller, 30)
 	buyer := f.customer("")
 
@@ -548,6 +557,7 @@ func TestPointsRewardReversalOnlyTakesWhatIsHeld(t *testing.T) {
 func TestPointsConcurrentOrdersNeverOverReserve(t *testing.T) {
 	f := newPointsFixture(t, "manual")
 	seller := f.seller()
+	f.noCredit(seller)
 	f.fund(seller, 100)
 	product := f.product(seller, 10)
 	var wg sync.WaitGroup

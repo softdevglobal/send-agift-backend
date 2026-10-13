@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS seller.seller_payout_accounts_provider_account_uq;
+DROP INDEX IF EXISTS seller.seller_payout_accounts_seller_provider_uq;

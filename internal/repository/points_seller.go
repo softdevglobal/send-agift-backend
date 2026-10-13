@@ -29,15 +29,28 @@ var (
 
 // SellerWallet is a seller's balance, reserved points and latest entries.
 func (r *PointsRepository) SellerWallet(ctx context.Context, sellerID uuid.UUID, limit int) (*models.SellerPointsWallet, error) {
-	w := &models.SellerPointsWallet{SellerID: sellerID, Entries: []models.PointsEntry{}}
+	w := &models.SellerPointsWallet{
+		SellerID: sellerID, Entries: []models.PointsEntry{}, CreditLimit: DefaultSellerPointsCredit,
+	}
 	err := r.db.QueryRow(ctx, `
-		select balance, reserved, lifetime_purchased, lifetime_spent
+		select balance, reserved, lifetime_purchased, lifetime_spent, credit_limit
 		from points.seller_points_accounts where seller_id = $1`, sellerID).
-		Scan(&w.Balance, &w.Reserved, &w.LifetimePurchased, &w.LifetimeSpent)
+		Scan(&w.Balance, &w.Reserved, &w.LifetimePurchased, &w.LifetimeSpent, &w.CreditLimit)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
 	w.Available = w.Balance - w.Reserved
+	w.Owed = max(0, -w.Available)
+	w.CreditLeft = w.Available + w.CreditLimit
+	// The biggest reward a customer can earn from one unit of a live product.
+	if err := r.db.QueryRow(ctx, `
+		select coalesce(max(p.reward_points), 0)
+		from seller.products p
+		join seller.shops sh on sh.id = p.shop_id
+		where sh.seller_id = $1 and p.status = 'published'`, sellerID).Scan(&w.LargestReward); err != nil {
+		return nil, err
+	}
+	w.LowBalance = SellerPointsLow(w.Available, w.LargestReward)
 	rows, err := r.db.Query(ctx, ledgerSelect+`
 		where l.seller_id = $1
 		order by l.seq desc
@@ -49,6 +62,19 @@ func (r *PointsRepository) SellerWallet(ctx context.Context, sellerID uuid.UUID,
 	return w, err
 }
 
+// lowBalanceOrders is how many more single-unit rewards a seller's
+// available points should cover before their balance counts as low.
+const lowBalanceOrders = 5
+
+// SellerPointsLow is whether a seller should top up: they owe points, or
+// their available points cover fewer than a handful of their biggest reward.
+func SellerPointsLow(available, largestReward int64) bool {
+	if available < 0 {
+		return true
+	}
+	return largestReward > 0 && available < largestReward*lowBalanceOrders
+}
+
 // ─── Purchases ────────────────────────────────────────────────────────────
 
 const purchaseSelect = `
@@ -56,7 +82,8 @@ const purchaseSelect = `
 	       pp.paid_amount_cents, pp.points_credited, pp.status, pp.provider, pp.provider_reference,
 	       pp.checkout_url, pp.failure_reason, pp.ledger_entry_id, pp.confirmed_by, pp.completed_at,
 	       pp.failed_at, pp.created_at, pp.updated_at,
-	       coalesce(s.trading_name, s.legal_name), s.email::text
+	       coalesce(s.trading_name, s.legal_name), s.email::text,
+	       pp.package_id, pp.package_name, pp.bonus_points, pp.points_settled
 	from points.points_purchases pp
 	inner join seller.sellers s on s.id = pp.seller_id
 `
@@ -66,7 +93,8 @@ func scanPurchase(row scanner) (*models.PointsPurchase, error) {
 	err := row.Scan(&p.ID, &p.SellerID, &p.AmountCents, &p.Currency, &p.CentsPerPoint, &p.Points,
 		&p.PaidAmountCents, &p.PointsCredited, &p.Status, &p.Provider, &p.ProviderReference,
 		&p.CheckoutURL, &p.FailureReason, &p.LedgerEntryID, &p.ConfirmedBy, &p.CompletedAt,
-		&p.FailedAt, &p.CreatedAt, &p.UpdatedAt, &p.SellerName, &p.SellerEmail)
+		&p.FailedAt, &p.CreatedAt, &p.UpdatedAt, &p.SellerName, &p.SellerEmail,
+		&p.PackageID, &p.PackageName, &p.BonusPoints, &p.PointsSettled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrPurchaseNotFound
 	}
@@ -93,10 +121,12 @@ func (r *PointsRepository) CreatePurchase(ctx context.Context, p *models.PointsP
 	var id uuid.UUID
 	err := r.db.QueryRow(ctx, `
 		insert into points.points_purchases
-			(seller_id, amount_cents, currency, cents_per_point, points, provider, idempotency_key)
-		values ($1, $2, $3, $4, $5, $6, $7)
+			(seller_id, amount_cents, currency, cents_per_point, points, provider, idempotency_key,
+			 package_id, package_name, bonus_points)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		returning id`,
-		p.SellerID, p.AmountCents, p.Currency, p.CentsPerPoint, p.Points, p.Provider, key).Scan(&id)
+		p.SellerID, p.AmountCents, p.Currency, p.CentsPerPoint, p.Points, p.Provider, key,
+		p.PackageID, p.PackageName, p.BonusPoints).Scan(&id)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		existing, err := scanPurchase(r.db.QueryRow(ctx, purchaseSelect+`
@@ -104,7 +134,8 @@ func (r *PointsRepository) CreatePurchase(ctx context.Context, p *models.PointsP
 		if err != nil {
 			return nil, err
 		}
-		if existing.AmountCents != p.AmountCents || existing.Currency != p.Currency {
+		if existing.AmountCents != p.AmountCents || existing.Currency != p.Currency ||
+			!sameUUID(existing.PackageID, p.PackageID) {
 			return nil, ErrPurchaseKeyReused
 		}
 		return existing, nil
@@ -187,11 +218,13 @@ func (r *PointsRepository) CompletePurchase(ctx context.Context, id uuid.UUID, c
 		sellerID      uuid.UUID
 		status        string
 		centsPerPoint int64
+		amountCents   int64
+		quotedPoints  int64
 	)
 	err = tx.QueryRow(ctx, `
-		select seller_id, status, cents_per_point
+		select seller_id, status, cents_per_point, amount_cents, points
 		from points.points_purchases where id = $1 for update`, id).
-		Scan(&sellerID, &status, &centsPerPoint)
+		Scan(&sellerID, &status, &centsPerPoint, &amountCents, &quotedPoints)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, ErrPurchaseNotFound
 	}
@@ -207,10 +240,21 @@ func (r *PointsRepository) CompletePurchase(ctx context.Context, id uuid.UUID, c
 	if status != models.PointsPurchasePending {
 		return nil, false, ErrPurchaseState
 	}
-	points := c.PaidAmountCents / centsPerPoint
+	// Paid in full: the points it was quoted for, a package's bonus
+	// included. Paid short: only what the money buys at the quoted rate.
+	points := quotedPoints
+	if c.PaidAmountCents < amountCents {
+		points = c.PaidAmountCents / centsPerPoint
+	}
 	if points <= 0 {
 		return nil, false, ErrPurchaseAmount
 	}
+	// What the seller owes before this credit; the credit pays that first.
+	balance, reserved, err := lockSellerPointsAccount(ctx, tx, sellerID)
+	if err != nil {
+		return nil, false, err
+	}
+	settled := min(points, max(0, reserved-balance))
 	actor := "system"
 	if c.ConfirmedBy == "admin" {
 		actor = "admin"
@@ -229,9 +273,10 @@ func (r *PointsRepository) CompletePurchase(ctx context.Context, id uuid.UUID, c
 		update points.points_purchases
 		set status = 'completed', paid_amount_cents = $2, points_credited = $3,
 		    provider_reference = coalesce($4, provider_reference), ledger_entry_id = $5,
-		    confirmed_by = $6, confirmed_by_admin_id = $7, completed_at = now(), updated_at = now()
+		    confirmed_by = $6, confirmed_by_admin_id = $7, points_settled = $8,
+		    completed_at = now(), updated_at = now()
 		where id = $1`, id, c.PaidAmountCents, points, c.ProviderReference, entryID,
-		c.ConfirmedBy, c.AdminID); err != nil {
+		c.ConfirmedBy, c.AdminID, settled); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, false, ErrProviderReferenceUsed
@@ -241,7 +286,7 @@ func (r *PointsRepository) CompletePurchase(ctx context.Context, id uuid.UUID, c
 	if c.Audit != nil {
 		c.Audit.After = map[string]any{
 			"purchase_id": id, "seller_id": sellerID, "paid_amount_cents": c.PaidAmountCents,
-			"points_credited": points,
+			"points_credited": points, "points_settled": settled,
 		}
 		if err := insertAudit(ctx, tx, *c.Audit); err != nil {
 			return nil, false, err
@@ -303,4 +348,26 @@ func (r *PointsRepository) CancelPurchase(ctx context.Context, sellerID, id uuid
 		return nil, ErrPurchaseState
 	}
 	return r.GetSellerPurchase(ctx, sellerID, id)
+}
+
+func sameUUID(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// PendingPurchasesFor lists a provider's purchases still waiting for
+// payment, recent ones only: a payment page lapses within a day.
+func (r *PointsRepository) PendingPurchasesFor(ctx context.Context, provider string, limit int) ([]models.PointsPurchase, error) {
+	rows, err := r.db.Query(ctx, purchaseSelect+`
+		where pp.provider = $1 and pp.status = 'pending'
+		  and pp.provider_reference is not null
+		  and pp.created_at > now() - interval '3 days'
+		order by pp.created_at
+		limit $2`, provider, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanPurchases(rows)
 }

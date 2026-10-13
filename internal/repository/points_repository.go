@@ -70,18 +70,31 @@ func lockPointsAccount(ctx context.Context, q querier, customerID uuid.UUID) (in
 	return balance, err
 }
 
+// DefaultSellerPointsCredit is the credit a seller has before their points
+// account exists: the column default of points.seller_points_accounts.
+// credit_limit (migration 000070). Keep the two the same.
+const DefaultSellerPointsCredit = 1000
+
 // lockSellerPointsAccount is lockPointsAccount for a seller, with what they
 // have promised on undelivered orders.
 func lockSellerPointsAccount(ctx context.Context, q querier, sellerID uuid.UUID) (balance, reserved int64, err error) {
+	balance, reserved, _, err = lockSellerPointsAccountCredit(ctx, q, sellerID)
+	return balance, reserved, err
+}
+
+// lockSellerPointsAccountCredit is lockSellerPointsAccount with the
+// seller's credit limit: how far below zero what they can promise may go.
+func lockSellerPointsAccountCredit(ctx context.Context, q querier, sellerID uuid.UUID) (balance, reserved, credit int64, err error) {
 	if _, err = q.Exec(ctx, `
 		insert into points.seller_points_accounts (seller_id) values ($1)
 		on conflict (seller_id) do nothing`, sellerID); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	err = q.QueryRow(ctx, `
-		select balance, reserved from points.seller_points_accounts where seller_id = $1 for update`,
-		sellerID).Scan(&balance, &reserved)
-	return balance, reserved, err
+		select balance, reserved, credit_limit
+		from points.seller_points_accounts where seller_id = $1 for update`,
+		sellerID).Scan(&balance, &reserved, &credit)
+	return balance, reserved, credit, err
 }
 
 // applyPoints moves a balance and writes its ledger row. The caller holds
@@ -126,16 +139,24 @@ func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.
 	return id, balance, err
 }
 
-// applySellerPoints is applyPoints for a seller. Reserved points are still
-// the seller's, but a change can never take the balance below what is
-// promised. Except by paying out that promise (ConsumeReserved).
+// applySellerPoints is applyPoints for a seller.
+//
+// Credits (a purchase, a reward handed back) always apply: when the seller
+// owes points they first pay that off. Paying out a promised reward
+// (ConsumeReserved) always applies too, even when the seller cannot cover
+// it: the promise was made within their credit, and the shortfall becomes
+// points they owe. Any other debit may not leave them owing anything.
 func applySellerPoints(ctx context.Context, q querier, ch PointsChange) (uuid.UUID, int64, error) {
 	balance, reserved, err := lockSellerPointsAccount(ctx, q, *ch.SellerID)
 	if err != nil {
 		return uuid.Nil, 0, err
 	}
 	stillReserved := reserved - ch.ConsumeReserved
-	if stillReserved < 0 || balance+ch.Delta < stillReserved {
+	if stillReserved < 0 {
+		return uuid.Nil, balance, ErrPointsInsufficient
+	}
+	payingOutPromise := ch.ConsumeReserved > 0 && ch.EntryType == models.PointsEntryRewardFunding
+	if ch.Delta < 0 && !payingOutPromise && balance+ch.Delta < max(stillReserved, 0) {
 		return uuid.Nil, balance, ErrPointsInsufficient
 	}
 	purchased, spent := int64(0), int64(0)
@@ -189,14 +210,16 @@ func insertLedgerRow(ctx context.Context, q querier, ch PointsChange, balance in
 	return id, err
 }
 
-// reserveSellerPoints promises n of a seller's points to an order. It
-// reports false, changing nothing, when they do not have n available.
+// reserveSellerPoints promises n of a seller's points to an order. When
+// they hold fewer than n available the rest is promised on credit, which
+// the platform fronts and the seller owes. It reports false, changing
+// nothing, only when even their credit cannot cover n.
 func reserveSellerPoints(ctx context.Context, q querier, sellerID uuid.UUID, n int64) (bool, error) {
-	balance, reserved, err := lockSellerPointsAccount(ctx, q, sellerID)
+	balance, reserved, credit, err := lockSellerPointsAccountCredit(ctx, q, sellerID)
 	if err != nil {
 		return false, err
 	}
-	if balance-reserved < n {
+	if balance-reserved-n < -credit {
 		return false, nil
 	}
 	_, err = q.Exec(ctx, `

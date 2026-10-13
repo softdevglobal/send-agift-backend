@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"myapp/internal/middleware"
 	"myapp/internal/services"
 	"myapp/internal/utils"
@@ -174,8 +176,80 @@ func (h *SellerPointsHandler) AdminFail(w http.ResponseWriter, r *http.Request) 
 	utils.JSON(w, http.StatusOK, p)
 }
 
+// Packages handles GET /sellers/me/points/packages: the packages on sale.
+func (h *SellerPointsHandler) Packages(w http.ResponseWriter, r *http.Request) {
+	list, err := h.points.SellerPackages(r.Context())
+	if err != nil {
+		h.writeError(w, err, "could not list point packages")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]any{"items": list, "rate": h.points.Rate()})
+}
+
+// SyncPurchase handles POST /sellers/me/points/purchases/{purchaseID}/sync:
+// re-checks the payment with Stripe when the seller comes back from paying.
+func (h *SellerPointsHandler) SyncPurchase(w http.ResponseWriter, r *http.Request) {
+	id, ok := uuidParam(w, r, "purchaseID", "points purchase not found")
+	if !ok {
+		return
+	}
+	p, err := h.points.SyncPurchase(r.Context(), sellerID(r), id)
+	if err != nil {
+		h.writeError(w, err, "could not check the payment")
+		return
+	}
+	utils.JSON(w, http.StatusOK, p)
+}
+
+// AdminPackages handles GET /admin/points/packages: every package.
+func (h *SellerPointsHandler) AdminPackages(w http.ResponseWriter, r *http.Request) {
+	list, err := h.points.AdminPackages(r.Context())
+	if err != nil {
+		h.writeError(w, err, "could not list point packages")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]any{"items": list, "rate": h.points.Rate()})
+}
+
+// AdminCreatePackage handles POST /admin/points/packages.
+func (h *SellerPointsHandler) AdminCreatePackage(w http.ResponseWriter, r *http.Request) {
+	h.savePackage(w, r, uuid.Nil)
+}
+
+// AdminUpdatePackage handles PUT /admin/points/packages/{packageID}.
+func (h *SellerPointsHandler) AdminUpdatePackage(w http.ResponseWriter, r *http.Request) {
+	id, ok := uuidParam(w, r, "packageID", "point package not found")
+	if !ok {
+		return
+	}
+	h.savePackage(w, r, id)
+}
+
+func (h *SellerPointsHandler) savePackage(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	admin, ok := adminActor(w, r)
+	if !ok {
+		return
+	}
+	var in services.PackageInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	p, err := h.points.AdminSavePackage(r.Context(), admin, id, in)
+	if err != nil {
+		h.writeError(w, err, "could not save the point package")
+		return
+	}
+	status := http.StatusOK
+	if id == uuid.Nil {
+		status = http.StatusCreated
+	}
+	utils.JSON(w, status, p)
+}
+
 func (h *SellerPointsHandler) writeError(w http.ResponseWriter, err error, fallback string) {
 	switch {
+	case errors.Is(err, services.ErrPackageNotFound):
+		utils.Error(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, services.ErrSellerNotFound):
 		utils.Error(w, http.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, services.ErrInvalidPurchase):

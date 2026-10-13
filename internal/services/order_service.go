@@ -44,6 +44,20 @@ type OrderService struct {
 	countries *repository.CountryRepository
 	shipments *repository.ShipmentRepository
 	gifts     *GiftRecipientService
+	// requirePayment: the confirmation email and the rest of "order placed"
+	// wait for the payment instead of happening at checkout.
+	requirePayment bool
+	// afterCancel runs once an order is cancelled (to refund it).
+	afterCancel func(ctx context.Context, orderID uuid.UUID)
+}
+
+// RequirePayment makes an order's confirmation, recipient account and
+// rewards wait until it is paid.
+func (s *OrderService) RequirePayment(on bool) { s.requirePayment = on }
+
+// AfterCancel sets what runs when a customer cancels an order.
+func (s *OrderService) AfterCancel(fn func(ctx context.Context, orderID uuid.UUID)) {
+	s.afterCancel = fn
 }
 
 // NotifyWith sends order emails and gives gift recipients their accounts.
@@ -288,7 +302,9 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	if err != nil {
 		return nil, err
 	}
-	s.gifts.OrderPlaced(ctx, order.ID)
+	if !s.requirePayment {
+		s.gifts.OrderPlaced(ctx, order.ID)
+	}
 	return &models.OrderDetails{Order: *order, Items: items, ShopDeliveries: shopDeliveries}, nil
 }
 
@@ -471,6 +487,11 @@ func (s *OrderService) Cancel(ctx context.Context, customerID, orderID string) (
 			return nil, ErrOrderRewardSpent
 		}
 		return nil, err
+	}
+	if s.afterCancel != nil {
+		if id, err := uuid.Parse(orderID); err == nil {
+			s.afterCancel(ctx, id)
+		}
 	}
 	return s.Get(ctx, customerID, orderID)
 }

@@ -5,7 +5,10 @@ import (
 	"fmt"      // fmt is used to format and print text
 	"log"      // log is used to log messages to the console
 	"net/http" // net/http is used to create and manage HTTP servers and clients
+	"strings"  // strings is used to read the points payment provider name
 	"time"     // time is used to measure and manage time-related operations
+
+	"github.com/google/uuid"
 
 	"myapp/internal/config"     // config is used to load and manage the configuration of the application
 	"myapp/internal/database"   // database is used to connect and manage the database
@@ -98,7 +101,16 @@ func main() {
 		database.Exclusive(pool, database.LockPointsEarning))
 	// Sellers buying points: the provider only starts a payment; points are
 	// credited when the webhook or an admin confirms it.
-	pointsProvider, err := services.NewPointsPaymentProvider(cfg.PointsPaymentProvider)
+	// One Stripe client for orders and for sellers buying points. Nil when
+	// STRIPE_SECRET_KEY is not set.
+	stripeClient := services.NewStripeClient(cfg.StripeSecretKey)
+	var pointsProvider services.PointsPaymentProvider
+	if strings.EqualFold(strings.TrimSpace(cfg.PointsPaymentProvider), "stripe") {
+		// Sellers pay for points on Stripe's Checkout page.
+		pointsProvider, err = services.NewStripePointsProvider(stripeClient, cfg.AppWebURL)
+	} else {
+		pointsProvider, err = services.NewPointsPaymentProvider(cfg.PointsPaymentProvider)
+	}
 	if err != nil {
 		log.Fatalf("points payments: %v", err)
 	}
@@ -107,6 +119,15 @@ func main() {
 	}
 	sellerPointsService := services.NewSellerPointsService(pointsRepo, pointsProvider, cfg.PointsCentsPerPoint, cfg.PointsCurrency, cfg.PointsWebhookSecret)
 	sellerPointsService.HoldAfterEmailChange(sellers) // buying points waits a few days after an email change
+	// The point packages sellers pick from; the starting ones are created
+	// once, at the configured rate, when there are none.
+	if err := sellerPointsService.EnsureDefaultPackages(context.Background()); err != nil {
+		log.Printf("points: could not create the starting packages: %v", err)
+	}
+	// A Stripe points purchase is credited by its webhook; this re-checks
+	// any that are still pending, in case a webhook was missed.
+	go sellerPointsService.RunReconcileLoop(context.Background(), time.Minute,
+		database.Exclusive(pool, database.LockPointsPurchaseSync))
 	shippingService := services.NewShippingService(shipments, orders)
 
 	// Transactional email through ZeptoMail: rendered into an outbox when
@@ -164,6 +185,50 @@ func main() {
 	loginCodeHandler := handlers.NewLoginCodeHandler(loginCodeService)
 	// Gift recipients review from the link in their email or text.
 	giftRecipientService.UseReviewLinks(cfg.JWTSecret)
+
+	// Stripe: customers pay the platform account, then delivered order lines
+	// are transferred to sellers' Connect accounts. Without a secret key the
+	// endpoints answer "not available" and nothing else changes.
+	stripeService := services.NewStripeService(
+		repository.NewStripeRepository(pool),
+		stripeClient,
+		cfg.StripeWebhookSecret, cfg.StripeConnectWebhookSecret,
+		cfg.StripeFeeBPS, cfg.AppWebURL)
+	stripeService.UseConnectCountry(cfg.StripeConnectCountry)
+	stripeService.UsePublishableKey(cfg.StripePublishableKey)
+	if stripeService.Enabled() {
+		fmt.Println("💳 Stripe: card payments and seller payouts are on")
+		if cfg.StripeConnectCountry != "" {
+			fmt.Printf("💳 Stripe: seller payout accounts are created in %s (STRIPE_CONNECT_COUNTRY)\n", cfg.StripeConnectCountry)
+		}
+		// An order only counts once it is paid: sellers do not see it, and
+		// its confirmation email, recipient account and rewards wait.
+		orders.RequirePayment(true)
+		orderService.RequirePayment(true)
+		// Checkout Sessions that pay for a seller's points.
+		stripeService.OnPointsCheckout(sellerPointsService.HandleStripeCheckout)
+		stripeService.OnOrderPaid(func(ctx context.Context, orderID uuid.UUID) {
+			if err := orders.PayRewardsForPaidOrder(ctx, orderID); err != nil {
+				log.Printf("order %s paid: rewards: %v", orderID, err)
+			}
+			giftRecipientService.OrderPlaced(ctx, orderID)
+		})
+		stripeService.CancelUnpaidWith(func(ctx context.Context, customerID, orderID string) error {
+			return orders.CancelForCustomer(ctx, customerID, orderID)
+		})
+		orderService.AfterCancel(func(ctx context.Context, orderID uuid.UUID) {
+			if err := stripeService.RefundOrder(ctx, orderID); err != nil {
+				log.Printf("order %s cancelled but the refund failed: %v", orderID, err)
+			}
+		})
+		go stripeService.RunPayoutLoop(context.Background(), time.Minute,
+			database.Exclusive(pool, database.LockStripePayouts))
+		go stripeService.RunExpiryLoop(context.Background(), 15*time.Minute,
+			database.Exclusive(pool, database.LockStripeExpiry))
+	} else {
+		log.Printf("⚠️  STRIPE_SECRET_KEY is not set: card payments and seller payouts are off.")
+	}
+	stripeHandler := handlers.NewStripeHandler(stripeService)
 	giftReviewHandler := handlers.NewGiftReviewHandler(services.NewGiftReviewService(orders, customers, loginCodeService, cfg.JWTSecret, cfg.JWTExpiry))
 	// Customer sign-in with Google and Facebook. A provider without keys
 	// answers 503, so its button can be shown or hidden by configuration.
@@ -226,7 +291,7 @@ func main() {
 		fmt.Println("🎁 Free gift program: on")
 	}
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, freeGiftHandler, cfg.JWTSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, freeGiftHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

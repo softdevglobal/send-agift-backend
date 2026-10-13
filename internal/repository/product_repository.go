@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -36,14 +37,16 @@ const productSelectCols = `
 	p.parcel_weight, p.parcel_mass_unit, p.reward_points`
 
 // publicProductSelectCols is productSelectCols for customer-facing reads,
-// which only show a reward the seller holds enough points to pay: a reward
-// they cannot fund is never promised to a shopper. The query must join the
-// shop as s.
-var publicProductSelectCols = strings.Replace(productSelectCols, "p.reward_points", `
+// which show a reward while the seller can promise it: from their available
+// points or, when those run low, from their credit (fronted by the platform
+// and taken from their next purchase). Past that the reward is hidden,
+// because it would not be paid. The query must join the shop as s.
+var publicProductSelectCols = strings.Replace(productSelectCols, "p.reward_points", fmt.Sprintf(`
 	case when p.reward_points > 0
-	      and coalesce((select a.balance - a.reserved from points.seller_points_accounts a
-	                    where a.seller_id = s.seller_id), 0) >= p.reward_points
-	     then p.reward_points else 0 end`, 1)
+	      and coalesce((select a.balance - a.reserved + a.credit_limit
+	                    from points.seller_points_accounts a
+	                    where a.seller_id = s.seller_id), %d) >= p.reward_points
+	     then p.reward_points else 0 end`, DefaultSellerPointsCredit), 1)
 
 func scanProduct(scanner interface {
 	Scan(dest ...any) error
