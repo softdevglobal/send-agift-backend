@@ -38,6 +38,18 @@ func (h *StripeHandler) PayOrder(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, p)
 }
 
+// PayOrderInApp handles POST /customers/me/orders/{id}/payment-sheet: what
+// the app needs to take the payment with Stripe's in-app sheet.
+func (h *StripeHandler) PayOrderInApp(w http.ResponseWriter, r *http.Request) {
+	customerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	p, err := h.stripe.PayOrderInApp(r.Context(), customerID, chi.URLParam(r, "id"))
+	if err != nil {
+		h.writeError(w, err, "could not start the payment")
+		return
+	}
+	utils.JSON(w, http.StatusOK, p)
+}
+
 // SyncPayment handles POST /customers/me/orders/{id}/payment/sync. The
 // customer's page calls it on coming back from Stripe, so the order turns
 // paid even if Stripe's webhook has not arrived. It answers with the status.

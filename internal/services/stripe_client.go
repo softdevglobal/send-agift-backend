@@ -215,6 +215,40 @@ type StripePaymentIntent struct {
 	Status string `json:"status"`
 	// The charge that took the money; a transfer can be tied to it.
 	LatestCharge string `json:"latest_charge"`
+	// ClientSecret lets the app confirm this payment with Stripe's SDK.
+	ClientSecret string `json:"client_secret"`
+}
+
+// PaymentIntentParams is one order's payment taken inside the app.
+type PaymentIntentParams struct {
+	Amount        int
+	Currency      string
+	OrderID       string
+	OrderNumber   string
+	CustomerEmail string
+}
+
+// CreatePaymentIntent starts a card payment the app collects with Stripe's
+// payment sheet. As with Checkout, the webhook (or a sync) is what marks the
+// order paid, never the app saying so.
+func (c *StripeClient) CreatePaymentIntent(ctx context.Context, p PaymentIntentParams, idempotencyKey string) (*StripePaymentIntent, error) {
+	form := url.Values{}
+	form.Set("amount", strconv.Itoa(p.Amount))
+	form.Set("currency", strings.ToLower(p.Currency))
+	form.Set("payment_method_types[0]", "card")
+	form.Set("description", "SendAGift order "+p.OrderNumber)
+	form.Set("transfer_group", "order_"+p.OrderNumber)
+	form.Set("metadata[order_id]", p.OrderID)
+	form.Set("metadata[order_number]", p.OrderNumber)
+	form.Set("metadata[channel]", "app")
+	if p.CustomerEmail != "" {
+		form.Set("receipt_email", p.CustomerEmail)
+	}
+	var pi StripePaymentIntent
+	if err := c.do(ctx, http.MethodPost, "/payment_intents", form, idempotencyKey, &pi); err != nil {
+		return nil, err
+	}
+	return &pi, nil
 }
 
 // GetPaymentIntent reads a card payment's current state.

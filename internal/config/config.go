@@ -47,7 +47,10 @@ type Config struct {
 	// from connected accounts). Each endpoint has its own signing secret.
 	// StripeFeeBPS is the platform's cut of each line in basis points
 	// (100 = 1%). Without a secret key Stripe is off and orders are unchanged.
-	StripeSecretKey            string
+	StripeSecretKey string
+	// StripePublishableKey is handed to the mobile app for Stripe's in-app
+	// payment sheet. It is public by design.
+	StripePublishableKey       string
 	StripeWebhookSecret        string
 	StripeConnectWebhookSecret string
 	StripeFeeBPS               int
@@ -126,6 +129,7 @@ func Load() (*Config, error) {
 		PointsRewardTiming:    envOr("POINTS_REWARD_TIMING", "order"),
 
 		StripeSecretKey:            os.Getenv("STRIPE_SECRET_KEY"),
+		StripePublishableKey:       strings.TrimSpace(os.Getenv("STRIPE_PUBLISHABLE_KEY")),
 		StripeWebhookSecret:        os.Getenv("STRIPE_WEBHOOK_SECRET"),
 		StripeConnectWebhookSecret: os.Getenv("STRIPE_CONNECT_WEBHOOK_SECRET"),
 		StripeFeeBPS:               intOr("STRIPE_PLATFORM_FEE_BPS", 0),

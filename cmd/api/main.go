@@ -195,6 +195,7 @@ func main() {
 		cfg.StripeWebhookSecret, cfg.StripeConnectWebhookSecret,
 		cfg.StripeFeeBPS, cfg.AppWebURL)
 	stripeService.UseConnectCountry(cfg.StripeConnectCountry)
+	stripeService.UsePublishableKey(cfg.StripePublishableKey)
 	if stripeService.Enabled() {
 		fmt.Println("💳 Stripe: card payments and seller payouts are on")
 		if cfg.StripeConnectCountry != "" {

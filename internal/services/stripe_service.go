@@ -49,6 +49,9 @@ type StripeService struct {
 	onPointsCheckout func(ctx context.Context, cs StripeCheckoutSession) error
 	// cancelUnpaid cancels an order nobody paid for.
 	cancelUnpaid func(ctx context.Context, customerID, orderID string) error
+
+	// publishableKey goes to the app for Stripe's in-app payment sheet.
+	publishableKey string
 }
 
 func NewStripeService(repo *repository.StripeRepository, client *StripeClient, platformHookSecret, connectHookSecret string, feeBPS int, webURL string) *StripeService {
@@ -81,6 +84,9 @@ func (s *StripeService) OnPointsCheckout(fn func(ctx context.Context, cs StripeC
 func (s *StripeService) CancelUnpaidWith(fn func(ctx context.Context, customerID, orderID string) error) {
 	s.cancelUnpaid = fn
 }
+
+// UsePublishableKey sets the public key the app's payment sheet needs.
+func (s *StripeService) UsePublishableKey(key string) { s.publishableKey = key }
 
 // Enabled is whether a secret key is set.
 func (s *StripeService) Enabled() bool { return s.client != nil }
@@ -135,6 +141,62 @@ func (s *StripeService) PayOrder(ctx context.Context, customerID, orderID string
 	return &OrderPayment{
 		URL: cs.URL, SessionID: cs.ID,
 		Amount: order.Total, Currency: strings.ToLower(order.Currency),
+	}, nil
+}
+
+// InAppPayment is what the app needs to show Stripe's payment sheet.
+type InAppPayment struct {
+	PublishableKey  string `json:"publishable_key"`
+	ClientSecret    string `json:"client_secret"`
+	PaymentIntentID string `json:"payment_intent_id"`
+	Amount          int    `json:"amount"`
+	Currency        string `json:"currency"`
+}
+
+// PayOrderInApp starts (or, on a retry, returns the same) payment the app
+// takes inside itself with Stripe's payment sheet, instead of sending the
+// customer out to a web page.
+func (s *StripeService) PayOrderInApp(ctx context.Context, customerID, orderID string) (*InAppPayment, error) {
+	if s.client == nil || s.publishableKey == "" {
+		return nil, ErrStripeNotConfigured
+	}
+	customerUUID, err := uuid.Parse(customerID)
+	if err != nil {
+		return nil, repository.ErrStripeOrderNotFound
+	}
+	order, err := s.repo.GetPayableOrder(ctx, customerID, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if order.Paid {
+		return nil, ErrOrderAlreadyPaid
+	}
+	if order.Status != "pending_payment" || order.Total <= 0 {
+		return nil, ErrOrderNotPayable
+	}
+	// Same order and total: Stripe hands back the same payment for a day,
+	// so tapping Pay again never charges twice. The app giving up early (a
+	// slow network) must not abort the call half way: finishing it means
+	// the next tap gets the payment straight back.
+	ctx = context.WithoutCancel(ctx)
+	pi, err := s.client.CreatePaymentIntent(ctx, PaymentIntentParams{
+		Amount: order.Total, Currency: order.Currency,
+		OrderID: order.ID.String(), OrderNumber: order.OrderNumber,
+		CustomerEmail: order.CustomerEmail,
+	}, fmt.Sprintf("order-pi-v1-%s-%d", order.ID, order.Total))
+	if err != nil {
+		return nil, err
+	}
+	if pi.ClientSecret == "" {
+		return nil, fmt.Errorf("stripe returned no client secret for order %s", order.ID)
+	}
+	if err := s.repo.SaveIntentPayment(ctx, order.ID, customerUUID, pi.ID, order.Total, order.Currency); err != nil {
+		return nil, err
+	}
+	return &InAppPayment{
+		PublishableKey: s.publishableKey, ClientSecret: pi.ClientSecret,
+		PaymentIntentID: pi.ID,
+		Amount:          order.Total, Currency: strings.ToLower(order.Currency),
 	}, nil
 }
 
@@ -284,6 +346,15 @@ func (s *StripeService) HandlePlatformWebhook(ctx context.Context, body []byte, 
 				return s.onPointsCheckout(ctx, cs)
 			}
 			return s.repo.MarkCheckoutExpired(ctx, cs.ID)
+		case "payment_intent.succeeded":
+			// An order paid in the app. A Checkout payment fires this too, but
+			// is recorded under its session until settled, so it matches
+			// nothing here and checkout.session.completed applies it.
+			var pi StripePaymentIntent
+			if err := json.Unmarshal(ev.Data.Object, &pi); err != nil {
+				return err
+			}
+			return s.settle(ctx, StripeCheckoutSession{ID: pi.ID, PaymentIntent: pi.ID, PaymentStatus: "paid"})
 		case "charge.refunded":
 			var ch struct {
 				PaymentIntent  string `json:"payment_intent"`

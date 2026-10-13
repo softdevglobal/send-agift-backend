@@ -15,6 +15,7 @@ import (
 // Customer JWT:
 //
 //	POST /customers/me/orders/{id}/pay           . Start paying an order; returns Stripe's payment page
+//	POST /customers/me/orders/{id}/payment-sheet . Start paying in the app; returns the payment sheet's keys
 //	POST /customers/me/orders/{id}/payment/sync  . Re-check the payment with Stripe (webhook missed)
 //
 // Seller JWT:
@@ -36,6 +37,7 @@ func RegisterStripeRoutes(r chi.Router, h *handlers.StripeHandler, jwtSecret str
 		r.Use(middleware.RequireRole("customer"))
 		r.Use(middleware.RateLimitByUser(20, time.Minute))
 		r.Post("/customers/me/orders/{id}/pay", h.PayOrder)
+		r.Post("/customers/me/orders/{id}/payment-sheet", h.PayOrderInApp)
 		r.Post("/customers/me/orders/{id}/payment/sync", h.SyncPayment)
 	})
 

@@ -594,3 +594,32 @@ func TestStripeManualPayoutsAreHeldUntilTheSellerWithdraws(t *testing.T) {
 		t.Fatalf("mode for unknown seller = %v, %v", ok, err)
 	}
 }
+
+func TestStripeInAppPaymentSettlesLikeCheckout(t *testing.T) {
+	f := newStripeFixture(t)
+	shop := f.shop(f.seller(), 4000)
+	res := f.place(shop)
+
+	intent := "pi_test_" + uuid.NewString()
+	if err := f.stripe.SaveIntentPayment(f.ctx, res.id, f.customer, intent, res.total, "AUD"); err != nil {
+		t.Fatal(err)
+	}
+	// Tapping Pay again records nothing new.
+	if err := f.stripe.SaveIntentPayment(f.ctx, res.id, f.customer, intent, res.total, "AUD"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := f.stripe.PendingPayments(f.ctx, &res.id, 5)
+	if err != nil || len(pending) != 1 || pending[0] != intent {
+		t.Fatalf("pending = %v, %v; want the intent, once", pending, err)
+	}
+	paid, err := f.stripe.MarkCheckoutPaid(f.ctx, intent, intent)
+	if err != nil || paid == nil || !paid.First || paid.OrderStatus != "paid" {
+		t.Fatalf("paid = %+v, %v", paid, err)
+	}
+	if again, err := f.stripe.MarkCheckoutPaid(f.ctx, intent, intent); err != nil || again != nil {
+		t.Fatalf("second settle = %+v, %v; want nothing", again, err)
+	}
+	if got, err := f.stripe.PaidIntentForOrder(f.ctx, res.id); err != nil || got != intent {
+		t.Fatalf("paid intent = %q, %v", got, err)
+	}
+}

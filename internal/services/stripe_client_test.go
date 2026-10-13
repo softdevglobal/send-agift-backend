@@ -257,3 +257,33 @@ func TestStripeAccountKeyFollowsTheRequest(t *testing.T) {
 		t.Errorf("key = %q", keys[0])
 	}
 }
+
+func TestStripeClientPaymentIntentForTheApp(t *testing.T) {
+	var gotBody, gotPath, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("Idempotency-Key")
+		_ = r.ParseForm()
+		gotBody = r.PostForm.Encode()
+		_, _ = w.Write([]byte(`{"id":"pi_1","status":"requires_payment_method","client_secret":"pi_1_secret_x"}`))
+	}))
+	defer srv.Close()
+
+	c := NewStripeClient("sk_test_x")
+	c.base = srv.URL
+	pi, err := c.CreatePaymentIntent(context.Background(), PaymentIntentParams{
+		Amount: 38500, Currency: "AUD", OrderID: "o-1", OrderNumber: "SAG-1", CustomerEmail: "a@b.co",
+	}, "order-pi-v1-o-1-38500")
+	if err != nil || pi.ClientSecret != "pi_1_secret_x" {
+		t.Fatalf("intent = %+v, %v", pi, err)
+	}
+	if gotPath != "/payment_intents" || gotKey != "order-pi-v1-o-1-38500" {
+		t.Errorf("path=%q key=%q", gotPath, gotKey)
+	}
+	for _, want := range []string{"amount=38500", "currency=aud", "metadata%5Border_id%5D=o-1",
+		"transfer_group=order_SAG-1", "receipt_email=a%40b.co"} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("body %q missing %q", gotBody, want)
+		}
+	}
+}

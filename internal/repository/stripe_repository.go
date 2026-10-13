@@ -78,6 +78,21 @@ func (r *StripeRepository) SavePayment(ctx context.Context, orderID, customerID 
 	return err
 }
 
+// SaveIntentPayment records a PaymentIntent the app collects in-app. It is
+// stored under its own id from the start; MarkCheckoutPaid settles it the
+// same way as a Checkout Session.
+func (r *StripeRepository) SaveIntentPayment(ctx context.Context, orderID, customerID uuid.UUID, intentID string, amount int, currency string) error {
+	_, err := r.db.Exec(ctx, `
+		insert into finance.payments
+		       (order_id, customer_id, provider, provider_payment_id,
+		        amount, currency, idempotency_key)
+		values ($1, $2, $3, $4, $5, lower($6), $7)
+		on conflict (provider, provider_payment_id) do nothing`,
+		orderID, customerID, stripeProvider, intentID, amount, currency,
+		"stripe-pi-"+intentID)
+	return err
+}
+
 // CheckoutPaid is the outcome of a completed Checkout Session.
 type CheckoutPaid struct {
 	OrderID uuid.UUID
