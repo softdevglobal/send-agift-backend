@@ -236,6 +236,12 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	if err != nil {
 		return nil, err
 	}
+	// The requested day has to be one the shops can meet: not past, inside the
+	// zone and preparation time, not blocked, and in stock. The product filter
+	// applies the same rules, but the filter is not what protects the order.
+	if err := s.checkOrderDate(ctx, deliveryDate.Format("2006-01-02"), items, sellerDeliveries); err != nil {
+		return nil, err
+	}
 	deliveries, err := shopDeliveriesFromZones(sellerDeliveries, shopsInOrder, currency)
 	if err != nil {
 		return nil, err
@@ -383,6 +389,7 @@ func (s *OrderService) priceShopDeliveries(
 		if opt.Currency != "" && !strings.EqualFold(opt.Currency, currency) {
 			return nil, fmt.Errorf("%w: delivery for shop %s is in %s but the order is in %s", ErrInvalidOrder, sid, opt.Currency, strings.ToUpper(currency))
 		}
+		opt.shopName = from.Name
 		out[sid.String()] = opt
 	}
 	return out, nil

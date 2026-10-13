@@ -517,7 +517,13 @@ func (r *ShipmentRepository) MarkOrderItemDelivered(ctx context.Context, orderIt
 // An order with several sellers stays open until the last parcel arrives.
 // Returns true when this call completed the order.
 func (r *ShipmentRepository) MarkOrderDeliveredIfComplete(ctx context.Context, orderID uuid.UUID) (bool, error) {
-	tag, err := r.db.Exec(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
 		update marketplace.orders o
 		set status = 'delivered', updated_at = now()
 		where o.id = $1
@@ -535,7 +541,11 @@ func (r *ShipmentRepository) MarkOrderDeliveredIfComplete(ctx context.Context, o
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	// A delivered free gift moves the seller's budget from held to spent.
+	if err := spendFreeGift(ctx, tx, orderID); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, tx.Commit(ctx)
 }
 
 // MarkOrderItemDispatched sets order_items.fulfilment_status = dispatched after label buy.
@@ -672,6 +682,10 @@ func (r *ShipmentRepository) MarkLocalDelivered(ctx context.Context, shipmentID,
 		      )`, orderID); err != nil {
 		return err
 	}
+	// A delivered free gift moves the seller's budget from held to spent.
+	if err := spendFreeGift(ctx, tx, orderID); err != nil {
+		return err
+	}
 
 	return tx.Commit(ctx) // save all three changes together
 }
@@ -730,6 +744,11 @@ func (r *ShipmentRepository) MarkShopLocalDelivered(ctx context.Context, orderID
 		        where oi.order_id = o.id
 		          and oi.fulfilment_status = 'delivered'
 		      )`, orderID); err != nil {
+		return err
+	}
+	// A delivered free gift moves the seller's budget from held to spent and
+	// takes the reserved unit out of stock.
+	if err := spendFreeGift(ctx, tx, orderID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

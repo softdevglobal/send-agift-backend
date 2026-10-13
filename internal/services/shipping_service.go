@@ -276,8 +276,17 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		return nil, err
 	}
 
+	requestedDate := strings.TrimSpace(in.DeliveryDate)
+	if requestedDate != "" {
+		if _, err := time.Parse("2006-01-02", requestedDate); err != nil {
+			return nil, ErrInvalidInput
+		}
+	}
+
 	shopIDs := []uuid.UUID{}
 	seen := map[uuid.UUID]struct{}{}
+	var dateLines []dateLine
+	productIDs := []string{}
 	for _, line := range in.Items {
 		product, err := s.orders.GetCheckoutProduct(ctx, strings.TrimSpace(line.ProductID))
 		if err != nil {
@@ -287,6 +296,8 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		if err != nil {
 			return nil, ErrInvalidInput
 		}
+		dateLines = append(dateLines, dateLine{ProductID: product.ID, ShopID: shopID.String(), Quantity: max(line.Quantity, 1)})
+		productIDs = append(productIDs, product.ID)
 		if _, ok := seen[shopID]; ok {
 			continue
 		}
@@ -309,9 +320,12 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		Shipments: []QuotedShipment{},
 		Complete:  true,
 	}
+	options := map[string]*SellerDeliveryOption{}
 	for _, shopID := range shopIDs {
 		from := froms[shopID]
 		sellerOpt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zonesByShop[shopID], shopLocalNow(now, from.Timezone))
+		sellerOpt.shopName = from.Name
+		options[shopID.String()] = sellerOpt
 		quote.Shops = append(quote.Shops, QuotedShopDelivery{
 			ShopID:         shopID.String(),
 			ShopName:       from.Name,
@@ -334,6 +348,19 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 		quote.Amount += sellerOpt.PriceAmount
 		if quote.Currency == "" {
 			quote.Currency = sellerOpt.Currency
+		}
+	}
+
+	// A date the shops cannot meet is not a quote the customer can order on.
+	// The prices stay, so the page can show them next to the reason.
+	if requestedDate != "" {
+		rules, err := s.orders.ProductDateRules(ctx, productIDs)
+		if err != nil {
+			return nil, err
+		}
+		if problems := checkDeliveryDate(requestedDate, dateLines, options, rules); len(problems) > 0 {
+			quote.Complete = false
+			quote.Unquoted = append(quote.Unquoted, problems...)
 		}
 	}
 	return quote, nil
