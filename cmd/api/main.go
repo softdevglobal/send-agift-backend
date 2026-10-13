@@ -217,7 +217,16 @@ func main() {
 		database.Exclusive(pool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, cfg.JWTSecret)
+	// First free gift program: off unless FREE_GIFT_ENABLED=true, when every
+	// customer has one free gift funded by a seller's marketing budget.
+	freeGiftService := services.NewFreeGiftService(repository.NewFreeGiftRepository(pool), customers, countries, orderService,
+		cfg.FreeGiftEnabled, cfg.FreeGiftIdentitySecret, cfg.FreeGiftTermsVersion, cfg.DefaultPhoneCountryCode)
+	freeGiftHandler := handlers.NewFreeGiftHandler(freeGiftService)
+	if cfg.FreeGiftEnabled {
+		fmt.Println("🎁 Free gift program: on")
+	}
+
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, freeGiftHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

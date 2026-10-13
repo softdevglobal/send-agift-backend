@@ -80,6 +80,15 @@ type Config struct {
 	TextBeeSIMSubscription string
 	// DefaultPhoneCountryCode reads a local number (0771234567) as E.164.
 	DefaultPhoneCountryCode string
+
+	// First free gift program. Off by default: every free gift route answers
+	// FREE_GIFT_DISABLED until FREE_GIFT_ENABLED=true. The identity secret
+	// keys the HMAC that the one-time limits are stored under, so it must
+	// never change once gifts have been sent. The terms version is stamped on
+	// a seller's program when they accept.
+	FreeGiftEnabled        bool
+	FreeGiftIdentitySecret string
+	FreeGiftTermsVersion   string
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -128,6 +137,10 @@ func Load() (*Config, error) {
 		TextBeeAPIBase:          strings.TrimRight(envOr("TEXTBEE_API_BASE", "https://api.textbee.dev/api/v1"), "/"),
 		TextBeeSIMSubscription:  os.Getenv("TEXTBEE_SIM_SUBSCRIPTION_ID"),
 		DefaultPhoneCountryCode: envOr("TEXTBEE_DEFAULT_COUNTRY_CODE", "+61"),
+
+		FreeGiftEnabled:        strings.EqualFold(strings.TrimSpace(os.Getenv("FREE_GIFT_ENABLED")), "true"),
+		FreeGiftIdentitySecret: os.Getenv("FREE_GIFT_IDENTITY_SECRET"),
+		FreeGiftTermsVersion:   envOr("FREE_GIFT_TERMS_VERSION", "v1"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -153,6 +166,9 @@ func Load() (*Config, error) {
 	}
 	if (cfg.TextBeeAPIKey == "") != (cfg.TextBeeDeviceID == "") {
 		return nil, fmt.Errorf("set both TEXTBEE_API_KEY and TEXTBEE_DEVICE_ID, or neither")
+	}
+	if cfg.FreeGiftEnabled && len(cfg.FreeGiftIdentitySecret) < 32 {
+		return nil, fmt.Errorf("FREE_GIFT_IDENTITY_SECRET (32 characters or more) is required when FREE_GIFT_ENABLED=true")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")
