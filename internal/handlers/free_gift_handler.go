@@ -4,7 +4,10 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"myapp/internal/middleware"
 	"myapp/internal/services"
@@ -34,9 +37,32 @@ func (h *FreeGiftHandler) RequireEnabled(next http.Handler) http.Handler {
 	})
 }
 
-// ListProducts handles GET /free-gifts/products?country=.
+// ListProducts handles GET /free-gifts/products?country=&latitude=&longitude=&delivery_date=.
+// With a latitude and longitude it keeps only the gifts a shop can deliver
+// there, and with a delivery_date only those that can arrive that day.
 func (h *FreeGiftHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
-	items, err := h.gifts.Available(r.Context(), r.URL.Query().Get("country"))
+	q := r.URL.Query()
+	filter := services.FreeGiftFilter{Country: q.Get("country"), DeliveryDate: q.Get("delivery_date")}
+	parse := func(key string) (*float64, bool) {
+		raw := strings.TrimSpace(q.Get(key))
+		if raw == "" {
+			return nil, true
+		}
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil || v < -180 || v > 180 {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_REQUEST", key+" is not a valid coordinate")
+			return nil, false
+		}
+		return &v, true
+	}
+	var ok bool
+	if filter.Latitude, ok = parse("latitude"); !ok {
+		return
+	}
+	if filter.Longitude, ok = parse("longitude"); !ok {
+		return
+	}
+	items, err := h.gifts.Available(r.Context(), filter)
 	if err != nil {
 		h.writeError(w, err, "could not list free gift products")
 		return
@@ -171,6 +197,75 @@ func (h *FreeGiftHandler) AdminSetSeller(w http.ResponseWriter, r *http.Request)
 	utils.JSON(w, http.StatusOK, program)
 }
 
+// AdminSetProgram handles PUT /admin/free-gifts/sellers/{sellerID}/program:
+// the marketing budget SendAGift sets for one seller, and whether it is on.
+func (h *FreeGiftHandler) AdminSetProgram(w http.ResponseWriter, r *http.Request) {
+	id, ok := uuidParam(w, r, "sellerID", "seller not found")
+	if !ok {
+		return
+	}
+	var in services.AdminProgramInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	program, err := h.gifts.AdminSetProgram(r.Context(), id, in)
+	if err != nil {
+		h.writeError(w, err, "could not save free gift program")
+		return
+	}
+	utils.JSON(w, http.StatusOK, program)
+}
+
+// AdminOrders handles GET /admin/free-gifts/orders?seller_id=&limit=: every
+// free gift sent, with the seller, customer, recipient, product and cost.
+func (h *FreeGiftHandler) AdminOrders(w http.ResponseWriter, r *http.Request) {
+	var sellerID *uuid.UUID
+	if raw := strings.TrimSpace(r.URL.Query().Get("seller_id")); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_REQUEST", "seller_id is not valid")
+			return
+		}
+		sellerID = &id
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.gifts.AdminOrders(r.Context(), sellerID, limit)
+	if err != nil {
+		h.writeError(w, err, "could not list free gifts")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// AdminCountryBudgets handles GET /admin/free-gifts/countries.
+func (h *FreeGiftHandler) AdminCountryBudgets(w http.ResponseWriter, r *http.Request) {
+	items, err := h.gifts.AdminCountryBudgets(r.Context())
+	if err != nil {
+		h.writeError(w, err, "could not list country budgets")
+		return
+	}
+	utils.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// AdminSetCountryBudget handles PUT /admin/free-gifts/countries/{countryID}:
+// one budget for every seller registered in that country.
+func (h *FreeGiftHandler) AdminSetCountryBudget(w http.ResponseWriter, r *http.Request) {
+	id, ok := uuidParam(w, r, "countryID", "country not found")
+	if !ok {
+		return
+	}
+	var in services.AdminProgramInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	res, err := h.gifts.AdminSetCountryBudget(r.Context(), id, in)
+	if err != nil {
+		h.writeError(w, err, "could not save country budget")
+		return
+	}
+	utils.JSON(w, http.StatusOK, res)
+}
+
 func (h *FreeGiftHandler) writeError(w http.ResponseWriter, err error, fallback string) {
 	coded := func(status int, code string) { writeCodedError(w, status, code, err.Error()) }
 	switch {
@@ -216,11 +311,13 @@ func (h *FreeGiftHandler) writeError(w http.ResponseWriter, err error, fallback 
 	case errors.Is(err, services.ErrFreeGiftInput):
 		coded(http.StatusBadRequest, "INVALID_REQUEST")
 	case errors.Is(err, services.ErrFreeGiftProgramNotFound):
-		writeCodedError(w, http.StatusConflict, "PROGRAM_REQUIRED", "set your free gift budget before choosing products")
+		writeCodedError(w, http.StatusConflict, "PROGRAM_REQUIRED", "SendAGift has not set your free gift budget yet. It is set by an admin after you register")
 	case errors.Is(err, services.ErrFreeGiftProductNotFound):
 		writeCodedError(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "product not found")
 	case errors.Is(err, services.ErrFreeGiftTermsRequired):
-		writeCodedError(w, http.StatusUnprocessableEntity, "TERMS_REQUIRED", "accept the free gift program terms to set a budget")
+		writeCodedError(w, http.StatusUnprocessableEntity, "TERMS_REQUIRED", "agree to the free gift marketing budget to turn your program on")
+	case errors.Is(err, services.ErrFreeGiftSellerTermsMissing):
+		writeCodedError(w, http.StatusUnprocessableEntity, "SELLER_TERMS_REQUIRED", err.Error())
 	case errors.Is(err, services.ErrFreeGiftProgramStopped):
 		writeCodedError(w, http.StatusConflict, "PROGRAM_STOPPED", "your free gift program was stopped by SendAGift. Contact support")
 	case errors.Is(err, services.ErrFreeGiftBudgetBelowCommitted):

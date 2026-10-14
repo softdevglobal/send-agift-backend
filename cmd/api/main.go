@@ -286,6 +286,8 @@ func main() {
 	// customer has one free gift funded by a seller's marketing budget.
 	freeGiftService := services.NewFreeGiftService(repository.NewFreeGiftRepository(pool), customers, countries, orderService,
 		cfg.FreeGiftEnabled, cfg.FreeGiftIdentitySecret, cfg.FreeGiftTermsVersion, cfg.DefaultPhoneCountryCode)
+	// The free gift list can be narrowed to a delivery address and day.
+	freeGiftService.UseAvailability(availabilityService)
 	freeGiftHandler := handlers.NewFreeGiftHandler(freeGiftService)
 	if cfg.FreeGiftEnabled {
 		fmt.Println("🎁 Free gift program: on")

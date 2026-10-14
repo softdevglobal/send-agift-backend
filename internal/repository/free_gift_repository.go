@@ -356,12 +356,8 @@ func (r *FreeGiftRepository) ListAvailable(ctx context.Context, country string) 
 		  and p.customer_type_visibility in ('both', 'personal')
 		  and upper(p.currency) = upper(pg.currency)
 		  and (fp.gifts_cap is null or fp.gifts_count < fp.gifts_cap)
-		  -- The real cost needs the recipient's distance. The shop's cheapest
-		  -- zone is the least it can be, so a budget that cannot cover even
-		  -- that is not offered.
-		  and pg.budget_held + pg.budget_spent + p.price_amount + coalesce(
-		        (select min(z.price_amount) from seller.shop_delivery_zones z where z.shop_id = s.id), 0)
-		      <= pg.budget_cap
+		  -- The budget funds the product only; the customer pays delivery.
+		  and pg.budget_held + pg.budget_spent + p.price_amount <= pg.budget_cap
 		  and i.available_qty - i.reserved_qty >= 1
 		  and ($1 = '' or s.country_id::text = lower($1) or upper(c.iso_code) = upper($1))
 		order by p.price_amount desc, p.name

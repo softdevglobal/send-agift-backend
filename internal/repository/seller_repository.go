@@ -38,7 +38,7 @@ const sellerColumns = `
 	password_hash, verification_status, status, created_at, updated_at, image_url,
 	local_name, registration_status, registration_note, tax_status,
 	contact_name, contact_role, contact_job_title,
-	authority_confirmed_at, terms_accepted_at, marketing_opt_in,
+	authority_confirmed_at, terms_accepted_at, marketing_opt_in, free_gift_terms_accepted_at,
 	email_verified_at, email_code_hash, email_code_expires_at, email_code_sent_at, email_code_attempts`
 
 func scanSeller(row scanner, s *models.Seller) error {
@@ -47,7 +47,7 @@ func scanSeller(row scanner, s *models.Seller) error {
 		&s.PasswordHash, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt, &s.ImageURL,
 		&s.LocalName, &s.RegistrationStatus, &s.RegistrationNote, &s.TaxStatus,
 		&s.ContactName, &s.ContactRole, &s.ContactJobTitle,
-		&s.AuthorityConfirmedAt, &s.TermsAcceptedAt, &s.MarketingOptIn,
+		&s.AuthorityConfirmedAt, &s.TermsAcceptedAt, &s.MarketingOptIn, &s.FreeGiftTermsAcceptedAt,
 		&s.EmailVerifiedAt, &s.EmailCodeHash, &s.EmailCodeExpiresAt, &s.EmailCodeSentAt, &s.EmailCodeAttempts,
 	)
 }
@@ -63,14 +63,14 @@ func insertSeller(ctx context.Context, q querier, s *models.Seller) error {
 			password_hash, verification_status, status, image_url,
 			local_name, registration_status, registration_note, tax_status,
 			contact_name, contact_role, contact_job_title,
-			authority_confirmed_at, terms_accepted_at, marketing_opt_in
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			authority_confirmed_at, terms_accepted_at, marketing_opt_in, free_gift_terms_accepted_at
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		returning id, verification_status, status, created_at, updated_at`,
 		s.CountryID, s.SellerType, s.LegalName, s.TradingName, s.Email, s.Phone,
 		s.PasswordHash, s.VerificationStatus, s.Status, s.ImageURL,
 		s.LocalName, s.RegistrationStatus, s.RegistrationNote, s.TaxStatus,
 		s.ContactName, s.ContactRole, s.ContactJobTitle,
-		s.AuthorityConfirmedAt, s.TermsAcceptedAt, s.MarketingOptIn,
+		s.AuthorityConfirmedAt, s.TermsAcceptedAt, s.MarketingOptIn, s.FreeGiftTermsAcceptedAt,
 	).Scan(&s.ID, &s.VerificationStatus, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	return mapSellerWriteError(err)
 }

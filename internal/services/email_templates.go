@@ -689,3 +689,53 @@ func renderEmailChangeReverted(webURL, resetPath string) (*EmailContent, error) 
 	return renderEmail(webURL, emailChangeNoticeContent, "Your SendAGift email is restored",
 		"Your account is back on this email.", data, text)
 }
+
+// renderOrderAccepted tells the buyer the seller took their order.
+func renderOrderAccepted(webURL string, o *repository.OrderEmailSummary) (*EmailContent, error) {
+	data := orderData(o)
+	data.Name = firstName(derefOr(o.CustomerName, ""), o.CustomerEmail)
+	recipient := data.RecipientName
+	if recipient == "" {
+		recipient = "your recipient"
+	}
+	trackURL := webURL + "/orders/" + o.OrderID.String()
+	data.Eyebrow = "Accepted · " + o.OrderNumber
+	data.Heading = "The seller accepted\nyour gift."
+	data.Intro = fmt.Sprintf("Hi %s,\nGood news: the seller has accepted your order and is getting the gift for %s ready. We'll let you know the moment it's on its way.", data.Name, recipient)
+	data.CTA = emailButton{Label: "Track your order", URL: trackURL}
+	data.Closing = emailClosing{Title: "Surprise intact.", Body: recipient + " won't hear a thing until the gift arrives."}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Hi %s,\n\nThe seller has accepted your order %s and is getting the gift for %s ready.\n\n", data.Name, o.OrderNumber, recipient)
+	for _, it := range data.Items {
+		fmt.Fprintf(&b, "  • %s ×%d (%s)\n", it.ProductName, it.Quantity, it.ShopName)
+	}
+	fmt.Fprintf(&b, "\nArriving: %s\nTrack your order: %s\n\nThe SendAGift team", data.DeliveryDate, trackURL)
+	return renderEmail(webURL, orderDeliveredContent, "Accepted: your gift for "+recipient,
+		"Order "+o.OrderNumber+" was accepted by the seller and is being prepared.", data, b.String())
+}
+
+// renderOrderDispatched tells the buyer delivery has started.
+func renderOrderDispatched(webURL string, o *repository.OrderEmailSummary) (*EmailContent, error) {
+	data := orderData(o)
+	data.Name = firstName(derefOr(o.CustomerName, ""), o.CustomerEmail)
+	recipient := data.RecipientName
+	if recipient == "" {
+		recipient = "your recipient"
+	}
+	trackURL := webURL + "/orders/" + o.OrderID.String()
+	data.Eyebrow = "On its way · " + o.OrderNumber
+	data.Heading = "Your gift for " + recipient + "\nis on its way."
+	data.Intro = fmt.Sprintf("Hi %s,\nDelivery has started. Your gift for %s is out of the shop and on its way, due %s.", data.Name, recipient, data.DeliveryDate)
+	data.CTA = emailButton{Label: "Track your order", URL: trackURL}
+	data.Closing = emailClosing{Title: "Almost there.", Body: "We'll email you again once it has been delivered."}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Hi %s,\n\nDelivery has started for order %s. Your gift for %s is on its way, due %s.\n\n", data.Name, o.OrderNumber, recipient, data.DeliveryDate)
+	for _, it := range data.Items {
+		fmt.Fprintf(&b, "  • %s ×%d (%s)\n", it.ProductName, it.Quantity, it.ShopName)
+	}
+	fmt.Fprintf(&b, "\nTrack your order: %s\n\nThe SendAGift team", trackURL)
+	return renderEmail(webURL, orderDeliveredContent, "On its way: your gift for "+recipient,
+		"Order "+o.OrderNumber+" has left the shop and is on its way.", data, b.String())
+}

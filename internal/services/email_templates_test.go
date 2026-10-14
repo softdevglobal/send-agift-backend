@@ -53,6 +53,10 @@ func TestEmailTemplatesRender(t *testing.T) {
 			[]string{"Your gift for Alex Silva", "AUD 54.50", "AUD 74.50", "Free", "Surprise intact", "&lt;3"}},
 		"order_delivered": {func() (*EmailContent, error) { return renderOrderDelivered(web, order) },
 			[]string{"Your gift has reached", "Alex Silva", "Review your order", "/orders/"}},
+		"order_accepted": {func() (*EmailContent, error) { return renderOrderAccepted(web, order) },
+			[]string{"The seller accepted", "Alex Silva", "Track your order", "/orders/"}},
+		"order_dispatched": {func() (*EmailContent, error) { return renderOrderDispatched(web, order) },
+			[]string{"is on its way", "Alex Silva", "Track your order", "/orders/"}},
 		"gift_delivered": {func() (*EmailContent, error) {
 			return renderGiftDelivered(web, order, GiftRecipientDefaultPassword, "")
 		},

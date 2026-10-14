@@ -182,6 +182,30 @@ func (s *EmailService) SendOrderDelivered(ctx context.Context, o *repository.Ord
 	return s.queue(ctx, "order_delivered", "order_delivered:"+o.OrderID.String(), o.CustomerEmail, derefOr(o.CustomerName, ""), content)
 }
 
+// SendOrderAccepted tells the buyer the seller accepted their order.
+func (s *EmailService) SendOrderAccepted(ctx context.Context, o *repository.OrderEmailSummary) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderOrderAccepted(s.webURL, o)
+	if err != nil {
+		return err
+	}
+	return s.queue(ctx, "order_accepted", "order_accepted:"+o.OrderID.String(), o.CustomerEmail, derefOr(o.CustomerName, ""), content)
+}
+
+// SendOrderDispatched tells the buyer delivery has started.
+func (s *EmailService) SendOrderDispatched(ctx context.Context, o *repository.OrderEmailSummary) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderOrderDispatched(s.webURL, o)
+	if err != nil {
+		return err
+	}
+	return s.queue(ctx, "order_dispatched", "order_dispatched:"+o.OrderID.String(), o.CustomerEmail, derefOr(o.CustomerName, ""), content)
+}
+
 // ── Delivery ────────────────────────────────────────────────────────────
 
 // RunDeliveryLoop sends due emails on a timer until ctx ends. With several
