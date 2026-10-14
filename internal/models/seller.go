@@ -143,6 +143,9 @@ type Shop struct {
 	// SellerVerificationStatus is filled on public shop reads. It is the
 	// seller's verification_status, not a column on seller.shops.
 	SellerVerificationStatus string `json:"seller_verification_status,omitempty"`
+	// SellerImageURL is the seller's own profile photo, also filled on public
+	// shop reads, so a gift card shows the seller rather than the shop cover.
+	SellerImageURL *string `json:"seller_image_url,omitempty"`
 }
 
 // ShopDeliveryZone is one local-delivery distance band (max_km → price).

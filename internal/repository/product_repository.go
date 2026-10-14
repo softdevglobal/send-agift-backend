@@ -370,7 +370,8 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 	var length, width, height, distanceUnit, weight, massUnit *string
 	err := r.db.QueryRow(ctx, `
 		select `+publicProductSelectCols+`,
-		       s.id, s.name, s.slug, s.image_url, s.customer_visible_location, se.verification_status
+		       s.id, s.name, s.slug, s.image_url, s.customer_visible_location, se.verification_status,
+		       se.image_url
 		from seller.products p
 		inner join seller.shops s on s.id = p.shop_id
 		inner join seller.sellers se on se.id = s.seller_id
@@ -386,6 +387,7 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 		&out.PointsDisplayEnabled, &out.PrepMinutes, &out.CreatedAt, &out.UpdatedAt, &out.ImageURL,
 		&length, &width, &height, &distanceUnit, &weight, &massUnit, &out.RewardPoints,
 		&out.Shop.ID, &out.Shop.Name, &out.Shop.Slug, &out.Shop.ImageURL, &out.Shop.Location, &out.Shop.SellerVerificationStatus,
+		&out.Shop.SellerImageURL,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrProductNotFound

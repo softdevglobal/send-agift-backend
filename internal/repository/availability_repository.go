@@ -30,7 +30,9 @@ type ShopForAvailability struct {
 	Timezone string
 	// VerificationStatus is the seller's business check: verified or unverified.
 	VerificationStatus string
-	Zones              []models.ShopDeliveryZone
+	// SellerImageURL is the seller's own profile photo.
+	SellerImageURL *string
+	Zones          []models.ShopDeliveryZone
 }
 
 // GiftStock is one published gift and the stock row used to decide if it
@@ -66,7 +68,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 			       coalesce(s.latitude, sa.latitude)::float8 as lat,
 			       coalesce(s.longitude, sa.longitude)::float8 as lng,
 			       coalesce(nullif(btrim(s.timezone), ''), c.default_timezone, 'UTC') as timezone,
-			       se.verification_status
+			       se.verification_status, se.image_url as seller_image_url
 			from seller.shops s
 			inner join seller.sellers se on se.id = s.seller_id
 			left join seller.seller_addresses sa on sa.id = coalesce(s.address_id, s.return_address_id)
@@ -81,7 +83,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 			from seller.shop_delivery_zones
 			group by shop_id
 		)
-		select o.id, o.name, o.lat, o.lng, o.timezone, o.verification_status
+		select o.id, o.name, o.lat, o.lng, o.timezone, o.verification_status, o.seller_image_url
 		from origins o
 		inner join reach r on r.shop_id = o.id
 		where abs(o.lat - $1) <= (r.farthest_km / 111.0) * 1.02
@@ -97,7 +99,7 @@ func (r *AvailabilityRepository) ListShopsInReach(ctx context.Context, destLat, 
 	index := map[uuid.UUID]int{}
 	for rows.Next() {
 		var shop ShopForAvailability
-		if err := rows.Scan(&shop.ID, &shop.Name, &shop.Latitude, &shop.Longitude, &shop.Timezone, &shop.VerificationStatus); err != nil {
+		if err := rows.Scan(&shop.ID, &shop.Name, &shop.Latitude, &shop.Longitude, &shop.Timezone, &shop.VerificationStatus, &shop.SellerImageURL); err != nil {
 			return nil, err
 		}
 		shop.Zones = []models.ShopDeliveryZone{}

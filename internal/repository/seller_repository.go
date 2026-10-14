@@ -419,7 +419,8 @@ func (r *SellerRepository) ListShops(ctx context.Context, sellerID string) ([]mo
 func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, error) {
 	rows, err := r.db.Query(ctx, `
 		select `+shopColumns+`,
-		       (select verification_status from seller.sellers where id = seller.shops.seller_id)
+		       (select verification_status from seller.sellers where id = seller.shops.seller_id),
+		       (select image_url from seller.sellers where id = seller.shops.seller_id)
 		from seller.shops
 		where status = 'active'
 		  and seller_id in (
@@ -435,7 +436,7 @@ func (r *SellerRepository) ListActiveShops(ctx context.Context) ([]models.Shop, 
 	items := []models.Shop{}
 	for rows.Next() {
 		var s models.Shop
-		if err := scanShop(rows, &s, &s.SellerVerificationStatus); err != nil {
+		if err := scanShop(rows, &s, &s.SellerVerificationStatus, &s.SellerImageURL); err != nil {
 			return nil, err
 		}
 		items = append(items, s)
@@ -456,13 +457,14 @@ func (r *SellerRepository) GetActiveShopByID(ctx context.Context, shopID string)
 	s := &models.Shop{}
 	err := scanShop(r.db.QueryRow(ctx, `
 		select `+shopColumns+`,
-		       (select verification_status from seller.sellers where id = seller.shops.seller_id)
+		       (select verification_status from seller.sellers where id = seller.shops.seller_id),
+		       (select image_url from seller.sellers where id = seller.shops.seller_id)
 		from seller.shops
 		where id = $1 and status = 'active'
 		  and seller_id in (
 		    select id from seller.sellers
 		    where status = 'active'
-		  )`, shopID), s, &s.SellerVerificationStatus)
+		  )`, shopID), s, &s.SellerVerificationStatus, &s.SellerImageURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShopNotFound
 	}
