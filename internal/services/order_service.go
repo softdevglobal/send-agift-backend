@@ -400,7 +400,7 @@ func (s *OrderService) priceShopDeliveries(
 		from := froms[sid]
 		opt := buildSellerDeliveryOption(from.Latitude, from.Longitude, to.Latitude, to.Longitude, zones[sid], shopLocalNow(now, from.Timezone))
 		if !opt.Available {
-			return nil, fmt.Errorf("%w: %s", ErrOutsideDeliveryZone, opt.Reason)
+			return nil, &DeliveryZoneError{ShopName: from.Name, ReasonCode: opt.ReasonCode, Reason: opt.Reason}
 		}
 		if opt.Currency != "" && !strings.EqualFold(opt.Currency, currency) {
 			return nil, fmt.Errorf("%w: delivery for shop %s is in %s but the order is in %s", ErrInvalidOrder, sid, opt.Currency, strings.ToUpper(currency))

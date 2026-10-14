@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"myapp/internal/models"
 	"myapp/internal/repository"
@@ -69,7 +70,8 @@ func checkDeliveryDate(
 				shopBlocked[k.shop] = true
 			} else if opt.EstimatedDeliveryDate > date {
 				problems = append(problems, fmt.Sprintf(
-					"%s cannot deliver on %s. The earliest is %s", shop, date, opt.EstimatedDeliveryDate))
+					"%s cannot deliver by %s. The earliest it can arrive is %s",
+					shop, friendlyDay(date), friendlyDay(opt.EstimatedDeliveryDate)))
 				shopBlocked[k.shop] = true
 			}
 		}
@@ -87,11 +89,11 @@ func checkDeliveryDate(
 		}
 		if arrival := arrivalWithPrep(opt.localNow, opt, rule.PrepMinutes); arrival != "" && arrival > date {
 			problems = append(problems, fmt.Sprintf(
-				"%s needs more preparation time. The earliest is %s", name, arrival))
+				"%s needs more preparation time. The earliest it can arrive is %s", name, friendlyDay(arrival)))
 			continue
 		}
 		if rule.IsUnavailableOn(date) {
-			problems = append(problems, fmt.Sprintf("%s cannot be delivered on %s", name, date))
+			problems = append(problems, fmt.Sprintf("%s cannot be delivered on %s", name, friendlyDay(date)))
 			continue
 		}
 		if rule.HasInventory {
@@ -100,7 +102,7 @@ func checkDeliveryDate(
 			case left == 0:
 				problems = append(problems, fmt.Sprintf("%s is out of stock", name))
 			case left < wanted[k]:
-				problems = append(problems, fmt.Sprintf("only %d of %s left", left, name))
+				problems = append(problems, fmt.Sprintf("Only %d of %s left", left, name))
 			}
 		}
 	}
@@ -139,4 +141,14 @@ func (s *OrderService) checkOrderDate(
 		return err
 	}
 	return deliveryDateError(checkDeliveryDate(date, lines, options, rules))
+}
+
+// friendlyDay writes a yyyy-mm-dd day the way a shopper reads it,
+// "Thu 15 Oct". Anything else is returned unchanged.
+func friendlyDay(day string) string {
+	t, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return day
+	}
+	return t.Format("Mon 2 Jan")
 }
