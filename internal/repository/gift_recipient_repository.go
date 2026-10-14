@@ -238,3 +238,61 @@ func (r *CustomerRepository) EmailUsedByStaffOrSeller(ctx context.Context, email
 		    or exists(select 1 from admin.admin_users where email = $1)`, email).Scan(&used)
 	return used, err
 }
+
+// Progress notices tell the buyer their gift moved along: the seller accepted
+// it, or delivery started. Delivered has its own notice, above.
+const (
+	ProgressAccepted   = "accepted"
+	ProgressDispatched = "dispatched"
+)
+
+// DueProgressNotices lists orders that reached a step the buyer has not been
+// told about yet. Orders from before the notices existed were marked told by
+// the migration, so they are not announced after the fact.
+func (r *OrderRepository) DueProgressNotices(ctx context.Context, kind string, limit int) ([]uuid.UUID, error) {
+	var where string
+	switch kind {
+	case ProgressAccepted:
+		where = `accepted_notified_at is null and status in ('accepted', 'preparing', 'dispatched', 'delivered')`
+	case ProgressDispatched:
+		where = `dispatched_notified_at is null and status in ('dispatched', 'delivered')`
+	default:
+		return nil, errors.New("unknown progress notice")
+	}
+	rows, err := r.db.Query(ctx, `
+		select id from marketplace.orders
+		where `+where+`
+		order by updated_at
+		limit $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// MarkProgressNotified records that the buyer has been told, or no longer
+// needs to be. Dispatch also covers acceptance: a buyer is never told a gift
+// was accepted after they were told it was on its way.
+func (r *OrderRepository) MarkProgressNotified(ctx context.Context, orderID uuid.UUID, kind string) error {
+	var set string
+	switch kind {
+	case ProgressAccepted:
+		set = `accepted_notified_at = coalesce(accepted_notified_at, now())`
+	case ProgressDispatched:
+		set = `dispatched_notified_at = coalesce(dispatched_notified_at, now()),
+		       accepted_notified_at = coalesce(accepted_notified_at, now())`
+	default:
+		return errors.New("unknown progress notice")
+	}
+	_, err := r.db.Exec(ctx, `update marketplace.orders set `+set+` where id = $1`, orderID)
+	return err
+}

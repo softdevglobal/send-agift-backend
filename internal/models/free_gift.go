@@ -31,11 +31,15 @@ type FreeGiftProgram struct {
 	BudgetHeld  int64     `json:"budget_held"`
 	BudgetSpent int64     `json:"budget_spent"`
 	// BudgetRemaining is cap - held - spent.
-	BudgetRemaining int64      `json:"budget_remaining"`
-	TermsVersion    *string    `json:"terms_version,omitempty"`
-	AcceptedAt      *time.Time `json:"accepted_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	BudgetRemaining int64 `json:"budget_remaining"`
+	// SellerAgreed is whether the seller has agreed to the marketing budget
+	// SendAGift sets for them. Sellers who registered before the agreement
+	// existed have to agree from their dashboard.
+	SellerAgreed bool       `json:"seller_agreed"`
+	TermsVersion *string    `json:"terms_version,omitempty"`
+	AcceptedAt   *time.Time `json:"accepted_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // FreeGiftProduct maps to promo.free_gift_products, with enough of the
@@ -102,4 +106,71 @@ type AdminFreeGiftProgram struct {
 	SellerEmail string `json:"seller_email"`
 	Products    int    `json:"products"`
 	GiftsSent   int    `json:"gifts_sent"`
+}
+
+// AdminFreeGiftOrder is one free gift that was sent, as an admin reads it:
+// the seller who funded it, the customer who sent it, who it went to, what it
+// was, and what it cost the seller's budget. Amounts are minor units of Currency.
+type AdminFreeGiftOrder struct {
+	OrderID     uuid.UUID `json:"order_id"`
+	OrderNumber string    `json:"order_number"`
+	Status      string    `json:"status"`
+	// BudgetStatus is held (not delivered yet), spent (delivered) or released
+	// (cancelled, so the budget was given back). Only the product price is
+	// held and spent; the customer pays the delivery.
+	BudgetStatus  string    `json:"budget_status"`
+	CreatedAt     time.Time `json:"created_at"`
+	DeliveryDate  string    `json:"delivery_date"`
+	Currency      string    `json:"currency"`
+	// Cost is what it cost the seller's budget: the product price.
+	Cost          int       `json:"cost"`
+	ProductAmount int       `json:"product_amount"`
+	// DeliveryAmount is the delivery the customer paid.
+	DeliveryAmount int `json:"delivery_amount"`
+	// DeliveryPaid is whether the customer's delivery payment went through
+	// (true too when there was no delivery to pay).
+	DeliveryPaid bool `json:"delivery_paid"`
+
+	SellerID   uuid.UUID `json:"seller_id"`
+	SellerName string    `json:"seller_name"`
+	ShopName   string    `json:"shop_name"`
+
+	CustomerID    uuid.UUID `json:"customer_id"`
+	CustomerName  string    `json:"customer_name"`
+	CustomerEmail string    `json:"customer_email"`
+
+	RecipientName *string `json:"recipient_name,omitempty"`
+	RecipientCity *string `json:"recipient_city,omitempty"`
+
+	ProductID       uuid.UUID `json:"product_id"`
+	ProductName     string    `json:"product_name"`
+	ProductImageURL *string   `json:"product_image_url,omitempty"`
+}
+
+// FreeGiftCountryBudget maps to promo.free_gift_country_budgets: the budget
+// an admin set for every seller in one country. BudgetCap is per seller.
+type FreeGiftCountryBudget struct {
+	CountryID   uuid.UUID `json:"country_id"`
+	CountryName string    `json:"country_name"`
+	Currency    string    `json:"currency"`
+	BudgetCap   int64     `json:"budget_cap"`
+	Status      string    `json:"status"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	// Sellers is every live seller registered in the country; Agreed is how
+	// many of them have agreed to the budget, and so have it.
+	Sellers int `json:"sellers"`
+	Agreed  int `json:"agreed"`
+}
+
+// FreeGiftCountryApply says what setting a country budget did.
+type FreeGiftCountryApply struct {
+	Budget  FreeGiftCountryBudget `json:"budget"`
+	Applied int                   `json:"applied"`
+	// Skipped sellers, and why: they have not agreed, an admin stopped their
+	// program, the amount is under what they already hold and spent, or their
+	// program is in another currency.
+	NotAgreed      int `json:"skipped_not_agreed"`
+	Stopped        int `json:"skipped_stopped"`
+	BelowCommitted int `json:"skipped_below_committed"`
+	CurrencyLocked int `json:"skipped_currency_locked"`
 }

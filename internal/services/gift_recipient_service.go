@@ -147,6 +147,10 @@ func (s *GiftRecipientService) RunDeliveredNotices(ctx context.Context, every ti
 		case <-ticker.C:
 		}
 		if _, err := exclusive.run(ctx, func(ctx context.Context) error {
+			// The buyer hears about acceptance and dispatch too.
+			if _, err := s.NotifyProgress(ctx, 50); err != nil {
+				log.Printf("order progress notices: %v", err)
+			}
 			_, err := s.NotifyDelivered(ctx, 50)
 			return err
 		}); err != nil {
@@ -227,4 +231,46 @@ func sameEmail(a string, b *string) bool {
 // ReceivedGifts lists the delivered gifts sent to a customer.
 func (s *GiftRecipientService) ReceivedGifts(ctx context.Context, customerID string) ([]models.ReceivedGift, error) {
 	return s.orders.ListReceivedGifts(ctx, customerID)
+}
+
+// NotifyProgress emails buyers whose order was accepted by the seller, or
+// whose delivery has started, and returns how many it handled. A step the
+// order has already moved past is only marked, never announced late: a gift
+// that is out for delivery does not also get an "accepted" email.
+func (s *GiftRecipientService) NotifyProgress(ctx context.Context, limit int) (int, error) {
+	handled := 0
+	for _, step := range []struct {
+		kind string
+		// live are the order statuses at which this email is still true.
+		live map[string]bool
+		send func(context.Context, *repository.OrderEmailSummary) error
+	}{
+		{repository.ProgressAccepted, map[string]bool{"accepted": true, "preparing": true}, s.email.SendOrderAccepted},
+		{repository.ProgressDispatched, map[string]bool{"dispatched": true}, s.email.SendOrderDispatched},
+	} {
+		due, err := s.orders.DueProgressNotices(ctx, step.kind, limit)
+		if err != nil {
+			return handled, err
+		}
+		for _, orderID := range due {
+			summary, err := s.orders.OrderEmailSummary(ctx, orderID)
+			if err != nil {
+				log.Printf("order %s %s notice: %v", orderID, step.kind, err)
+				continue
+			}
+			if step.live[summary.Status] {
+				if err := step.send(ctx, summary); err != nil {
+					// Left unmarked, so the next run tries again.
+					log.Printf("order %s %s email: %v", orderID, step.kind, err)
+					continue
+				}
+			}
+			if err := s.orders.MarkProgressNotified(ctx, orderID, step.kind); err != nil {
+				log.Printf("order %s %s mark: %v", orderID, step.kind, err)
+				continue
+			}
+			handled++
+		}
+	}
+	return handled, nil
 }

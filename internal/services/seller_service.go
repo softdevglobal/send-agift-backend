@@ -73,6 +73,9 @@ type SellerRegisterInput struct { // SellerRegisterInput is a struct that contai
 	AuthorityConfirmed bool
 	TermsAccepted      bool
 	MarketingOptIn     bool
+	// FreeGiftBudgetAccepted is the seller's tick that they accept the free
+	// gift marketing budget SendAGift sets for them. Required to register.
+	FreeGiftBudgetAccepted bool
 }
 
 type SellerUpdateInput struct { // SellerUpdateInput is a struct that contains the input for the seller update
@@ -151,6 +154,9 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 	}
 	if in.Email == "" || len(in.Password) < 8 || in.LegalName == "" {
 		return nil, ErrInvalidInput // return an error if the input is invalid
+	}
+	if err := requireFreeGiftBudgetAgreement(in); err != nil {
+		return nil, err
 	}
 
 	countryID, err := uuid.Parse(in.CountryID)

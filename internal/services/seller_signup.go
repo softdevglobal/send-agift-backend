@@ -161,6 +161,9 @@ func applySignupDetails(in SellerRegisterInput, seller *models.Seller, now time.
 		seller.TermsAcceptedAt = &now
 	}
 	seller.MarketingOptIn = in.MarketingOptIn
+	if in.FreeGiftBudgetAccepted {
+		seller.FreeGiftTermsAcceptedAt = &now
+	}
 
 	return identifiers, taxes, nil
 }
@@ -323,4 +326,14 @@ func contains(values []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// requireFreeGiftBudgetAgreement refuses a registration where the seller did
+// not tick that they accept the marketing budget SendAGift sets for the free
+// gift program. The program is funded from that budget, so it is not optional.
+func requireFreeGiftBudgetAgreement(in SellerRegisterInput) error {
+	if !in.FreeGiftBudgetAccepted {
+		return invalidSignup("you must agree to the marketing budget SendAGift sets for the free gift program")
+	}
+	return nil
 }

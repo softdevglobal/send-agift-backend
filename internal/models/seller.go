@@ -36,6 +36,9 @@ type Seller struct {
 	AuthorityConfirmedAt *time.Time `json:"authority_confirmed_at,omitempty"`
 	TermsAcceptedAt      *time.Time `json:"terms_accepted_at,omitempty"`
 	MarketingOptIn       bool       `json:"marketing_opt_in"`
+	// FreeGiftTermsAcceptedAt is when the seller agreed to the free gift
+	// marketing budget SendAGift sets for them.
+	FreeGiftTermsAcceptedAt *time.Time `json:"free_gift_terms_accepted_at,omitempty"`
 
 	// EmailVerifiedAt is set once the seller enters the emailed code.
 	// Until then sign-in is refused. The code columns are never sent to clients.

@@ -386,7 +386,9 @@ func (r *StripeRepository) dueTransfers(ctx context.Context, cond string, limit 
 	}
 	rows, err := r.db.Query(ctx, `
 		select oi.id, oi.order_id, o.order_number, oi.seller_id,
-		       a.provider_account_id, oi.total_amount, o.currency,
+		       a.provider_account_id,
+		       case when o.order_kind = 'free_gift' then o.delivery_amount else oi.total_amount end,
+		       o.currency,
 		       coalesce((select p.provider_payment_id from finance.payments p
 		                 where p.order_id = o.id and p.status = 'succeeded'
 		                   and p.provider_payment_id like 'pi\_%'
@@ -657,9 +659,9 @@ func (r *StripeRepository) SellerPayouts(ctx context.Context, sellerID string, l
 
 	open, err := r.db.Query(ctx, `
 		select o.currency,
-		       coalesce(sum(oi.total_amount) filter (
+		       coalesce(sum(case when o.order_kind = 'free_gift' then o.delivery_amount else oi.total_amount end) filter (
 		           where oi.fulfilment_status not in ('delivered', 'cancelled')), 0)::int,
-		       coalesce(sum(oi.total_amount) filter (
+		       coalesce(sum(case when o.order_kind = 'free_gift' then o.delivery_amount else oi.total_amount end) filter (
 		           where oi.fulfilment_status = 'delivered'
 		             and not exists (select 1 from finance.payouts t
 		                             where t.order_item_id = oi.id)), 0)::int

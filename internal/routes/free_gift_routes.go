@@ -15,7 +15,9 @@ import (
 //
 // Public:
 //
-//	GET /free-gifts/products?country=                 . Products that can be sent as a free gift now
+//	GET /free-gifts/products?country=&latitude=&longitude=&delivery_date=
+//	                                                  . Products that can be sent as a free gift now,
+//	                                                    optionally only those deliverable to a place and day
 //
 // Customer JWT:
 //
@@ -25,7 +27,7 @@ import (
 // Seller JWT:
 //
 //	GET    /sellers/me/free-gift-program              . Budget cap, held, spent, remaining, status
-//	PUT    /sellers/me/free-gift-program              . Set budget and currency, accept terms, turn on or pause
+//	PUT    /sellers/me/free-gift-program              . Turn on or pause (the budget is set by an admin)
 //	GET    /sellers/me/free-gift-products             . Products in the program
 //	PUT    /sellers/me/free-gift-products/{productID} . Add a product, change its cap, pause it
 //	DELETE /sellers/me/free-gift-products/{productID} . Take a product out
@@ -33,6 +35,10 @@ import (
 // Admin JWT:
 //
 //	GET   /admin/free-gifts                           . Every seller's program
+//	GET   /admin/free-gifts/orders                    . Every free gift sent: seller, customer, recipient, product, cost
+//	PUT   /admin/free-gifts/sellers/{sellerID}/program . Set a seller's marketing budget and start or pause it
+//	GET   /admin/free-gifts/countries                 . Budgets set by country
+//	PUT   /admin/free-gifts/countries/{countryID}     . One budget for every seller in a country
 //	PATCH /admin/free-gifts/sellers/{sellerID}        . Stop or re-allow one seller's program
 func RegisterFreeGiftRoutes(r chi.Router, h *handlers.FreeGiftHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
@@ -62,6 +68,10 @@ func RegisterFreeGiftRoutes(r chi.Router, h *handlers.FreeGiftHandler, jwtSecret
 			r.Use(middleware.RequireAuth(jwtSecret))
 			r.Use(middleware.RequireRole("admin"))
 			r.Get("/admin/free-gifts", h.AdminList)
+			r.Get("/admin/free-gifts/orders", h.AdminOrders)
+			r.Put("/admin/free-gifts/sellers/{sellerID}/program", h.AdminSetProgram)
+			r.Get("/admin/free-gifts/countries", h.AdminCountryBudgets)
+			r.Put("/admin/free-gifts/countries/{countryID}", h.AdminSetCountryBudget)
 			r.Patch("/admin/free-gifts/sellers/{sellerID}", h.AdminSetSeller)
 		})
 	})

@@ -26,7 +26,8 @@ import (
 const (
 	freeGiftTestPrice    = 10000
 	freeGiftTestDelivery = 5000 // the fixture's 5 km zone
-	freeGiftTestCost     = freeGiftTestPrice + freeGiftTestDelivery
+	// Only the product comes from the budget; the customer pays delivery.
+	freeGiftTestCost = freeGiftTestPrice
 )
 
 var freeGiftPhoneSeq atomic.Int64
@@ -111,8 +112,9 @@ func (f *freeGiftFixture) offer(budget int64, stock int) freeGiftOffer {
 	f.t.Helper()
 	o := freeGiftOffer{testShop: f.shop(f.seller(), freeGiftTestPrice)}
 	f.exec(`insert into seller.inventory (product_id, available_qty) values ($1, $2)`, o.product, stock)
-	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{
-		BudgetCap: budget, Currency: "USD", Status: "active", AcceptTerms: true,
+	f.exec(`update seller.sellers set free_gift_terms_accepted_at = now() where id = $1`, o.seller)
+	if _, err := f.gifts.AdminSetProgram(f.ctx, o.seller, AdminProgramInput{
+		BudgetCap: budget, Currency: "USD", Status: "active",
 	}); err != nil {
 		f.t.Fatalf("set program: %v", err)
 	}
@@ -173,8 +175,8 @@ func TestFreeGiftFirstSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if order.TotalAmount != 0 || order.Status != "confirmed" || order.OrderKind != models.OrderKindFreeGift {
-		t.Fatalf("order = total %d status %s kind %s, want 0 / confirmed / free_gift", order.TotalAmount, order.Status, order.OrderKind)
+	if order.TotalAmount != freeGiftTestDelivery || order.Status != "pending_payment" || order.OrderKind != models.OrderKindFreeGift {
+		t.Fatalf("order = total %d status %s kind %s, want %d / pending_payment / free_gift", order.TotalAmount, order.Status, order.OrderKind, freeGiftTestDelivery)
 	}
 	if order.SubtotalAmount != freeGiftTestPrice || order.DeliveryAmount != freeGiftTestDelivery || order.FreeGiftCost != freeGiftTestCost {
 		t.Fatalf("subtotal %d delivery %d cost %d", order.SubtotalAmount, order.DeliveryAmount, order.FreeGiftCost)
@@ -197,7 +199,7 @@ func TestFreeGiftFirstSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.OrderKind != models.OrderKindFreeGift || got.FreeGiftCost != freeGiftTestCost || got.TotalAmount != 0 {
+	if got.OrderKind != models.OrderKindFreeGift || got.FreeGiftCost != freeGiftTestCost || got.TotalAmount != freeGiftTestDelivery {
 		t.Fatalf("read back = kind %s cost %d total %d", got.OrderKind, got.FreeGiftCost, got.TotalAmount)
 	}
 	// And the seller sees a free gift they fund.
@@ -482,7 +484,7 @@ func TestFreeGiftBudgetNeverPassesCap(t *testing.T) {
 		t.Fatalf("gifts_count %d, want 1", n)
 	}
 	// And the product is no longer offered.
-	offers, err := f.gifts.Available(f.ctx, "")
+	offers, err := f.gifts.Available(f.ctx, FreeGiftFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,21 +638,19 @@ func TestFreeGiftPauseStopAndBudgetChange(t *testing.T) {
 	}
 
 	// Lowering the budget under what is held is refused with a clear error.
-	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{
+	if _, err := f.gifts.AdminSetProgram(f.ctx, o.seller, AdminProgramInput{
 		BudgetCap: freeGiftTestCost - 1, Currency: "USD", Status: "active",
 	}); !errors.Is(err, ErrFreeGiftBudgetBelowCommitted) {
 		t.Fatalf("budget below held: err = %v", err)
 	}
-	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{
+	if _, err := f.gifts.AdminSetProgram(f.ctx, o.seller, AdminProgramInput{
 		BudgetCap: 100000, Currency: "AUD", Status: "active",
 	}); !errors.Is(err, ErrFreeGiftCurrencyLocked) {
 		t.Fatalf("currency change with gifts: err = %v", err)
 	}
 
 	// Paused by the seller: new gifts are refused.
-	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{
-		BudgetCap: 100000, Currency: "USD", Status: "paused",
-	}); err != nil {
+	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{Status: "paused"}); err != nil {
 		t.Fatal(err)
 	}
 	second := f.sender()
@@ -663,9 +663,7 @@ func TestFreeGiftPauseStopAndBudgetChange(t *testing.T) {
 	if _, err := f.gifts.AdminSetStopped(f.ctx, o.seller, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{
-		BudgetCap: 100000, Currency: "USD", Status: "active",
-	}); !errors.Is(err, ErrFreeGiftProgramStopped) {
+	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{Status: "active"}); !errors.Is(err, ErrFreeGiftProgramStopped) {
 		t.Fatalf("seller re-activating a stopped program: err = %v", err)
 	}
 	if _, err := f.send(second, rec, o, "pause-key-3"); !errors.Is(err, ErrFreeGiftUnavailable) {
@@ -690,9 +688,7 @@ func TestFreeGiftPauseStopAndBudgetChange(t *testing.T) {
 	if err != nil || p.Status != models.FreeGiftProgramPaused {
 		t.Fatalf("re-allow = %+v, %v", p, err)
 	}
-	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{
-		BudgetCap: 100000, Currency: "USD", Status: "active",
-	}); err != nil {
+	if _, err := f.gifts.SetProgram(f.ctx, o.seller.String(), FreeGiftProgramInput{Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.send(second, rec, o, "pause-key-4"); err != nil {
@@ -712,10 +708,21 @@ func TestFreeGiftSellerSetupRules(t *testing.T) {
 	if _, err := f.gifts.SetProduct(f.ctx, seller, shop.product, FreeGiftProductInput{}); !errors.Is(err, ErrFreeGiftProgramNotFound) {
 		t.Fatalf("product before program: err = %v", err)
 	}
-	if _, err := f.gifts.SetProgram(f.ctx, seller, FreeGiftProgramInput{BudgetCap: 50000, Currency: "USD", Status: "active"}); !errors.Is(err, ErrFreeGiftTermsRequired) {
-		t.Fatalf("first budget without terms: err = %v", err)
+	sellerID := shop.seller
+	// The seller cannot turn a program on before agreeing to the marketing
+	// budget, and an admin cannot set a budget for a seller who has not.
+	if _, err := f.gifts.SetProgram(f.ctx, seller, FreeGiftProgramInput{Status: "active"}); !errors.Is(err, ErrFreeGiftTermsRequired) {
+		t.Fatalf("seller activating without terms: err = %v", err)
 	}
-	p, err := f.gifts.SetProgram(f.ctx, seller, FreeGiftProgramInput{BudgetCap: 50000, Currency: "usd", Status: "active", AcceptTerms: true})
+	budget := AdminProgramInput{BudgetCap: 50000, Currency: "usd", Status: "active"}
+	if _, err := f.gifts.AdminSetProgram(f.ctx, sellerID, budget); !errors.Is(err, ErrFreeGiftSellerTermsMissing) {
+		t.Fatalf("admin budget without seller terms: err = %v", err)
+	}
+	// Agreed, but the admin has not set a budget yet: nothing to switch on.
+	if _, err := f.gifts.SetProgram(f.ctx, seller, FreeGiftProgramInput{Status: "active", AcceptTerms: true}); !errors.Is(err, ErrFreeGiftProgramNotFound) {
+		t.Fatalf("seller activating before a budget: err = %v", err)
+	}
+	p, err := f.gifts.AdminSetProgram(f.ctx, sellerID, budget)
 	if err != nil {
 		t.Fatal(err)
 	}

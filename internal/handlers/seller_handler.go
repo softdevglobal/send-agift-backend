@@ -47,6 +47,9 @@ type sellerRegisterRequest struct {
 	AuthorityConfirmed bool                                  `json:"authority_confirmed"`
 	TermsAccepted      bool                                  `json:"terms_accepted"`
 	MarketingOptIn     bool                                  `json:"marketing_opt_in"`
+	// AcceptFreeGiftBudget must be true: the seller agrees to the marketing
+	// budget SendAGift sets for the free gift program.
+	AcceptFreeGiftBudget bool `json:"accept_free_gift_budget"`
 }
 
 type sellerUpdateRequest struct {
@@ -88,6 +91,8 @@ func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		AuthorityConfirmed: req.AuthorityConfirmed,
 		TermsAccepted:      req.TermsAccepted,
 		MarketingOptIn:     req.MarketingOptIn,
+
+		FreeGiftBudgetAccepted: req.AcceptFreeGiftBudget,
 	})
 	if err != nil {
 		h.writeError(w, err, "could not register seller")

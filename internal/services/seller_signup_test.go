@@ -195,3 +195,21 @@ func TestApplyShopExtras(t *testing.T) {
 		t.Fatalf("blank website should clear it: %v %v", err, shop.Website)
 	}
 }
+
+func TestRegistrationNeedsTheFreeGiftBudgetAgreement(t *testing.T) {
+	if err := requireFreeGiftBudgetAgreement(SellerRegisterInput{}); !errors.Is(err, ErrInvalidSellerSignup) {
+		t.Fatalf("an unticked agreement must be refused, got %v", err)
+	}
+	if err := requireFreeGiftBudgetAgreement(SellerRegisterInput{FreeGiftBudgetAccepted: true}); err != nil {
+		t.Fatalf("a ticked agreement must pass, got %v", err)
+	}
+
+	now := time.Date(2026, 10, 6, 3, 0, 0, 0, time.UTC)
+	seller := &models.Seller{}
+	if _, _, err := applySignupDetails(SellerRegisterInput{FreeGiftBudgetAccepted: true}, seller, now); err != nil {
+		t.Fatal(err)
+	}
+	if seller.FreeGiftTermsAcceptedAt == nil || !seller.FreeGiftTermsAcceptedAt.Equal(now) {
+		t.Fatalf("the agreement time must be recorded: %+v", seller.FreeGiftTermsAcceptedAt)
+	}
+}
