@@ -46,7 +46,7 @@ func TestCheckDeliveryDate(t *testing.T) {
 
 	t.Run("sooner than the zone allows", func(t *testing.T) {
 		got := checkDeliveryDate("2026-10-12", line, options, stocked)
-		if len(got) != 1 || !strings.Contains(got[0], "earliest is 2026-10-13") {
+		if len(got) != 1 || !strings.Contains(got[0], "earliest it can arrive is Tue 13 Oct") {
 			t.Fatalf("got %v", got)
 		}
 	})
@@ -74,7 +74,7 @@ func TestCheckDeliveryDate(t *testing.T) {
 			},
 		}
 		got := checkDeliveryDate("2026-10-15", line, options, rules)
-		if len(got) != 1 || !strings.Contains(got[0], "cannot be delivered on 2026-10-15") {
+		if len(got) != 1 || !strings.Contains(got[0], "cannot be delivered on Thu 15 Oct") {
 			t.Fatalf("got %v", got)
 		}
 		if got := checkDeliveryDate("2026-10-16", line, options, rules); len(got) != 0 {
@@ -93,7 +93,7 @@ func TestCheckDeliveryDate(t *testing.T) {
 			product: {Name: "Headset", HasInventory: true, AvailableQty: 3, ReservedQty: 1},
 		}
 		two := []dateLine{{ProductID: product, ShopID: shop, Quantity: 3}}
-		if got := checkDeliveryDate("2026-10-14", two, options, low); len(got) != 1 || !strings.Contains(got[0], "only 2 of Headset left") {
+		if got := checkDeliveryDate("2026-10-14", two, options, low); len(got) != 1 || !strings.Contains(got[0], "Only 2 of Headset left") {
 			t.Fatalf("got %v", got)
 		}
 	})
@@ -106,7 +106,7 @@ func TestCheckDeliveryDate(t *testing.T) {
 			{ProductID: product, ShopID: shop, Quantity: 2},
 			{ProductID: product, ShopID: shop, Quantity: 2},
 		}
-		if got := checkDeliveryDate("2026-10-14", lines, options, rules); len(got) != 1 || !strings.Contains(got[0], "only 3 of Headset left") {
+		if got := checkDeliveryDate("2026-10-14", lines, options, rules); len(got) != 1 || !strings.Contains(got[0], "Only 3 of Headset left") {
 			t.Fatalf("got %v", got)
 		}
 	})

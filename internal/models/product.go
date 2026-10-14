@@ -108,6 +108,8 @@ type ProductShopSummary struct {
 	Location *string   `json:"customer_visible_location,omitempty"`
 	// SellerVerificationStatus is verified when an admin has accepted the business.
 	SellerVerificationStatus string `json:"seller_verification_status,omitempty"`
+	// SellerImageURL is the seller's own profile photo.
+	SellerImageURL *string `json:"seller_image_url,omitempty"`
 }
 
 // PublicProduct is a published product plus its shop, for customer-facing product pages.

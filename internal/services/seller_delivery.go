@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,27 @@ import (
 // ErrOutsideDeliveryZone: the recipient is farther than the shop's largest delivery zone.
 var ErrOutsideDeliveryZone = errors.New("recipient is outside the shop's delivery zones")
 
+// DeliveryZoneError is a shop that cannot deliver to the order's address,
+// with the reason in words a shopper can read. It is an ErrOutsideDeliveryZone.
+type DeliveryZoneError struct {
+	ShopName   string
+	ReasonCode string
+	Reason     string
+}
+
+func (e *DeliveryZoneError) Error() string {
+	shop := e.ShopName
+	if shop == "" {
+		shop = "This shop"
+	}
+	if e.Reason == "" {
+		return shop + " cannot deliver to this address."
+	}
+	return shop + " cannot deliver to this address. " + e.Reason + "."
+}
+
+func (e *DeliveryZoneError) Unwrap() error { return ErrOutsideDeliveryZone }
+
 // SellerDeliveryModeName is the mode value clients send/receive for seller delivery.
 const SellerDeliveryModeName = "seller_delivery"
 
@@ -21,8 +43,11 @@ const SellerDeliveryModeName = "seller_delivery"
 type SellerDeliveryOption struct {
 	Mode      string `json:"mode"` // always "seller_delivery"
 	Available bool   `json:"available"`
-	// Reason explains why Available is false (no zones, missing coordinates, too far).
-	Reason                string   `json:"reason,omitempty"`
+	// Reason explains why Available is false, in words a shopper can read.
+	Reason string `json:"reason,omitempty"`
+	// ReasonCode is the same, for apps: NO_ZONES, SHOP_NO_LOCATION,
+	// ADDRESS_NO_LOCATION or OUTSIDE_ZONE.
+	ReasonCode            string   `json:"reason_code,omitempty"`
 	DistanceKm            *float64 `json:"distance_km,omitempty"`
 	MaxKm                 float64  `json:"max_km,omitempty"`      // matched zone
 	FarthestKm            float64  `json:"farthest_km,omitempty"` // shop's largest zone
@@ -50,16 +75,19 @@ func (o *SellerDeliveryOption) hasZoneAndPoints() bool {
 func buildSellerDeliveryOption(fromLat, fromLng, toLat, toLng *float64, zones []models.ShopDeliveryZone, now time.Time) *SellerDeliveryOption {
 	opt := &SellerDeliveryOption{Mode: SellerDeliveryModeName, localNow: now}
 	if len(zones) == 0 {
-		opt.Reason = "shop has no delivery zones"
+		opt.ReasonCode = "NO_ZONES"
+		opt.Reason = "This shop has not set up delivery yet"
 		return opt
 	}
 	opt.FarthestKm = zones[len(zones)-1].MaxKm
 	if fromLat == nil || fromLng == nil {
-		opt.Reason = "shop location (latitude/longitude) is not set"
+		opt.ReasonCode = "SHOP_NO_LOCATION"
+		opt.Reason = "This shop has not set its location, so delivery cannot be worked out"
 		return opt
 	}
 	if toLat == nil || toLng == nil {
-		opt.Reason = "recipient address has no latitude/longitude"
+		opt.ReasonCode = "ADDRESS_NO_LOCATION"
+		opt.Reason = "This address is not pinned on the map, so the distance cannot be measured"
 		return opt
 	}
 	km := math.Round(haversineKm(*fromLat, *fromLng, *toLat, *toLng)*100) / 100
@@ -84,7 +112,9 @@ func buildSellerDeliveryOption(fromLat, fromLng, toLat, toLng *float64, zones []
 			return opt
 		}
 	}
-	opt.Reason = fmt.Sprintf("recipient is %.2f km away; the farthest delivery zone is %.2f km", km, opt.FarthestKm)
+	opt.ReasonCode = "OUTSIDE_ZONE"
+	opt.Reason = fmt.Sprintf("This address is %s km away. The shop delivers up to %s km",
+		friendlyKm(km), friendlyKm(opt.FarthestKm))
 	return opt
 }
 
@@ -130,4 +160,21 @@ func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
 		math.Cos(toRad(lat1))*math.Cos(toRad(lat2))*math.Sin(dLng/2)*math.Sin(dLng/2)
 	return earthRadiusKm * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+}
+
+// friendlyKm writes a distance the way a person reads it: whole kilometres
+// with thousands separators past 10 km ("3,214"), one decimal below ("2.4").
+func friendlyKm(km float64) string {
+	if km < 10 {
+		return strconv.FormatFloat(math.Round(km*10)/10, 'f', -1, 64)
+	}
+	digits := strconv.FormatInt(int64(math.Round(km)), 10)
+	var b strings.Builder
+	for i, r := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

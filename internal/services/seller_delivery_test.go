@@ -49,7 +49,7 @@ func TestBuildSellerDeliveryOption(t *testing.T) {
 
 	// ~22 km → outside.
 	opt = buildSellerDeliveryOption(shopLat, shopLng, f64(7.1271), f64(79.8612), zones, now)
-	if opt.Available || !strings.Contains(opt.Reason, "farthest delivery zone is 10.00 km") || !opt.hasZoneAndPoints() {
+	if opt.Available || !strings.Contains(opt.Reason, "delivers up to 10 km") || opt.ReasonCode != "OUTSIDE_ZONE" || !opt.hasZoneAndPoints() {
 		t.Fatalf("want outside zones, got %+v", opt)
 	}
 

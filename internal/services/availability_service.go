@@ -25,6 +25,7 @@ type ShopGiftAvailability struct {
 	ShopID                   string             `json:"shop_id"`
 	ShopName                 string             `json:"shop_name"`
 	SellerVerificationStatus string             `json:"seller_verification_status,omitempty"`
+	SellerImageURL           *string            `json:"seller_image_url,omitempty"`
 	DistanceKm               *float64           `json:"distance_km,omitempty"`
 	MaxKm                    float64            `json:"max_km"`
 	PriceAmount              int                `json:"price_amount"`
@@ -195,6 +196,7 @@ func shopAvailability(shop repository.ShopForAvailability, gifts []repository.Gi
 		ShopID:                   shop.ID.String(),
 		ShopName:                 shop.Name,
 		SellerVerificationStatus: shop.VerificationStatus,
+		SellerImageURL:           shop.SellerImageURL,
 		DistanceKm:               opt.DistanceKm,
 		MaxKm:                    opt.MaxKm,
 		PriceAmount:              opt.PriceAmount,

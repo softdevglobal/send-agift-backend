@@ -95,7 +95,14 @@ func (h *OrderHandler) writeOrderError(w http.ResponseWriter, err error, fallbac
 			"error": err.Error(), "code": "DELIVERY_DATE_UNAVAILABLE",
 		})
 	case errors.Is(err, services.ErrOutsideDeliveryZone):
-		utils.Error(w, http.StatusBadRequest, err.Error())
+		// Which shop, and why, so checkout can say what to change.
+		body := map[string]any{"error": err.Error(), "code": "OUTSIDE_DELIVERY_ZONE"}
+		var zone *services.DeliveryZoneError
+		if errors.As(err, &zone) {
+			body["shop_name"] = zone.ShopName
+			body["reason_code"] = zone.ReasonCode
+		}
+		utils.JSON(w, http.StatusUnprocessableEntity, body)
 	case errors.Is(err, services.ErrInvalidOrder):
 		utils.Error(w, http.StatusBadRequest, "items required; delivery_date YYYY-MM-DD; customer_type personal or corporate; shipping_quotes[].mode courier|seller_delivery (seller_delivery needs recipient_id)")
 	case errors.Is(err, services.ErrOrderProduct):
