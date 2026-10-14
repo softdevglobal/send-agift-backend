@@ -118,13 +118,13 @@ type AdminFreeGiftOrder struct {
 	// BudgetStatus is held (not delivered yet), spent (delivered) or released
 	// (cancelled, so the budget was given back). Only the product price is
 	// held and spent; the customer pays the delivery.
-	BudgetStatus  string    `json:"budget_status"`
-	CreatedAt     time.Time `json:"created_at"`
-	DeliveryDate  string    `json:"delivery_date"`
-	Currency      string    `json:"currency"`
+	BudgetStatus string    `json:"budget_status"`
+	CreatedAt    time.Time `json:"created_at"`
+	DeliveryDate string    `json:"delivery_date"`
+	Currency     string    `json:"currency"`
 	// Cost is what it cost the seller's budget: the product price.
-	Cost          int       `json:"cost"`
-	ProductAmount int       `json:"product_amount"`
+	Cost          int `json:"cost"`
+	ProductAmount int `json:"product_amount"`
 	// DeliveryAmount is the delivery the customer paid.
 	DeliveryAmount int `json:"delivery_amount"`
 	// DeliveryPaid is whether the customer's delivery payment went through
