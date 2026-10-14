@@ -43,6 +43,7 @@ var allowedFolders = map[string]string{
 	"product-video":    "public/products/videos",
 	"reel-video":       "public/reels/videos",
 	"reel-photo":       "public/reels/photos",
+	"reel-thumbnail":   "public/reels/thumbnails",
 	"chat-image":       "public/chat/images",
 	"chat-document":    "public/chat/documents",
 	"review-photo":     "public/reviews/photos",

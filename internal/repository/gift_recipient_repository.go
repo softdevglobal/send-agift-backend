@@ -176,7 +176,8 @@ func (r *OrderRepository) ListReceivedGifts(ctx context.Context, customerID stri
 		inner join marketplace.order_items oi on oi.order_id = o.id
 		inner join seller.products p on p.id = oi.product_id
 		inner join seller.shops shp on shp.id = oi.shop_id
-		left join marketplace.product_reviews pr on pr.order_item_id = oi.id
+		left join marketplace.product_reviews pr
+		       on pr.order_item_id = oi.id and pr.customer_id = $1
 		where o.recipient_customer_id = $1 and o.status = 'delivered'
 		  and oi.fulfilment_status <> 'cancelled'
 		order by o.updated_at desc, oi.created_at asc`, customerID)
@@ -246,35 +247,61 @@ const (
 	ProgressDispatched = "dispatched"
 )
 
+// ProgressDue is an order that reached a step its buyer has not been told
+// about. Live is false when the order has already moved past that step, so it
+// is only marked told and not announced late.
+type ProgressDue struct {
+	OrderID uuid.UUID
+	Live    bool
+}
+
 // DueProgressNotices lists orders that reached a step the buyer has not been
-// told about yet. Orders from before the notices existed were marked told by
-// the migration, so they are not announced after the fact.
-func (r *OrderRepository) DueProgressNotices(ctx context.Context, kind string, limit int) ([]uuid.UUID, error) {
-	var where string
+// told about yet. It follows the order's lines, not its status: a free gift
+// with no delivery to pay stays "confirmed" while its line moves. Orders from
+// before the notices existed were marked told by the migrations.
+func (r *OrderRepository) DueProgressNotices(ctx context.Context, kind string, limit int) ([]ProgressDue, error) {
+	var query string
 	switch kind {
 	case ProgressAccepted:
-		where = `accepted_notified_at is null and status in ('accepted', 'preparing', 'dispatched', 'delivered')`
+		query = `
+			select o.id,
+			       not exists (select 1 from marketplace.order_items x
+			                   where x.order_id = o.id
+			                     and x.fulfilment_status in ('dispatched', 'delivered'))
+			from marketplace.orders o
+			where o.accepted_notified_at is null
+			  and o.status not in ('draft', 'cancelled', 'refunded')
+			  and exists (select 1 from marketplace.order_items oi
+			              where oi.order_id = o.id
+			                and oi.fulfilment_status in ('accepted', 'preparing', 'ready', 'dispatched', 'delivered'))
+			order by o.updated_at
+			limit $1`
 	case ProgressDispatched:
-		where = `dispatched_notified_at is null and status in ('dispatched', 'delivered')`
+		query = `
+			select o.id, o.status <> 'delivered'
+			from marketplace.orders o
+			where o.dispatched_notified_at is null
+			  and o.status not in ('draft', 'cancelled', 'refunded')
+			  and exists (select 1 from marketplace.order_items oi
+			              where oi.order_id = o.id
+			                and oi.fulfilment_status in ('dispatched', 'delivered'))
+			order by o.updated_at
+			limit $1`
 	default:
 		return nil, errors.New("unknown progress notice")
 	}
-	rows, err := r.db.Query(ctx, `
-		select id from marketplace.orders
-		where `+where+`
-		order by updated_at
-		limit $1`, limit)
+	rows, err := r.db.Query(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []uuid.UUID{}
+	out := []ProgressDue{}
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var d ProgressDue
+		if err := rows.Scan(&d.OrderID, &d.Live); err != nil {
 			return nil, err
 		}
-		out = append(out, id)
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }
