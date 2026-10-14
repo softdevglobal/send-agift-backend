@@ -400,7 +400,7 @@ const orderPlacedContent = `{{define "content"}}
     <tr><td style="padding:12px 0 0;border-top:1px solid {{c "navy"}};font-size:16px;font-weight:700;color:{{c "navy"}};">Total</td><td align="right" style="padding:12px 0 0;border-top:1px solid {{c "navy"}};font-size:16px;font-weight:700;color:{{c "navy"}};">{{money .Total .Currency}}</td></tr>
   </table>
 </td></tr>
-{{template "button" .CTA}}
+{{if .CTA.URL}}{{template "button" .CTA}}{{end}}
 {{if .GiftMessage}}{{template "callout" .Callout}}{{end}}
 {{template "closing" .Closing}}
 {{end}}`
@@ -416,7 +416,6 @@ func renderOrderPlaced(webURL string, o *repository.OrderEmailSummary) (*EmailCo
 	data.Eyebrow = "Order confirmed · " + o.OrderNumber
 	data.Heading = "Your gift for " + recipient + "\nis being prepared."
 	data.Intro = fmt.Sprintf("Hi %s,\nThank you for your order. The shop is getting everything ready. And we won't tell %s a thing until the gift is in their hands.", data.Name, recipient)
-	data.CTA = emailButton{Label: "Track your order", URL: webURL + "/orders/" + o.OrderID.String()}
 	data.Callout = emailCallout{Label: "Your message", Body: "“" + data.GiftMessage + "”"}
 	data.Closing = emailClosing{Title: "Surprise intact.", Body: "We'll keep you posted as your gift makes its way."}
 
@@ -431,7 +430,7 @@ func renderOrderPlaced(webURL string, o *repository.OrderEmailSummary) (*EmailCo
 		fmt.Fprintf(&b, "  • %s ×%d (%s), %s\n", it.ProductName, it.Quantity, it.ShopName, formatMoney(it.TotalAmount, data.Currency))
 	}
 	fmt.Fprintf(&b, "\nSubtotal: %s\nDelivery: %s\nTotal: %s\n", formatMoney(data.Subtotal, data.Currency), formatMoney(data.Delivery, data.Currency), formatMoney(data.Total, data.Currency))
-	fmt.Fprintf(&b, "\nWe won't tell %s a thing until the gift is in their hands.\n\nTrack your order: %s/orders/%s\n\nThe SendAGift team", recipient, webURL, o.OrderID)
+	fmt.Fprintf(&b, "\nWe won't tell %s a thing until the gift is in their hands.\n\nThe SendAGift team", recipient)
 	return renderEmail(webURL, orderPlacedContent, "Order confirmed: your gift for "+recipient,
 		"Order "+o.OrderNumber+" · arriving "+data.DeliveryDate+". We'll keep it a surprise.", data, b.String())
 }
@@ -514,7 +513,7 @@ const orderDeliveredContent = `{{define "content"}}
 {{template "heading" .Heading}}
 {{template "intro" .Intro}}
 {{template "items" .}}
-{{template "button" .CTA}}
+{{if .CTA.URL}}{{template "button" .CTA}}{{end}}
 {{template "closing" .Closing}}
 {{end}}`
 
@@ -698,11 +697,9 @@ func renderOrderAccepted(webURL string, o *repository.OrderEmailSummary) (*Email
 	if recipient == "" {
 		recipient = "your recipient"
 	}
-	trackURL := webURL + "/orders/" + o.OrderID.String()
 	data.Eyebrow = "Accepted · " + o.OrderNumber
 	data.Heading = "The seller accepted\nyour gift."
 	data.Intro = fmt.Sprintf("Hi %s,\nGood news: the seller has accepted your order and is getting the gift for %s ready. We'll let you know the moment it's on its way.", data.Name, recipient)
-	data.CTA = emailButton{Label: "Track your order", URL: trackURL}
 	data.Closing = emailClosing{Title: "Surprise intact.", Body: recipient + " won't hear a thing until the gift arrives."}
 
 	var b strings.Builder
@@ -710,7 +707,7 @@ func renderOrderAccepted(webURL string, o *repository.OrderEmailSummary) (*Email
 	for _, it := range data.Items {
 		fmt.Fprintf(&b, "  • %s ×%d (%s)\n", it.ProductName, it.Quantity, it.ShopName)
 	}
-	fmt.Fprintf(&b, "\nArriving: %s\nTrack your order: %s\n\nThe SendAGift team", data.DeliveryDate, trackURL)
+	fmt.Fprintf(&b, "\nArriving: %s\n\nThe SendAGift team", data.DeliveryDate)
 	return renderEmail(webURL, orderDeliveredContent, "Accepted: your gift for "+recipient,
 		"Order "+o.OrderNumber+" was accepted by the seller and is being prepared.", data, b.String())
 }
@@ -723,11 +720,9 @@ func renderOrderDispatched(webURL string, o *repository.OrderEmailSummary) (*Ema
 	if recipient == "" {
 		recipient = "your recipient"
 	}
-	trackURL := webURL + "/orders/" + o.OrderID.String()
 	data.Eyebrow = "On its way · " + o.OrderNumber
 	data.Heading = "Your gift for " + recipient + "\nis on its way."
 	data.Intro = fmt.Sprintf("Hi %s,\nDelivery has started. Your gift for %s is out of the shop and on its way, due %s.", data.Name, recipient, data.DeliveryDate)
-	data.CTA = emailButton{Label: "Track your order", URL: trackURL}
 	data.Closing = emailClosing{Title: "Almost there.", Body: "We'll email you again once it has been delivered."}
 
 	var b strings.Builder
@@ -735,7 +730,7 @@ func renderOrderDispatched(webURL string, o *repository.OrderEmailSummary) (*Ema
 	for _, it := range data.Items {
 		fmt.Fprintf(&b, "  • %s ×%d (%s)\n", it.ProductName, it.Quantity, it.ShopName)
 	}
-	fmt.Fprintf(&b, "\nTrack your order: %s\n\nThe SendAGift team", trackURL)
+	fmt.Fprintf(&b, "\nThe SendAGift team")
 	return renderEmail(webURL, orderDeliveredContent, "On its way: your gift for "+recipient,
 		"Order "+o.OrderNumber+" has left the shop and is on its way.", data, b.String())
 }

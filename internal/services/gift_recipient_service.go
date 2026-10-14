@@ -241,24 +241,23 @@ func (s *GiftRecipientService) NotifyProgress(ctx context.Context, limit int) (i
 	handled := 0
 	for _, step := range []struct {
 		kind string
-		// live are the order statuses at which this email is still true.
-		live map[string]bool
 		send func(context.Context, *repository.OrderEmailSummary) error
 	}{
-		{repository.ProgressAccepted, map[string]bool{"accepted": true, "preparing": true}, s.email.SendOrderAccepted},
-		{repository.ProgressDispatched, map[string]bool{"dispatched": true}, s.email.SendOrderDispatched},
+		{repository.ProgressAccepted, s.email.SendOrderAccepted},
+		{repository.ProgressDispatched, s.email.SendOrderDispatched},
 	} {
 		due, err := s.orders.DueProgressNotices(ctx, step.kind, limit)
 		if err != nil {
 			return handled, err
 		}
-		for _, orderID := range due {
-			summary, err := s.orders.OrderEmailSummary(ctx, orderID)
-			if err != nil {
-				log.Printf("order %s %s notice: %v", orderID, step.kind, err)
-				continue
-			}
-			if step.live[summary.Status] {
+		for _, d := range due {
+			orderID := d.OrderID
+			if d.Live {
+				summary, err := s.orders.OrderEmailSummary(ctx, orderID)
+				if err != nil {
+					log.Printf("order %s %s notice: %v", orderID, step.kind, err)
+					continue
+				}
 				if err := step.send(ctx, summary); err != nil {
 					// Left unmarked, so the next run tries again.
 					log.Printf("order %s %s email: %v", orderID, step.kind, err)

@@ -24,9 +24,13 @@ func (r *OrderRepository) GiftReviewItems(ctx context.Context, orderID uuid.UUID
 		select oi.id, oi.product_id, p.name, p.image_url, shp.name, oi.quantity,
 		       oi.fulfilment_status, pr.id
 		from marketplace.order_items oi
+		inner join marketplace.orders o on o.id = oi.order_id
 		inner join seller.products p on p.id = oi.product_id
 		inner join seller.shops shp on shp.id = oi.shop_id
-		left join marketplace.product_reviews pr on pr.order_item_id = oi.id
+		-- This page is the recipient's: the buyer may have reviewed the same
+		-- line, and that is their review, not this one.
+		left join marketplace.product_reviews pr
+		       on pr.order_item_id = oi.id and pr.customer_id = o.recipient_customer_id
 		where oi.order_id = $1 and oi.fulfilment_status <> 'cancelled'
 		order by oi.created_at`, orderID)
 	if err != nil {
