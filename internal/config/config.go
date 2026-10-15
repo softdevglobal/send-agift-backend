@@ -86,7 +86,11 @@ type Config struct {
 	// button is refused with 503. GoogleClientIDs lists every OAuth client
 	// whose tokens are accepted: the web client first, then any Android or
 	// iOS clients (GOOGLE_EXTRA_CLIENT_IDS, comma separated).
-	GoogleClientIDs    []string
+	GoogleClientIDs []string
+	// AppleClientIDs are the identifiers Apple issues Sign in with Apple
+	// tokens for: the iPhone app's bundle id (APPLE_CLIENT_IDS, comma
+	// separated). Empty turns Apple sign-in off.
+	AppleClientIDs     []string
 	GoogleClientSecret string
 	FacebookAppID      string
 	FacebookAppSecret  string
@@ -154,6 +158,7 @@ func Load() (*Config, error) {
 		AppWebURL:            strings.TrimRight(envOr("APP_WEB_URL", "http://localhost:5173"), "/"),
 
 		GoogleClientIDs:    listEnv("GOOGLE_CLIENT_ID", "GOOGLE_EXTRA_CLIENT_IDS"),
+		AppleClientIDs:     listEnv("APPLE_CLIENT_IDS"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		FacebookAppID:      os.Getenv("FACEBOOK_APP_ID"),
 		FacebookAppSecret:  os.Getenv("FACEBOOK_APP_SECRET"),

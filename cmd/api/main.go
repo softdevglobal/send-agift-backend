@@ -230,10 +230,11 @@ func main() {
 	}
 	stripeHandler := handlers.NewStripeHandler(stripeService)
 	giftReviewHandler := handlers.NewGiftReviewHandler(services.NewGiftReviewService(orders, customers, loginCodeService, cfg.JWTSecret, cfg.JWTExpiry))
-	// Customer sign-in with Google and Facebook. A provider without keys
+	// Customer sign-in with Google, Facebook and Apple. A provider without keys
 	// answers 503, so its button can be shown or hidden by configuration.
 	socialAuthService := services.NewSocialAuthService(customers, countries, countryCapabilityService, emailService,
-		cfg.GoogleClientIDs, cfg.FacebookAppID, cfg.FacebookAppSecret, cfg.JWTSecret, cfg.JWTExpiry)
+		cfg.GoogleClientIDs, cfg.FacebookAppID, cfg.FacebookAppSecret, cfg.JWTSecret, cfg.JWTExpiry).
+		EnableApple(cfg.AppleClientIDs)
 	socialAuthHandler := handlers.NewSocialAuthHandler(socialAuthService)
 
 	authHandler := handlers.NewAuthHandler(authService)          // create a new auth handler
