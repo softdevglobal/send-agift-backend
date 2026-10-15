@@ -329,6 +329,11 @@ func (h *CustomerHandler) ChangePassword(w http.ResponseWriter, r *http.Request)
 
 func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, fallback string) {
 	switch {
+	case errors.Is(err, services.ErrAccountHasActiveOrders):
+		utils.JSON(w, http.StatusConflict, map[string]any{
+			"error": services.ErrAccountHasActiveOrders.Error(),
+			"code":  "ACTIVE_ORDERS",
+		})
 	case errors.Is(err, services.ErrInvalidInput):
 		utils.Error(w, http.StatusBadRequest, "email and phone number are required, password must be at least 8 characters")
 	case errors.Is(err, services.ErrInvalidCountry):
