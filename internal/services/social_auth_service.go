@@ -35,7 +35,7 @@ var (
 	// ErrSocialEmailInUse is an email that signs in to a seller or admin account.
 	ErrSocialEmailInUse = errors.New("This email is already used by a seller or admin account. Please sign in with your email and password instead.")
 	// ErrSocialSignupExpired is a profile-completion token that is invalid or too old.
-	ErrSocialSignupExpired = errors.New("Your sign-up session expired. Please choose Google or Facebook again.")
+	ErrSocialSignupExpired = errors.New("Your sign-up session expired. Please choose Google, Facebook or Apple again.")
 )
 
 const (
@@ -69,7 +69,7 @@ type SocialSignInResult struct {
 	ImageURL    string `json:"image_url,omitempty"`
 }
 
-// SocialAuthService signs customers in with Google and Facebook.
+// SocialAuthService signs customers in with Google, Facebook and Apple.
 type SocialAuthService struct {
 	customers    *repository.CustomerRepository
 	countries    *repository.CountryRepository
@@ -78,6 +78,9 @@ type SocialAuthService struct {
 	http         *http.Client
 
 	googleClientIDs   []string
+	appleClientIDs    []string
+	appleKeys         appleKeyCache
+	appleKeysURL      string
 	facebookAppID     string
 	facebookAppSecret string
 	jwtSecret         string
@@ -120,6 +123,10 @@ type SocialSignInInput struct {
 	Provider  string `json:"provider"`
 	Token     string `json:"token"`
 	TokenType string `json:"token_type"` // id_token | access_token
+	// Apple only: the raw nonce the sign-in was started with, and the name
+	// Apple hands the app once, on the first sign-in.
+	Nonce string `json:"nonce,omitempty"`
+	Name  string `json:"name,omitempty"`
 }
 
 // SignIn verifies the token with its provider, then signs the customer in:
@@ -340,6 +347,8 @@ func (s *SocialAuthService) verify(ctx context.Context, in SocialSignInInput) (*
 			return nil, ErrSocialNotConfigured
 		}
 		return s.verifyFacebook(ctx, token)
+	case ProviderApple:
+		return s.verifyApple(ctx, in)
 	default:
 		return nil, ErrInvalidInput
 	}
