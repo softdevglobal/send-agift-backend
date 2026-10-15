@@ -15,6 +15,10 @@ import (
 	"myapp/internal/models"
 )
 
+// ErrCustomerActiveOrders: the account still has a gift on its way, so it
+// cannot be deleted until that order is delivered or cancelled.
+var ErrCustomerActiveOrders = errors.New("customer has orders in progress")
+
 var (
 	ErrCustomerNotFound   = errors.New("customer not found")
 	ErrCustomerDuplicate  = errors.New("customer already exists")
@@ -229,18 +233,85 @@ func (r *CustomerRepository) UpdatePassword(ctx context.Context, id, hash string
 	return nil
 }
 
-func (r *CustomerRepository) SoftDelete(ctx context.Context, id string) error {
-	tag, err := r.db.Exec(ctx, `
-		update customer.customers
-		set deleted_at = now(), updated_at = now(), status = 'deleted'
-		where id = $1 and deleted_at is null`, id)
+// DeleteAccount closes a customer's account for good, at their request.
+//
+// Orders, payments and the points ledger are kept, as the law and the
+// accounts require, but nothing in them points back to a person any more:
+// the customer row keeps only its id, and everything that identifies them,
+// or the people they sent gifts to, is removed. It refuses while a gift is
+// still on its way, so a delivery is never left without a contact.
+func (r *CustomerRepository) DeleteAccount(ctx context.Context, id string) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+
+	// Lock the row so two delete requests cannot race.
+	var locked string
+	err = tx.QueryRow(ctx, `
+		select id::text from customer.customers
+		where id = $1 and deleted_at is null
+		for update`, id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrCustomerNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+
+	var active int
+	if err := tx.QueryRow(ctx, `
+		select count(*) from marketplace.orders
+		where customer_id = $1
+		  and status in ('paid', 'confirmed', 'accepted', 'preparing', 'dispatched')`,
+		id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrCustomerActiveOrders
+	}
+
+	// The email must stay unique and not null, so it becomes an address that
+	// can never receive mail or be signed in with. The password hash is not a
+	// valid bcrypt hash, so no password matches it, and every token issued
+	// before now stops working.
+	if _, err := tx.Exec(ctx, `
+		update customer.customers
+		set email = 'deleted-' || id::text || '@deleted.invalid',
+		    phone = null,
+		    phone_e164 = null,
+		    phone_verified_at = null,
+		    email_verified_at = null,
+		    display_name = null,
+		    image_url = null,
+		    date_of_birth = null,
+		    password_hash = '!deleted',
+		    status = 'deleted',
+		    sessions_valid_after = now(),
+		    deleted_at = now(),
+		    updated_at = now()
+		where id = $1`, id); err != nil {
+		return err
+	}
+
+	// Personal data held for the account. Recipients go too (their addresses
+	// cascade); finished orders keep their totals but lose the link.
+	for _, stmt := range []string{
+		`delete from customer.customer_addresses where customer_id = $1`,
+		`delete from customer.recipients where customer_id = $1`,
+		`delete from customer.saved_gifts where customer_id = $1`,
+		`delete from customer.push_devices where customer_id = $1`,
+		`delete from customer.social_identities where customer_id = $1`,
+		`delete from core.login_codes where customer_id = $1`,
+		`delete from customer.email_change_requests where customer_id = $1`,
+		`delete from customer.email_history where customer_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *CustomerRepository) CreateAddress(ctx context.Context, a *models.CustomerAddress) error {

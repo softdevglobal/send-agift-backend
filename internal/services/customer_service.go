@@ -15,6 +15,10 @@ import (
 	"myapp/internal/utils"
 )
 
+// ErrAccountHasActiveOrders: a gift is still on its way, so the account
+// cannot be deleted yet.
+var ErrAccountHasActiveOrders = errors.New("you have a gift on its way. You can delete your account once it is delivered or cancelled")
+
 var (
 	ErrCustomerNotFound   = errors.New("customer not found")      // error for the service
 	ErrCustomerConflict   = errors.New("customer already exists") // error for the service
@@ -395,9 +399,12 @@ func (s *CustomerService) Update(ctx context.Context, customerID string, in Cust
 }
 
 func (s *CustomerService) Delete(ctx context.Context, customerID string) error {
-	err := s.customers.SoftDelete(ctx, customerID)
+	err := s.customers.DeleteAccount(ctx, customerID)
 	if errors.Is(err, repository.ErrCustomerNotFound) {
 		return ErrCustomerNotFound
+	}
+	if errors.Is(err, repository.ErrCustomerActiveOrders) {
+		return ErrAccountHasActiveOrders
 	}
 	return err
 }
