@@ -122,6 +122,7 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
 		left join customer.recipients r on r.id = o.recipient_id
 		left join customer.recipient_addresses ra on ra.id = coalesce(
+			o.delivery_address_id,
 			r.default_address_id,
 			(select id from customer.recipient_addresses where recipient_id = r.id order by is_default desc, created_at asc limit 1)
 		)
@@ -839,6 +840,12 @@ func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uui
 // customer who owns them so one customer cannot quote against another's
 // recipient.
 func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID, recipientID string) (*CartShipTo, error) {
+	return r.ShipToForRecipientAddress(ctx, customerID, recipientID, nil)
+}
+
+// ShipToForRecipientAddress is ShipToForRecipient for one of the recipient's
+// own addresses. A nil addressID means their default.
+func (r *ShipmentRepository) ShipToForRecipientAddress(ctx context.Context, customerID, recipientID string, addressID *uuid.UUID) (*CartShipTo, error) {
 	customerUUID, err := uuid.Parse(customerID)
 	if err != nil {
 		return nil, ErrShipmentNotFound
@@ -856,13 +863,14 @@ func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID,
 		       ra.latitude::float8, ra.longitude::float8
 		from customer.recipients r
 		left join customer.recipient_addresses ra on ra.id = coalesce(
+			$3::uuid,
 			r.default_address_id,
 			(select id from customer.recipient_addresses where recipient_id = r.id
 			 order by is_default desc, created_at asc limit 1)
-		)
+		) and ra.recipient_id = r.id
 		left join core.countries tc on tc.id = ra.country_id
 		where r.id = $1 and r.customer_id = $2`,
-		recipientUUID, customerUUID,
+		recipientUUID, customerUUID, addressID,
 	).Scan(&to.Name, &to.Street1, &to.Street2, &to.City, &to.Region,
 		&to.PostalCode, &to.CountryISO, &to.Phone, &to.Email,
 		&to.Latitude, &to.Longitude)

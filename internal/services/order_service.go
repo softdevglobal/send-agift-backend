@@ -246,7 +246,7 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	}
 
 	// Every shop is priced from its delivery zones. Client amounts are ignored.
-	sellerDeliveries, err := s.priceShopDeliveries(ctx, customerID, recipientID, shopsInOrder, currency)
+	sellerDeliveries, err := s.priceShopDeliveries(ctx, customerID, recipientID, nil, shopsInOrder, currency)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +365,7 @@ func (s *OrderService) priceShopDeliveries(
 	ctx context.Context,
 	customerID string,
 	recipientID *uuid.UUID,
+	addressID *uuid.UUID, // the recipient's chosen address; nil means their default
 	shopsInOrder map[string]uuid.UUID,
 	currency string,
 ) (map[string]*SellerDeliveryOption, error) {
@@ -383,7 +384,7 @@ func (s *OrderService) priceShopDeliveries(
 		}
 		shopIDs = append(shopIDs, sid)
 	}
-	to, err := s.shipments.ShipToForRecipient(ctx, customerID, recipientID.String())
+	to, err := s.shipments.ShipToForRecipientAddress(ctx, customerID, recipientID.String(), addressID)
 	if err != nil {
 		return nil, err
 	}

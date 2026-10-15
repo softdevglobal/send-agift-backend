@@ -296,13 +296,13 @@ func insertOrderHeader(ctx context.Context, q querier, order *models.Order) erro
 			order_number, customer_id, recipient_id, country_id, customer_type,
 			delivery_date, status, subtotal_amount, delivery_amount, total_amount,
 			currency, gift_message, media_greeting_id, gift_points, gift_points_status,
-			order_kind, free_gift_cost, free_gift_budget_status, idempotency_key
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			order_kind, free_gift_cost, free_gift_budget_status, idempotency_key, delivery_address_id
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		returning id, created_at, updated_at`,
 		order.OrderNumber, order.CustomerID, order.RecipientID, order.CountryID, order.CustomerType,
 		order.DeliveryDate, order.Status, order.SubtotalAmount, order.DeliveryAmount, order.TotalAmount,
 		order.Currency, order.GiftMessage, order.MediaGreetingID, order.GiftPoints, order.GiftPointsStatus,
-		order.OrderKind, order.FreeGiftCost, order.FreeGiftBudgetStatus, order.IdempotencyKey,
+		order.OrderKind, order.FreeGiftCost, order.FreeGiftBudgetStatus, order.IdempotencyKey, order.DeliveryAddressID,
 	).Scan(&order.ID, &order.CreatedAt, &order.UpdatedAt)
 	return mapOrderWriteError(err)
 }
@@ -606,6 +606,7 @@ const sellerOrderItemFrom = `
 	inner join seller.shops shp on shp.id = oi.shop_id
 	left join customer.recipients r on r.id = o.recipient_id
 	left join customer.recipient_addresses ra on ra.id = coalesce(
+		o.delivery_address_id,
 		r.default_address_id,
 		(select id from customer.recipient_addresses where recipient_id = r.id order by is_default desc, created_at asc limit 1)
 	)

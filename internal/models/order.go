@@ -8,20 +8,22 @@ import (
 
 // Order maps to marketplace.orders. One checkout, one header row.
 type Order struct {
-	ID              uuid.UUID  `json:"id"`
-	OrderNumber     string     `json:"order_number"`
-	CustomerID      uuid.UUID  `json:"customer_id"`
-	RecipientID     *uuid.UUID `json:"recipient_id,omitempty"`
-	CountryID       uuid.UUID  `json:"country_id"`
-	CustomerType    string     `json:"customer_type"`
-	DeliveryDate    time.Time  `json:"delivery_date"`
-	Status          string     `json:"status"`
-	SubtotalAmount  int        `json:"subtotal_amount"`
-	DeliveryAmount  int        `json:"delivery_amount"`
-	TotalAmount     int        `json:"total_amount"`
-	Currency        string     `json:"currency"`
-	GiftMessage     *string    `json:"gift_message,omitempty"`
-	MediaGreetingID *uuid.UUID `json:"media_greeting_id,omitempty"`
+	ID          uuid.UUID  `json:"id"`
+	OrderNumber string     `json:"order_number"`
+	CustomerID  uuid.UUID  `json:"customer_id"`
+	RecipientID *uuid.UUID `json:"recipient_id,omitempty"`
+	// The recipient address the customer chose; nil means their default.
+	DeliveryAddressID *uuid.UUID `json:"delivery_address_id,omitempty"`
+	CountryID         uuid.UUID  `json:"country_id"`
+	CustomerType      string     `json:"customer_type"`
+	DeliveryDate      time.Time  `json:"delivery_date"`
+	Status            string     `json:"status"`
+	SubtotalAmount    int        `json:"subtotal_amount"`
+	DeliveryAmount    int        `json:"delivery_amount"`
+	TotalAmount       int        `json:"total_amount"`
+	Currency          string     `json:"currency"`
+	GiftMessage       *string    `json:"gift_message,omitempty"`
+	MediaGreetingID   *uuid.UUID `json:"media_greeting_id,omitempty"`
 	// Points the sender attached to the gift, and where they are:
 	// none | held (taken from the sender, not yet delivered) | delivered
 	// (reached the recipient's account) | returned (back to the sender) |

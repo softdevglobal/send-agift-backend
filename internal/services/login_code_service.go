@@ -233,9 +233,6 @@ func (s *LoginCodeService) issue(ctx context.Context, channel, dest, purpose str
 	if err := s.codes.Save(ctx, channel, dest, purpose, customerID, hash, now.Add(loginCodeTTL)); err != nil {
 		return err
 	}
-	// Printed on the API terminal so a local sign-in can continue when SMS
-	// or email delivery does not arrive. Do not leave this on in production.
-	log.Printf("OTP %s to %s: %s", channel, dest, code)
 	if channel == ChannelSMS {
 		return s.sms.SendLoginCode(ctx, dest, code, loginCodeTTL)
 	}

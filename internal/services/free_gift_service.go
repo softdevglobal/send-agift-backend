@@ -269,8 +269,10 @@ func (s *FreeGiftService) Status(ctx context.Context, customerID, recipientID st
 // FreeGiftSendInput is the body of POST /customers/me/free-gifts. There is
 // no price and no quantity: the server reads the price, and the quantity is 1.
 type FreeGiftSendInput struct {
-	ProductID    string  `json:"product_id"`
-	RecipientID  string  `json:"recipient_id"`
+	ProductID   string `json:"product_id"`
+	RecipientID string `json:"recipient_id"`
+	// One of the recipient's own addresses. Left out, their default is used.
+	AddressID    string  `json:"address_id"`
 	CountryID    string  `json:"country_id"`
 	DeliveryDate string  `json:"delivery_date"`
 	GiftMessage  *string `json:"gift_message"`
@@ -347,6 +349,22 @@ func (s *FreeGiftService) Send(ctx context.Context, customerID, idempotencyKey s
 		return nil, ErrFreeGiftSelf
 	}
 
+	var addressID *uuid.UUID
+	if raw := strings.TrimSpace(in.AddressID); raw != "" {
+		aid, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, ErrInvalidOrder
+		}
+		owns, err := s.customers.RecipientAddressBelongsToRecipient(ctx, rec.ID.String(), aid.String())
+		if err != nil {
+			return nil, err
+		}
+		if !owns {
+			return nil, ErrInvalidOrder
+		}
+		addressID = &aid
+	}
+
 	countryID, err := uuid.Parse(strings.TrimSpace(in.CountryID))
 	if err != nil {
 		return nil, ErrInvalidCountry
@@ -394,7 +412,7 @@ func (s *FreeGiftService) Send(ctx context.Context, customerID, idempotencyKey s
 	shops := map[string]uuid.UUID{shopID.String(): sellerID}
 
 	// Delivery price and date: the same helpers the paid route uses.
-	sellerDeliveries, err := s.orderSvc.priceShopDeliveries(ctx, customerID, &rec.ID, shops, snap.Currency)
+	sellerDeliveries, err := s.orderSvc.priceShopDeliveries(ctx, customerID, &rec.ID, addressID, shops, snap.Currency)
 	if err != nil {
 		return nil, err
 	}
@@ -417,20 +435,21 @@ func (s *FreeGiftService) Send(ctx context.Context, customerID, idempotencyKey s
 		status = "pending_payment"
 	}
 	order := &models.Order{
-		OrderNumber:    newOrderNumber(),
-		CustomerID:     cid,
-		RecipientID:    &rec.ID,
-		CountryID:      countryID,
-		CustomerType:   "personal",
-		DeliveryDate:   *deliveryDate,
-		Status:         status,
-		SubtotalAmount: snap.PriceAmount,
-		DeliveryAmount: deliveryAmount,
-		TotalAmount:    deliveryAmount, // what the customer pays: the delivery only
-		Currency:       snap.Currency,
-		GiftMessage:    in.GiftMessage,
-		FreeGiftCost:   snap.PriceAmount, // what the seller's budget funds: the product only
-		IdempotencyKey: &key,
+		OrderNumber:       newOrderNumber(),
+		CustomerID:        cid,
+		RecipientID:       &rec.ID,
+		DeliveryAddressID: addressID,
+		CountryID:         countryID,
+		CustomerType:      "personal",
+		DeliveryDate:      *deliveryDate,
+		Status:            status,
+		SubtotalAmount:    snap.PriceAmount,
+		DeliveryAmount:    deliveryAmount,
+		TotalAmount:       deliveryAmount, // what the customer pays: the delivery only
+		Currency:          snap.Currency,
+		GiftMessage:       in.GiftMessage,
+		FreeGiftCost:      snap.PriceAmount, // what the seller's budget funds: the product only
+		IdempotencyKey:    &key,
 	}
 	write := repository.FreeGiftOrder{
 		Order: order, Items: items, Deliveries: deliveries,

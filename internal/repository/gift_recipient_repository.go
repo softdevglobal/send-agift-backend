@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/nyaruka/phonenumbers"
 
 	"myapp/internal/models"
 )
@@ -66,6 +68,7 @@ func (r *OrderRepository) OrderEmailSummary(ctx context.Context, orderID uuid.UU
 		inner join customer.customers c on c.id = o.customer_id
 		left join customer.recipients r on r.id = o.recipient_id
 		left join customer.recipient_addresses ra on ra.id = coalesce(
+			o.delivery_address_id,
 			r.default_address_id,
 			(select id from customer.recipient_addresses where recipient_id = r.id
 			 order by is_default desc, created_at asc limit 1)
@@ -120,15 +123,54 @@ func (r *OrderRepository) SetRecipientCustomer(ctx context.Context, orderID, cus
 // ClaimGiftsByPhone links delivered gifts addressed to a phone number (and no
 // account) to the customer who has just verified that number, so a recipient
 // reached only by text can review what they were sent.
+//
+// The last 9 digits only narrow the search. A gift is linked only when the
+// recipient's whole number, read in the verified number's country, is exactly
+// e164: two people can share a number's ending.
 func (r *CustomerRepository) ClaimGiftsByPhone(ctx context.Context, customerID, e164 string) error {
-	_, err := r.db.Exec(ctx, `
-		update marketplace.orders o set recipient_customer_id = $1
-		from customer.recipients rc
-		where rc.id = o.recipient_id
-		  and o.recipient_customer_id is null and o.customer_id <> $1
+	want, err := phonenumbers.Parse(e164, "")
+	if err != nil {
+		return nil // not an international number, so nothing can match it exactly
+	}
+	region := phonenumbers.GetRegionCodeForNumber(want)
+	rows, err := r.db.Query(ctx, `
+		select o.id, rc.phone
+		from marketplace.orders o
+		join customer.recipients rc on rc.id = o.recipient_id
+		where o.recipient_customer_id is null and o.customer_id <> $1
 		  and rc.phone is not null and rc.phone <> ''
 		  and right(regexp_replace(rc.phone, '\D', '', 'g'), 9) = right(regexp_replace($2, '\D', '', 'g'), 9)`,
 		customerID, e164)
+	if err != nil {
+		return err
+	}
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		var phone string
+		if err := rows.Scan(&id, &phone); err != nil {
+			rows.Close()
+			return err
+		}
+		raw := strings.TrimSpace(phone)
+		if strings.HasPrefix(raw, "00") {
+			raw = "+" + raw[2:]
+		}
+		got, perr := phonenumbers.Parse(raw, region)
+		if perr == nil && phonenumbers.IsValidNumber(got) && phonenumbers.Format(got, phonenumbers.E164) == e164 {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err = r.db.Exec(ctx, `
+		update marketplace.orders set recipient_customer_id = $1
+		where id = any($2) and recipient_customer_id is null`, customerID, ids)
 	return err
 }
 
