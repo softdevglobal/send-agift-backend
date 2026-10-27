@@ -2,11 +2,16 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"myapp/internal/models"
 	"myapp/internal/repository"
 )
 
@@ -215,4 +220,78 @@ func TestMembershipPublishDirectly(t *testing.T) {
 	if status != "retired" {
 		t.Fatalf("the replaced version should be retired, is %s", status)
 	}
+}
+
+// A paid Stripe membership is confirmed by asking Stripe, even when no
+// webhook arrives: the page Stripe returns to syncs it, and the bonus of a
+// package credited on payment lands once, however often it is synced.
+func TestMembershipSyncFromStripe(t *testing.T) {
+	f := newCPFixture(t, "PH")
+	var sessionID, localID string
+	now := time.Now().Unix()
+	stripe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/checkout/sessions":
+			_ = r.ParseForm()
+			sessionID = "cs_test_" + uuid.NewString()[:8]
+			localID = r.PostForm.Get("subscription_data[metadata][membership_subscription_id]")
+			_, _ = fmt.Fprintf(w, `{"id":%q,"url":"https://checkout.stripe.test/%s"}`, sessionID, sessionID)
+		case r.Method == http.MethodGet && r.URL.Path == "/checkout/sessions/"+sessionID:
+			_, _ = fmt.Fprintf(w, `{"id":%q,"status":"complete","payment_status":"paid","subscription":"sub_1","customer":"cus_1"}`, sessionID)
+		case r.Method == http.MethodGet && r.URL.Path == "/subscriptions/sub_1":
+			_, _ = fmt.Fprintf(w, `{"id":"sub_1","customer":"cus_1","status":"active",
+				"metadata":{"kind":"membership","membership_subscription_id":%q},
+				"items":{"data":[{"current_period_end":%d}]}}`, localID, now+30*86400)
+		case r.Method == http.MethodGet && r.URL.Path == "/invoices":
+			if r.URL.Query().Get("subscription") != "sub_1" {
+				http.Error(w, "bad subscription", 400)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"data":[{"id":"in_1","status":"paid","amount_paid":999,"currency":"php",
+				"payment_intent":"pi_1","status_transitions":{"paid_at":%d},
+				"parent":{"subscription_details":{"subscription":"sub_1",
+				  "metadata":{"kind":"membership","membership_subscription_id":%q}}},
+				"lines":{"data":[{"period":{"start":%d,"end":%d}}]}}]}`, now, localID, now-60, now+30*86400)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer stripe.Close()
+	client := NewStripeClient("sk_test_x")
+	client.base = stripe.URL
+	f.cp = NewCompetitionPointsService(f.repo, f.comps, client, CompetitionPointsConfig{
+		WebURL: "http://localhost:5173", QuoteSecret: "test-quote-secret", HoldTTL: 10 * time.Minute,
+		RestoreWindow: time.Hour,
+	})
+
+	o, err := f.cp.CreateOffer(f.ctx, f.adminA, OfferInput{
+		TierCode: "sync-" + uuid.NewString()[:6], CountryID: f.country.String(), Name: "Plus", Currency: f.currency,
+		PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1, MemberBonusPoints: 1000, TermsVersion: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.cp.OfferTransition(f.ctx, f.adminA, o.ID, "publish"); err != nil {
+		t.Fatal(err)
+	}
+	member := f.customer()
+	res, err := f.cp.Join(f.ctx, member, "web", JoinInput{OfferID: o.ID, RenewalConsent: true, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if !strings.Contains(res.CheckoutURL, sessionID) {
+		t.Fatalf("checkout url %s", res.CheckoutURL)
+	}
+	for i := 0; i < 2; i++ {
+		st, err := f.cp.SyncMembership(f.ctx, member)
+		if err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		if st.CurrentPeriod == nil || st.State != models.MembershipBonusUnlocked {
+			t.Fatalf("after sync %d: %s %+v", i, st.State, st.CurrentPeriod)
+		}
+		if got := f.available(member); got != 1000 {
+			t.Fatalf("after sync %d: %d points, want 1000", i, got)
+		}
+	}
+	f.reconciled()
 }

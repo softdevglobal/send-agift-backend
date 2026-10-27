@@ -120,6 +120,21 @@ func (c *StripeClient) GetSubscription(ctx context.Context, id string) (*StripeS
 	return &sub, nil
 }
 
+// PaidInvoices lists a subscription's most recent paid invoices.
+func (c *StripeClient) PaidInvoices(ctx context.Context, subscriptionID string) ([]StripeInvoice, error) {
+	var out struct {
+		Data []StripeInvoice `json:"data"`
+	}
+	q := url.Values{}
+	q.Set("subscription", subscriptionID)
+	q.Set("status", "paid")
+	q.Set("limit", "5")
+	if err := c.do(ctx, http.MethodGet, "/invoices", q, "", &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
 // StripeInvoice is the part of a paid invoice that becomes a paid period.
 // Field locations differ between API versions, so both are read.
 type StripeInvoice struct {

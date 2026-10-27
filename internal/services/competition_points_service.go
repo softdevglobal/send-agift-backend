@@ -434,7 +434,7 @@ func (s *CompetitionPointsService) Join(ctx context.Context, customerID uuid.UUI
 			Currency:  offer.Currency, PriceMinor: offer.PriceMinor,
 			IntervalUnit: offer.IntervalUnit, IntervalCount: offer.IntervalCount,
 			CustomerEmail: ev.Email,
-			SuccessURL:    s.webURL + "/account/membership?checkout=success",
+			SuccessURL:    s.webURL + "/account/competition-points?welcome=membership",
 			CancelURL:     s.webURL + "/membership?checkout=cancelled",
 		}, "membership-checkout-"+sub.ID.String())
 		if err != nil {
@@ -697,35 +697,7 @@ func (s *CompetitionPointsService) HandleStripeEvent(ctx context.Context, ev *St
 		if err != nil {
 			return false, err
 		}
-		meta := inv.Metadata()
-		if inv.SubscriptionID() == "" || (meta["kind"] != "" && meta["kind"] != membershipCheckoutKind) {
-			return false, nil
-		}
-		start, end, ok := inv.Period()
-		if !ok || inv.Status != "paid" {
-			return true, nil
-		}
-		paidAt := s.now().UTC()
-		if t := unixTime(inv.StatusTransitions.PaidAt); t != nil {
-			paidAt = *t
-		}
-		payment := nonEmpty(inv.PaymentIntent)
-		if payment == nil {
-			payment = nonEmpty(inv.Charge)
-		}
-		in := repository.PaidInvoice{
-			Provider: "stripe", ProviderSubscriptionID: inv.SubscriptionID(), InvoiceID: inv.ID, PaymentID: payment,
-			PeriodStart: start, PeriodEnd: end, AmountMinor: inv.AmountPaid, Currency: strings.ToUpper(inv.Currency),
-			PaidAt: paidAt,
-		}
-		if id, err := uuid.Parse(meta["membership_subscription_id"]); err == nil {
-			in.LocalID = &id
-		}
-		_, err = s.repo.RecordPaidPeriod(ctx, in)
-		if errors.Is(err, repository.ErrSubscriptionNotFound) {
-			return meta["kind"] == membershipCheckoutKind, nil // not one of ours
-		}
-		return err == nil, err
+		return s.recordStripeInvoice(ctx, inv, nil)
 	case "charge.refunded", "charge.dispute.created":
 		var ch struct {
 			ID            string `json:"id"`
@@ -756,6 +728,132 @@ func (s *CompetitionPointsService) HandleStripeEvent(ctx context.Context, ev *St
 		return false, nil
 	}
 	return false, nil
+}
+
+// recordStripeInvoice turns a paid membership invoice into a paid period.
+// handled is false for an invoice that is not a membership's.
+func (s *CompetitionPointsService) recordStripeInvoice(ctx context.Context, inv *StripeInvoice, localID *uuid.UUID) (handled bool, err error) {
+	meta := inv.Metadata()
+	if inv.SubscriptionID() == "" || (meta["kind"] != "" && meta["kind"] != membershipCheckoutKind) {
+		return false, nil
+	}
+	start, end, ok := inv.Period()
+	if !ok || inv.Status != "paid" {
+		return true, nil
+	}
+	paidAt := s.now().UTC()
+	if t := unixTime(inv.StatusTransitions.PaidAt); t != nil {
+		paidAt = *t
+	}
+	payment := nonEmpty(inv.PaymentIntent)
+	if payment == nil {
+		payment = nonEmpty(inv.Charge)
+	}
+	in := repository.PaidInvoice{
+		Provider: "stripe", ProviderSubscriptionID: inv.SubscriptionID(), InvoiceID: inv.ID, PaymentID: payment,
+		PeriodStart: start, PeriodEnd: end, AmountMinor: inv.AmountPaid, Currency: strings.ToUpper(inv.Currency),
+		PaidAt: paidAt, LocalID: localID,
+	}
+	if id, err := uuid.Parse(meta["membership_subscription_id"]); err == nil {
+		in.LocalID = &id
+	}
+	_, err = s.repo.RecordPaidPeriod(ctx, in)
+	if errors.Is(err, repository.ErrSubscriptionNotFound) {
+		return meta["kind"] == membershipCheckoutKind, nil // not one of ours
+	}
+	return err == nil, err
+}
+
+// SyncMembership is POST /customers/me/membership/sync: the page Stripe
+// returns to asks Stripe directly whether the payment went through, so a
+// paid membership never waits on a webhook.
+func (s *CompetitionPointsService) SyncMembership(ctx context.Context, customerID uuid.UUID) (*models.MembershipStatus, error) {
+	if s.stripe != nil {
+		subs, err := s.repo.StripeSubscriptionsToSync(ctx, &customerID, 1)
+		if err != nil {
+			return nil, err
+		}
+		for _, sub := range subs {
+			if err := s.syncStripeSubscription(ctx, sub); err != nil {
+				log.Printf("membership sync %s: %v", sub.ID, err)
+			}
+		}
+	}
+	return s.Status(ctx, customerID)
+}
+
+// syncStripeMemberships is the background job's check for memberships whose
+// webhooks did not arrive.
+func (s *CompetitionPointsService) syncStripeMemberships(ctx context.Context) error {
+	if s.stripe == nil {
+		return nil
+	}
+	subs, err := s.repo.StripeSubscriptionsToSync(ctx, nil, 20)
+	if err != nil {
+		return err
+	}
+	for _, sub := range subs {
+		if err := s.syncStripeSubscription(ctx, sub); err != nil {
+			log.Printf("membership sync %s: %v", sub.ID, err)
+		}
+		if err := s.repo.TouchSubscription(ctx, sub.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncStripeSubscription reads one membership's checkout, subscription and
+// paid invoices from Stripe and applies them, exactly as their webhooks
+// would. Applying them twice changes nothing.
+func (s *CompetitionPointsService) syncStripeSubscription(ctx context.Context, sub repository.SubscriptionSync) error {
+	providerSub := ""
+	if sub.ProviderSubscriptionID != nil {
+		providerSub = *sub.ProviderSubscriptionID
+	}
+	if providerSub == "" {
+		if sub.CheckoutSessionID == nil {
+			return nil
+		}
+		cs, err := s.stripe.GetCheckoutSession(ctx, *sub.CheckoutSessionID)
+		if err != nil {
+			return err
+		}
+		if cs.Status == "expired" {
+			return s.repo.AbandonSubscription(ctx, sub.ID)
+		}
+		if cs.Subscription == "" {
+			return nil // not paid yet
+		}
+		providerSub = cs.Subscription
+		if _, err := s.repo.ApplyProviderSubscription(ctx, repository.ProviderSubscriptionUpdate{
+			Provider: "stripe", ProviderSubscriptionID: providerSub, LocalID: &sub.ID, CheckoutSessionID: &cs.ID,
+			ProviderCustomerID: nonEmpty(cs.Customer), ProviderStatus: "incomplete",
+		}); err != nil {
+			return err
+		}
+	}
+	stripeSub, err := s.stripe.GetSubscription(ctx, providerSub)
+	if err != nil {
+		return err
+	}
+	if stripeSub.Metadata == nil {
+		stripeSub.Metadata = map[string]string{}
+	}
+	stripeSub.Metadata["membership_subscription_id"] = sub.ID.String()
+	if _, err := s.applyStripeSubscription(ctx, stripeSub); err != nil {
+		return err
+	}
+	invoices, err := s.stripe.PaidInvoices(ctx, providerSub)
+	if err != nil {
+		return err
+	}
+	for i := range invoices {
+		if _, err := s.recordStripeInvoice(ctx, &invoices[i], &sub.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *CompetitionPointsService) applyStripeSubscription(ctx context.Context, sub *StripeSubscription) (*models.Subscription, error) {
@@ -1055,6 +1153,9 @@ func (s *CompetitionPointsService) RunOnce(ctx context.Context) (*models.CPRunRe
 	res, err := s.repo.RunCompetitionPoints(ctx, 200, s.EarningGate, s.restoreWindow)
 	if err != nil {
 		return res, err
+	}
+	if err := s.syncStripeMemberships(ctx); err != nil {
+		log.Printf("competition points: membership sync: %v", err)
 	}
 	if err := s.enforceRenewals(ctx); err != nil {
 		log.Printf("competition points: renewal check: %v", err)

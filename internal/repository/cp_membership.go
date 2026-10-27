@@ -425,6 +425,55 @@ func (r *CompetitionPointsRepository) GetSubscription(ctx context.Context, id uu
 	return s, err
 }
 
+// SubscriptionSync is a Stripe membership whose state is read back from
+// Stripe, in case a webhook did not arrive.
+type SubscriptionSync struct {
+	ID                     uuid.UUID
+	CheckoutSessionID      *string
+	ProviderSubscriptionID *string
+}
+
+// StripeSubscriptionsToSync lists the memberships to check with Stripe: the
+// customer's live one when customerID is set; otherwise checkouts started in
+// the last day and not yet confirmed, and memberships whose paid period has
+// not been recorded or has run out.
+func (r *CompetitionPointsRepository) StripeSubscriptionsToSync(ctx context.Context, customerID *uuid.UUID, limit int) ([]SubscriptionSync, error) {
+	rows, err := r.db.Query(ctx, `
+		select s.id, s.checkout_session_id, s.provider_subscription_id
+		from membership.subscriptions s
+		where s.provider = 'stripe' and s.status in ('incomplete', 'active', 'past_due', 'cancelling')
+		  and case when $1::uuid is not null then s.customer_id = $1
+		      else s.updated_at < now() - interval '1 minute' and (
+		           (s.status = 'incomplete' and s.created_at > now() - interval '25 hours')
+		        or (s.status <> 'incomplete' and not exists (
+		               select 1 from membership.paid_periods p where p.subscription_id = s.id))
+		        or (s.status <> 'incomplete' and s.current_period_end <= now()
+		            and s.current_period_end > now() - interval '7 days'))
+		      end
+		order by s.updated_at
+		limit $2`, customerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SubscriptionSync
+	for rows.Next() {
+		var s SubscriptionSync
+		if err := rows.Scan(&s.ID, &s.CheckoutSessionID, &s.ProviderSubscriptionID); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// TouchSubscription marks a membership as just checked, so the sweep moves on
+// to others.
+func (r *CompetitionPointsRepository) TouchSubscription(ctx context.Context, id uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `update membership.subscriptions set updated_at = now() where id = $1`, id)
+	return err
+}
+
 // SubscriptionRefs are the provider ids needed to manage a membership.
 type SubscriptionRefs struct {
 	ID                     uuid.UUID

@@ -189,6 +189,21 @@ func (h *CompetitionPointsHandler) TestPay(w http.ResponseWriter, r *http.Reques
 	utils.JSON(w, http.StatusOK, out)
 }
 
+// SyncMembership handles POST /customers/me/membership/sync: after Stripe's
+// checkout, confirms the payment with Stripe and returns the membership.
+func (h *CompetitionPointsHandler) SyncMembership(w http.ResponseWriter, r *http.Request) {
+	id, ok := customerUUID(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.cp.SyncMembership(r.Context(), id)
+	if err != nil {
+		h.writeError(w, err, "could not check the membership payment")
+		return
+	}
+	utils.JSON(w, http.StatusOK, out)
+}
+
 // Wallet handles GET /customers/me/competition-points.
 func (h *CompetitionPointsHandler) Wallet(w http.ResponseWriter, r *http.Request) {
 	id, ok := customerUUID(w, r)
