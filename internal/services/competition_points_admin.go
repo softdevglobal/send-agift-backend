@@ -178,6 +178,12 @@ func (s *CompetitionPointsService) UpdateOffer(ctx context.Context, admin AdminA
 // OfferTransition moves an offer version: submit, approve (publish),
 // return_to_draft, suspend, resume or retire.
 func (s *CompetitionPointsService) OfferTransition(ctx context.Context, admin AdminActor, id uuid.UUID, action string) (*models.PlanOffer, error) {
+	// A Super Admin publishes a membership package directly: no second
+	// approver is needed for it.
+	if action == "publish" {
+		out, err := s.repo.PublishOffer(ctx, id, admin.ID, admin.cpAudit("membership_offer.publish", "membership_offer"))
+		return out, adminVersionErr(err)
+	}
 	to, err := transitionTarget(action)
 	if err != nil {
 		return nil, err
@@ -203,7 +209,7 @@ func transitionTarget(action string) (string, error) {
 	case "retire":
 		return models.VersionRetired, nil
 	}
-	return "", invalidCP("action must be submit, approve, return_to_draft, suspend, resume or retire")
+	return "", invalidCP("action must be publish, submit, approve, return_to_draft, suspend, resume or retire")
 }
 
 // ─── Reward policies ─────────────────────────────────────────────────────

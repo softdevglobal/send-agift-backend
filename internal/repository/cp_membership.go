@@ -226,6 +226,48 @@ func (r *CompetitionPointsRepository) TransitionOffer(ctx context.Context, id uu
 	return out, err
 }
 
+// PublishOffer puts a draft straight on sale, with no second approver. It is
+// for a Super Admin (the route already requires one and a fresh password), so
+// the two-person rule of the submit-and-approve path does not apply. The
+// version it replaces is retired, and from here the version is immutable.
+func (r *CompetitionPointsRepository) PublishOffer(ctx context.Context, id, adminID uuid.UUID, audit models.AuditEntry) (*models.PlanOffer, error) {
+	var out *models.PlanOffer
+	err := r.inTx(ctx, func(tx pgx.Tx) error {
+		o, err := getOffer(ctx, tx, id, true)
+		if err != nil {
+			return err
+		}
+		if o.Status != models.VersionDraft {
+			return ErrVersionNotDraft
+		}
+		if _, err := tx.Exec(ctx, `update membership.plan_offers
+			set status = 'retired', updated_at = now()
+			where tier_code = $1 and country_id = $2 and status in ('published', 'suspended') and id <> $3`,
+			o.TierCode, o.CountryID, id); err != nil {
+			return mapVersionErr(err)
+		}
+		if _, err := tx.Exec(ctx, `update membership.plan_offers
+			set status = 'published', approved_by_admin_id = $2, published_at = now(),
+			    effective_from = coalesce(effective_from, now()), updated_at = now()
+			where id = $1`, id, adminID); err != nil {
+			return mapVersionErr(err)
+		}
+		saved, err := getOffer(ctx, tx, id, false)
+		if err != nil {
+			return err
+		}
+		audit.EntityID = &id
+		audit.Before = map[string]any{"status": o.Status}
+		audit.After = map[string]any{"status": saved.Status, "published_directly": true}
+		if err := insertAudit(ctx, tx, audit); err != nil {
+			return err
+		}
+		out = saved
+		return nil
+	})
+	return out, err
+}
+
 // DeleteOfferDraft removes a draft that was never submitted.
 func (r *CompetitionPointsRepository) DeleteOfferDraft(ctx context.Context, id uuid.UUID, audit models.AuditEntry) error {
 	return r.inTx(ctx, func(tx pgx.Tx) error {

@@ -153,3 +153,53 @@ func TestMemberDiscountOfferCap(t *testing.T) {
 		t.Fatalf("the database must refuse changing a submitted offer's discount")
 	}
 }
+
+// A Super Admin can publish a membership package alone: no second approver.
+func TestMembershipPublishDirectly(t *testing.T) {
+	f := newCPFixture(t, "PH")
+	mk := func(name string) *OfferInput {
+		return &OfferInput{
+			TierCode: "direct-" + uuid.NewString()[:6], CountryID: f.country.String(), Name: name, Currency: f.currency,
+			PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1, TermsVersion: "v1",
+		}
+	}
+	in := mk("Direct")
+	o, err := f.cp.CreateOffer(f.ctx, f.adminA, *in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := f.cp.OfferTransition(f.ctx, f.adminA, o.ID, "publish")
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if pub.Status != "published" || pub.PublishedAt == nil || pub.ApprovedByAdminID == nil {
+		t.Fatalf("published offer: %+v", pub)
+	}
+	// It is on sale right away, and from then on it cannot be edited.
+	list, err := f.repo.PublishedOffers(f.ctx, f.country)
+	if err != nil || len(list) == 0 {
+		t.Fatalf("on sale: %v %v", list, err)
+	}
+	if _, err := f.cp.UpdateOffer(f.ctx, f.adminA, o.ID, *in); err == nil {
+		t.Fatalf("a published offer must be locked")
+	}
+	// Only a draft can be published this way.
+	if _, err := f.cp.OfferTransition(f.ctx, f.adminA, o.ID, "publish"); err == nil {
+		t.Fatalf("publishing twice must be refused")
+	}
+	// A new version of the same tier replaces it.
+	next, err := f.cp.CreateOffer(f.ctx, f.adminA, OfferInput{
+		TierCode: o.TierCode, CountryID: f.country.String(), Name: "Direct v2", Currency: f.currency,
+		PriceMinor: 1299, IntervalUnit: "month", IntervalCount: 1, TermsVersion: "v1"})
+	if err != nil || next.Version != 2 {
+		t.Fatalf("v2: %+v %v", next, err)
+	}
+	if _, err := f.cp.OfferTransition(f.ctx, f.adminA, next.ID, "publish"); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	f.scan(&status, `select status from membership.plan_offers where id = $1`, o.ID)
+	if status != "retired" {
+		t.Fatalf("the replaced version should be retired, is %s", status)
+	}
+}
