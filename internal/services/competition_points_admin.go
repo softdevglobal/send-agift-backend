@@ -77,9 +77,12 @@ type OfferInput struct {
 	// MemberDiscountBPS is the percentage off the gift price members get, in
 	// basis points (100 = 1%). Funded from SendAGift's commission, so it
 	// cannot be more than that.
-	MemberDiscountBPS int      `json:"member_discount_bps"`
-	GiftBenefits      []string `json:"gift_benefits"`
-	TermsVersion      string   `json:"terms_version"`
+	MemberDiscountBPS int `json:"member_discount_bps"`
+	// BonusTrigger is when the member bonus is credited: payment (the
+	// default) or first_gift.
+	BonusTrigger string   `json:"bonus_trigger"`
+	GiftBenefits []string `json:"gift_benefits"`
+	TermsVersion string   `json:"terms_version"`
 }
 
 var tierCodeRe = regexp.MustCompile(`^[a-z0-9_-]{2,40}$`)
@@ -95,6 +98,7 @@ func (in OfferInput) toModel(adminID uuid.UUID, platformFeeBPS int) (*models.Pla
 		Name: strings.TrimSpace(in.Name), Currency: strings.ToUpper(strings.TrimSpace(in.Currency)),
 		PriceMinor: in.PriceMinor, IntervalUnit: in.IntervalUnit, IntervalCount: in.IntervalCount,
 		MemberBonusPoints: in.MemberBonusPoints, MemberDiscountBPS: in.MemberDiscountBPS,
+		BonusTrigger:     strings.TrimSpace(in.BonusTrigger),
 		TermsVersion:     strings.TrimSpace(in.TermsVersion),
 		CreatedByAdminID: &adminID,
 	}
@@ -104,7 +108,12 @@ func (in OfferInput) toModel(adminID uuid.UUID, platformFeeBPS int) (*models.Pla
 			o.Description = &d
 		}
 	}
+	if o.BonusTrigger == "" {
+		o.BonusTrigger = models.BonusTriggerPayment
+	}
 	switch {
+	case o.BonusTrigger != models.BonusTriggerPayment && o.BonusTrigger != models.BonusTriggerFirstGift:
+		return nil, invalidCP("bonus_trigger must be payment or first_gift")
 	case !tierCodeRe.MatchString(o.TierCode):
 		return nil, invalidCP("tier_code must be 2 to 40 lowercase letters, digits, - or _")
 	case o.Name == "" || len(o.Name) > 80:
@@ -182,14 +191,78 @@ func (s *CompetitionPointsService) OfferTransition(ctx context.Context, admin Ad
 	// approver is needed for it.
 	if action == "publish" {
 		out, err := s.repo.PublishOffer(ctx, id, admin.ID, admin.cpAudit("membership_offer.publish", "membership_offer"))
-		return out, adminVersionErr(err)
+		if err != nil {
+			return nil, adminVersionErr(err)
+		}
+		return out, s.openMembershipMarket(ctx, admin, out)
 	}
 	to, err := transitionTarget(action)
 	if err != nil {
 		return nil, err
 	}
 	out, err := s.repo.TransitionOffer(ctx, id, to, admin.ID, admin.cpAudit("membership_offer."+action, "membership_offer"))
-	return out, adminVersionErr(err)
+	if err != nil {
+		return nil, adminVersionErr(err)
+	}
+	if out.Status == models.VersionPublished && admin.SuperAdmin {
+		return out, s.openMembershipMarket(ctx, admin, out)
+	}
+	return out, nil
+}
+
+// openMembershipMarket records the approvals a published package needs to be
+// on sale in its country: membership sales on the web, renewals, and gift
+// points earning so the member bonus can be awarded. A Super Admin publishing
+// the package is the approval; one that already covers an operation is kept.
+func (s *CompetitionPointsService) openMembershipMarket(ctx context.Context, admin AdminActor, o *models.PlanOffer) error {
+	provider := s.membershipProvider()
+	if provider == "" {
+		// No payment provider is configured, so nothing could be sold anyway.
+		return nil
+	}
+	existing, err := s.repo.ListApprovals(ctx)
+	if err != nil {
+		return err
+	}
+	needs := []struct {
+		op, channel string
+		provider    *string
+	}{
+		{models.OpMembershipSale, "web", &provider},
+		{models.OpMembershipRenewal, "any", &provider},
+		{models.OpGiftPointsEarning, "any", nil},
+	}
+	now := s.now()
+	expires := now.AddDate(1, 0, 0)
+	evidence := fmt.Sprintf("Opened by publishing membership package %q (%s v%d)", o.Name, o.TierCode, o.Version)
+	for _, n := range needs {
+		if approvalCovers(existing, n.op, o.CountryID, n.channel, n.provider) {
+			continue
+		}
+		if _, err := s.RequestApproval(ctx, admin, ApprovalInput{
+			Operation: n.op, CountryID: o.CountryID.String(), Channel: n.channel, Provider: n.provider,
+			EvidenceRef: evidence, ApproveNow: true, EffectiveFrom: &now, ExpiresAt: &expires,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func approvalCovers(list []models.CapabilityApproval, op string, country uuid.UUID, channel string, provider *string) bool {
+	for _, a := range list {
+		if !a.Current || a.Operation != op || a.CountryID != country {
+			continue
+		}
+		if a.Channel != "any" && a.Channel != channel {
+			continue
+		}
+		if provider != nil && (a.Provider == nil || *a.Provider != *provider) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (s *CompetitionPointsService) DeleteOffer(ctx context.Context, admin AdminActor, id uuid.UUID) error {
@@ -328,14 +401,17 @@ func (s *CompetitionPointsService) PreviewPolicy(in PolicyInput, eligibleMinor, 
 
 // ApprovalInput is a request to record evidence for one operation.
 type ApprovalInput struct {
-	Operation     string     `json:"operation"`
-	CountryID     string     `json:"country_id"`
-	Channel       string     `json:"channel"`
-	Provider      *string    `json:"provider"`
-	PointSource   *string    `json:"point_source"`
-	MinAge        *int       `json:"min_age"`
-	EvidenceRef   string     `json:"evidence_ref"`
-	Notes         *string    `json:"notes"`
+	Operation   string  `json:"operation"`
+	CountryID   string  `json:"country_id"`
+	Channel     string  `json:"channel"`
+	Provider    *string `json:"provider"`
+	PointSource *string `json:"point_source"`
+	MinAge      *int    `json:"min_age"`
+	EvidenceRef string  `json:"evidence_ref"`
+	Notes       *string `json:"notes"`
+	// ApproveNow records the approval and approves it in the same step. A
+	// Super Admin only.
+	ApproveNow    bool       `json:"approve_now"`
 	EffectiveFrom *time.Time `json:"effective_from"`
 	ExpiresAt     *time.Time `json:"expires_at"`
 }
@@ -401,7 +477,13 @@ func (s *CompetitionPointsService) RequestApproval(ctx context.Context, admin Ad
 		PointSource: in.PointSource, MinAge: in.MinAge, EvidenceRef: evidence, Notes: in.Notes,
 		EffectiveFrom: from, ExpiresAt: *in.ExpiresAt, RequestedByAdminID: admin.ID,
 	}, admin.cpAudit("capability_approval.request", "capability_approval"))
-	return out, adminVersionErr(err)
+	if err != nil {
+		return nil, adminVersionErr(err)
+	}
+	if in.ApproveNow {
+		return s.DecideApproval(ctx, admin, out.ID, true)
+	}
+	return out, nil
 }
 
 func (s *CompetitionPointsService) DecideApproval(ctx context.Context, admin AdminActor, id uuid.UUID, approve bool) (*models.CapabilityApproval, error) {
@@ -409,7 +491,9 @@ func (s *CompetitionPointsService) DecideApproval(ctx context.Context, admin Adm
 	if approve {
 		action = "capability_approval.approve"
 	}
-	out, err := s.repo.DecideApproval(ctx, id, admin.ID, approve, admin.cpAudit(action, "capability_approval"))
+	// Approvals are Super Admin only, and a Super Admin may approve one they
+	// recorded themselves.
+	out, err := s.repo.DecideApproval(ctx, id, admin.ID, approve, admin.SuperAdmin, admin.cpAudit(action, "capability_approval"))
 	return out, adminVersionErr(err)
 }
 

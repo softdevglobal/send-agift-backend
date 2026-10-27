@@ -70,6 +70,12 @@ const (
 	LotSourceCompensation = "compensation"
 )
 
+// When a membership's bonus is credited.
+const (
+	BonusTriggerPayment   = "payment"
+	BonusTriggerFirstGift = "first_gift"
+)
+
 // PlanOffer maps to membership.plan_offers: one sellable version of a tier
 // in one market.
 type PlanOffer struct {
@@ -87,7 +93,11 @@ type PlanOffer struct {
 	MemberBonusPoints int64     `json:"member_bonus_points"`
 	// MemberDiscountBPS is the percentage off the gift price a member gets,
 	// in basis points (100 = 1%), funded from SendAGift's commission.
-	MemberDiscountBPS  int             `json:"member_discount_bps"`
+	MemberDiscountBPS int `json:"member_discount_bps"`
+	// BonusTrigger is when the member bonus is credited: "payment" (once
+	// the period is paid for) or "first_gift" (after the first qualifying
+	// completed gift in the period).
+	BonusTrigger       string          `json:"bonus_trigger"`
 	GiftBenefits       json.RawMessage `json:"gift_benefits"`
 	TermsVersion       string          `json:"terms_version"`
 	Status             string          `json:"status"`

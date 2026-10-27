@@ -58,7 +58,10 @@ All under `/api/v1/admin/competition-points`.
    `POST /policies/{id}/approve`, which publishes it. `POST /policies/preview`
    shows the ordinary and member scenarios before you publish.
 3. **Membership offer:** `POST /offers` with the tier, price, the true interval
-   and the *extra* bonus quantity, then submit and approve the same way.
+   and the *extra* bonus quantity, then submit and approve the same way. A
+   Super Admin can instead publish it directly, which also records and
+   approves the membership sales, renewal and gift points earning approvals
+   for that country, unless current ones already cover them.
 4. **A competition on competition points:** create or edit it with
    `"points_unit": "competition"` and `"entry_cost_points": N`. Optionally set
    `"cp_allowed_sources"`. Only skill games won by the best verified score are

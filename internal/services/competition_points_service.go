@@ -591,9 +591,16 @@ func (s *CompetitionPointsService) Status(ctx context.Context, customerID uuid.U
 		case slot == nil:
 			st.State, st.Message, st.NextAction = models.MembershipAwaitingGift,
 				"Your membership is active. Gifts earn ordinary points.", "send_gift"
+		case (slot.Status == models.BonusAwarded || slot.Status == models.BonusRestored) && slot.QualifyingGiftID == nil:
+			st.State, st.Message, st.NextAction = models.MembershipBonusUnlocked,
+				fmt.Sprintf("Your member bonus of %d competition points for this period is in your account.", slot.BonusPoints),
+				"view_points"
 		case slot.Status == models.BonusAwarded || slot.Status == models.BonusRestored:
 			st.State, st.Message, st.NextAction = models.MembershipBonusUnlocked,
 				"Member bonus awarded for this period. Further gifts earn ordinary points.", "view_points"
+		case slot.Status == models.BonusReversed && slot.QualifyingGiftID == nil:
+			st.State, st.Message, st.NextAction = models.MembershipBonusReversed,
+				"The payment for this period was refunded, so its bonus was taken back.", "contact_support"
 		case slot.Status == models.BonusReversed:
 			st.State, st.Message, st.NextAction = models.MembershipBonusReversed,
 				"The gift that unlocked this period's bonus was refunded, so the bonus was taken back.", "contact_support"

@@ -188,7 +188,8 @@ func (f *cpFixture) offer(bonus int64) *models.PlanOffer {
 	o, err := f.cp.CreateOffer(f.ctx, f.adminA, OfferInput{
 		TierCode: "plus-" + uuid.NewString()[:6], CountryID: f.country.String(), Name: "Plus",
 		Currency: f.currency, PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1,
-		MemberBonusPoints: bonus, TermsVersion: "v1", GiftBenefits: []string{"Free delivery"},
+		MemberBonusPoints: bonus, BonusTrigger: models.BonusTriggerFirstGift, TermsVersion: "v1",
+		GiftBenefits: []string{"Free delivery"},
 	})
 	if err != nil {
 		f.t.Fatalf("offer: %v", err)
@@ -296,6 +297,83 @@ func (f *cpFixture) reconciled() {
 }
 
 // ─── Rewards ─────────────────────────────────────────────────────────────
+
+// A package whose bonus is credited on payment: each paid period puts its
+// bonus in the account at once, unused points carry into the next period,
+// and a refunded payment takes back what is unused.
+func TestCompetitionPointsBonusOnPayment(t *testing.T) {
+	f := newCPFixture(t, "NZ")
+	o, err := f.cp.CreateOffer(f.ctx, f.adminA, OfferInput{
+		TierCode: "pay-" + uuid.NewString()[:6], CountryID: f.country.String(), Name: "Plus",
+		Currency: f.currency, PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1,
+		MemberBonusPoints: 1000, TermsVersion: "v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.BonusTrigger != models.BonusTriggerPayment {
+		t.Fatalf("the default should be payment, is %q", o.BonusTrigger)
+	}
+	if o, err = f.cp.OfferTransition(f.ctx, f.adminA, o.ID, "publish"); err != nil {
+		t.Fatal(err)
+	}
+	member := f.customer()
+
+	// Checkout started but not paid: not a member, nothing credited.
+	if _, err := f.cp.Join(f.ctx, member, "web", JoinInput{
+		OfferID: o.ID, RenewalConsent: true, IdempotencyKey: uuid.NewString()}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if got := f.available(member); got != 0 {
+		t.Fatalf("an unpaid checkout credited %d", got)
+	}
+	st, err := f.cp.Status(f.ctx, member)
+	if err != nil || st.State != models.MembershipPaymentPending || st.CurrentPeriod != nil {
+		t.Fatalf("unpaid status: %+v %v", st, err)
+	}
+
+	// Paid: the bonus is in the account straight away.
+	if _, err := f.cp.TestPay(f.ctx, member); err != nil {
+		t.Fatalf("pay: %v", err)
+	}
+	if got := f.available(member); got != 1000 {
+		t.Fatalf("after payment: %d, want 1000", got)
+	}
+	if st, _ = f.cp.Status(f.ctx, member); st.State != models.MembershipBonusUnlocked {
+		t.Fatalf("paid status: %s", st.State)
+	}
+	// Spend 800 of it, then renew: 200 left over plus the new 1000.
+	f.exec(`
+		with t as (insert into points.cp_transactions (operation_key, kind, customer_id, actor_type)
+		           values ('test-spend-' || $1::uuid::text, 'capture', $1::uuid, 'system') returning id),
+		     l as (update points.cp_lots set available = available - 800, consumed = consumed + 800
+		           where customer_id = $1 returning id)
+		insert into points.cp_postings (transaction_id, lot_id, bucket, delta)
+		select t.id, l.id, b.bucket, b.delta
+		from t, l, (values ('available', -800::bigint), ('consumed', 800::bigint)) b(bucket, delta)`, member)
+	if _, err := f.cp.TestPay(f.ctx, member); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if got := f.available(member); got != 1200 {
+		t.Fatalf("after renewal: %d, want 1200 (200 carried over + 1000)", got)
+	}
+	// Paying the same invoice twice credits nothing more.
+	if n, total := f.lots(member, models.LotSourceMemberBonus); n != 2 || total != 2000 {
+		t.Fatalf("bonus lots %d/%d", n, total)
+	}
+
+	// The renewal's payment is refunded: its unused 1000 are taken back.
+	var invoice string
+	f.scan(&invoice, `select provider_invoice_id from membership.paid_periods
+		where customer_id = $1 order by period_start desc limit 1`, member)
+	if _, err := f.repo.SetPeriodPaymentStatus(f.ctx, "test", invoice, "refunded"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.available(member); got != 200 {
+		t.Fatalf("after refund: %d, want 200", got)
+	}
+	f.reconciled()
+}
 
 // R01, R02, R03, R04, R08: ordinary points for everyone, one bonus per
 // paid period, no points for paying alone, nothing twice.
@@ -819,10 +897,23 @@ func TestCompetitionPointsControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.cp.DecideApproval(f.ctx, f.adminA, a.ID, true)
+	// A Super Admin may approve what they recorded themselves; an ordinary
+	// admin may not.
+	_, err = f.cp.DecideApproval(f.ctx, AdminActor{ID: f.adminA.ID}, a.ID, true)
 	wantCP(t, err, "SECOND_APPROVER_REQUIRED")
-	if _, err := f.cp.DecideApproval(f.ctx, f.adminB, a.ID, true); err != nil {
+	if _, err := f.cp.DecideApproval(f.ctx, f.adminA, a.ID, true); err != nil {
 		t.Fatal(err)
+	}
+	var self bool
+	f.scan(&self, `select self_approved from core.capability_approvals where id = $1`, a.ID)
+	if !self {
+		t.Fatalf("a self-approved record should say so")
+	}
+	// Recorded and approved in one step.
+	one, err := f.cp.RequestApproval(f.ctx, f.adminA, ApprovalInput{Operation: models.OpCompetitionEntry,
+		CountryID: f.country.String(), Channel: "web", EvidenceRef: "REF2", ExpiresAt: &expires, ApproveNow: true})
+	if err != nil || one.Status != "active" || !one.Current {
+		t.Fatalf("approve now: %+v %v", one, err)
 	}
 	if _, err := f.cp.OfferTransition(f.ctx, f.adminB, o.ID, "approve"); err != nil {
 		t.Fatal(err)

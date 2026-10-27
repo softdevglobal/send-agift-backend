@@ -175,9 +175,10 @@ func (r *CompetitionPointsRepository) RequestApproval(ctx context.Context, a *mo
 	return out, err
 }
 
-// DecideApproval approves or rejects a pending approval. The approver must
-// be a different admin from the one who requested it.
-func (r *CompetitionPointsRepository) DecideApproval(ctx context.Context, id, adminID uuid.UUID, approve bool, audit models.AuditEntry) (*models.CapabilityApproval, error) {
+// DecideApproval approves or rejects a pending approval. Unless allowSelf is
+// set, the approver must be a different admin from the one who requested it.
+// A record approved by its own requester is marked self_approved.
+func (r *CompetitionPointsRepository) DecideApproval(ctx context.Context, id, adminID uuid.UUID, approve, allowSelf bool, audit models.AuditEntry) (*models.CapabilityApproval, error) {
 	var out *models.CapabilityApproval
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
 		a, err := r.getApproval(ctx, tx, id, true)
@@ -187,7 +188,8 @@ func (r *CompetitionPointsRepository) DecideApproval(ctx context.Context, id, ad
 		if a.Status != "pending" {
 			return ErrApprovalNotPending
 		}
-		if a.RequestedByAdminID == adminID {
+		self := a.RequestedByAdminID == adminID
+		if self && !allowSelf {
 			return ErrApprovalSamePerson
 		}
 		status := "rejected"
@@ -196,8 +198,8 @@ func (r *CompetitionPointsRepository) DecideApproval(ctx context.Context, id, ad
 		}
 		if _, err := tx.Exec(ctx, `
 			update core.capability_approvals
-			set status = $2, approved_by_admin_id = $3, approved_at = now()
-			where id = $1`, id, status, adminID); err != nil {
+			set status = $2, approved_by_admin_id = $3, approved_at = now(), self_approved = $4
+			where id = $1`, id, status, adminID, self); err != nil {
 			return err
 		}
 		audit.EntityID = &id

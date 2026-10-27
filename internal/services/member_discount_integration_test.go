@@ -183,6 +183,19 @@ func TestMembershipPublishDirectly(t *testing.T) {
 	if _, err := f.cp.UpdateOffer(f.ctx, f.adminA, o.ID, *in); err == nil {
 		t.Fatalf("a published offer must be locked")
 	}
+	// Publishing opens the country: sales, renewals and gift earning are
+	// approved, so customers there are offered it.
+	var opened int
+	f.scan(&opened, `select count(*) from core.capability_approvals where country_id = $1 and status = 'active'
+		and self_approved and operation in ('membership_sale', 'membership_renewal', 'gift_points_earning')`, f.country)
+	if opened != 3 {
+		t.Fatalf("publishing should open 3 operations, opened %d", opened)
+	}
+	cust := f.customer()
+	offers, err := f.cp.Offers(f.ctx, cust, "web")
+	if err != nil || !offers.Decision.Allowed || len(offers.Offers) == 0 {
+		t.Fatalf("offered after publish: %+v %v", offers, err)
+	}
 	// Only a draft can be published this way.
 	if _, err := f.cp.OfferTransition(f.ctx, f.adminA, o.ID, "publish"); err == nil {
 		t.Fatalf("publishing twice must be refused")
