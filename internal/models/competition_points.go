@@ -113,6 +113,40 @@ type PlanOffer struct {
 	BillingLabel string `json:"billing_label"`
 }
 
+// MemberRow is one membership as the admin members list shows it: who, which
+// package they are on, and where it stands.
+type MemberRow struct {
+	SubscriptionID uuid.UUID `json:"subscription_id"`
+	CustomerID     uuid.UUID `json:"customer_id"`
+	DisplayName    string    `json:"display_name"`
+	Email          string    `json:"email"`
+	CountryName    string    `json:"country_name"`
+	OfferID        uuid.UUID `json:"offer_id"`
+	PackageName    string    `json:"package_name"`
+	TierCode       string    `json:"tier_code"`
+	OfferVersion   int       `json:"offer_version"`
+	PriceMinor     int64     `json:"price_minor"`
+	Currency       string    `json:"currency"`
+	BillingLabel   string    `json:"billing_label"`
+	Status         string    `json:"status"`
+	// CancelAtPeriodEnd: they stopped renewing and keep benefits to PeriodEnd.
+	CancelAtPeriodEnd bool `json:"cancel_at_period_end"`
+	// JoinedAt is their first paid period, falling back to when they started.
+	JoinedAt time.Time `json:"joined_at"`
+	// PeriodEnd is the end of the period paid for.
+	PeriodEnd   *time.Time `json:"period_end,omitempty"`
+	PeriodsPaid int        `json:"periods_paid"`
+	TotalPaid   int64      `json:"total_paid_minor"`
+}
+
+// MemberPackageCount is how many current members are on one package.
+type MemberPackageCount struct {
+	TierCode    string `json:"tier_code"`
+	PackageName string `json:"package_name"`
+	CountryName string `json:"country_name"`
+	Members     int    `json:"members"`
+}
+
 // Membership subscription statuses.
 const (
 	SubscriptionIncomplete = "incomplete"

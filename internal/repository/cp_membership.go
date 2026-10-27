@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,6 +93,98 @@ func (r *CompetitionPointsRepository) ListOffers(ctx context.Context) ([]models.
 		return nil, err
 	}
 	return scanOffers(rows)
+}
+
+// MemberFilter narrows the admin members list.
+type MemberFilter struct {
+	// State is "current" (the default: active, past due or ending), "ended"
+	// or "all". A checkout that was never paid is not a member in any of them.
+	State     string
+	TierCode  string
+	CountryID *uuid.UUID
+	Query     string
+	Limit     int
+	Offset    int
+}
+
+const memberStates = `'active', 'past_due', 'cancelling'`
+
+// ListMembers lists memberships with their customer, package and payments,
+// current members first, and the total matching the filter.
+func (r *CompetitionPointsRepository) ListMembers(ctx context.Context, f MemberFilter) ([]models.MemberRow, int, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	statuses := memberStates
+	switch f.State {
+	case "ended":
+		statuses = `'cancelled', 'expired'`
+	case "all":
+		statuses = memberStates + `, 'cancelled', 'expired'`
+	}
+	q := "%" + strings.TrimSpace(f.Query) + "%"
+	rows, err := r.db.Query(ctx, `
+		select s.id, c.id, c.display_name, c.email::text, co.name, o.id, o.name, o.tier_code, o.version,
+		       o.price_minor, o.currency, o.interval_unit, o.interval_count,
+		       s.status, s.cancel_at_period_end, coalesce(pp.first_paid, s.created_at), s.current_period_end,
+		       pp.periods, pp.total, count(*) over ()
+		from membership.subscriptions s
+		inner join customer.customers c on c.id = s.customer_id
+		inner join membership.plan_offers o on o.id = s.offer_id
+		inner join core.countries co on co.id = o.country_id
+		left join lateral (
+			select count(*)::int as periods, coalesce(sum(p.amount_minor), 0)::bigint as total, min(p.paid_at) as first_paid
+			from membership.paid_periods p where p.subscription_id = s.id and p.status = 'paid') pp on true
+		where s.status in (`+statuses+`)
+		  and ($1::text = '' or o.tier_code = $1)
+		  and ($2::uuid is null or o.country_id = $2)
+		  and ($3 = '%%' or c.display_name ilike $3 or c.email::text ilike $3)
+		order by (s.status in (`+memberStates+`)) desc, coalesce(pp.first_paid, s.created_at) desc
+		limit $4 offset $5`, f.TierCode, f.CountryID, q, f.Limit, f.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []models.MemberRow{}
+	total := 0
+	for rows.Next() {
+		var m models.MemberRow
+		var unit string
+		var count int
+		if err := rows.Scan(&m.SubscriptionID, &m.CustomerID, &m.DisplayName, &m.Email, &m.CountryName,
+			&m.OfferID, &m.PackageName, &m.TierCode, &m.OfferVersion, &m.PriceMinor, &m.Currency, &unit, &count,
+			&m.Status, &m.CancelAtPeriodEnd, &m.JoinedAt, &m.PeriodEnd, &m.PeriodsPaid, &m.TotalPaid, &total); err != nil {
+			return nil, 0, err
+		}
+		m.BillingLabel = BillingLabel(unit, count)
+		out = append(out, m)
+	}
+	return out, total, rows.Err()
+}
+
+// MemberPackageCounts is how many current members each package has.
+func (r *CompetitionPointsRepository) MemberPackageCounts(ctx context.Context) ([]models.MemberPackageCount, error) {
+	rows, err := r.db.Query(ctx, `
+		select o.tier_code, (array_agg(o.name order by o.version desc))[1], co.name, count(*)::int
+		from membership.subscriptions s
+		inner join membership.plan_offers o on o.id = s.offer_id
+		inner join core.countries co on co.id = o.country_id
+		where s.status in (`+memberStates+`)
+		group by o.tier_code, co.name
+		order by count(*) desc, co.name, o.tier_code`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.MemberPackageCount{}
+	for rows.Next() {
+		var c models.MemberPackageCount
+		if err := rows.Scan(&c.TierCode, &c.PackageName, &c.CountryName, &c.Members); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // PublishedOffers are the versions on sale in a country now.

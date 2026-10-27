@@ -986,3 +986,54 @@ func TestCompetitionPointsControls(t *testing.T) {
 		t.Fatalf("an unbalanced transaction committed")
 	}
 }
+
+// The admin members list shows who is a member and on which package: a paid
+// membership appears, an unpaid checkout does not, and ended ones are kept
+// apart from current ones.
+func TestAdminMembersList(t *testing.T) {
+	f := newCPFixture(t, "NZ")
+	o := f.offer(0)
+	member, unpaid := f.customer(), f.customer()
+	f.join(member, o)
+	if _, err := f.cp.Join(f.ctx, unpaid, "web", JoinInput{
+		OfferID: o.ID, RenewalConsent: true, IdempotencyKey: uuid.NewString()}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+
+	list, err := f.cp.AdminMembers(f.ctx, repository.MemberFilter{TierCode: o.TierCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.Total != 1 || len(list.Items) != 1 || list.Items[0].CustomerID != member {
+		t.Fatalf("current members: total %d, items %+v", list.Total, list.Items)
+	}
+	m := list.Items[0]
+	if m.PackageName != "Plus" || m.TierCode != o.TierCode || m.Status != "active" || m.PeriodsPaid != 1 ||
+		m.TotalPaid != 999 || m.PeriodEnd == nil || m.BillingLabel == "" || m.Email == "" {
+		t.Fatalf("member row: %+v", m)
+	}
+	var onPackage int
+	for _, p := range list.Packages {
+		if p.TierCode == o.TierCode {
+			onPackage = p.Members
+		}
+	}
+	if onPackage != 1 {
+		t.Fatalf("package counts: %+v", list.Packages)
+	}
+	if byName, _ := f.cp.AdminMembers(f.ctx, repository.MemberFilter{Query: "no-such-person"}); byName == nil || byName.Total != 0 {
+		t.Fatalf("search should find nobody: %+v", byName)
+	}
+
+	// Ended memberships are listed under "ended", not "current".
+	f.exec(`update membership.subscriptions set status = 'cancelled' where customer_id = $1`, member)
+	if cur, _ := f.cp.AdminMembers(f.ctx, repository.MemberFilter{TierCode: o.TierCode}); cur.Total != 0 {
+		t.Fatalf("a cancelled membership is not current: %+v", cur.Items)
+	}
+	if ended, _ := f.cp.AdminMembers(f.ctx, repository.MemberFilter{State: "ended", TierCode: o.TierCode}); ended.Total != 1 {
+		t.Fatalf("ended: %+v", ended)
+	}
+	if _, err := f.cp.AdminMembers(f.ctx, repository.MemberFilter{State: "bogus"}); err == nil {
+		t.Fatalf("an unknown state must be refused")
+	}
+}

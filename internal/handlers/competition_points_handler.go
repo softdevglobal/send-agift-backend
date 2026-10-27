@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -333,6 +334,31 @@ func (h *CompetitionPointsHandler) Settings(w http.ResponseWriter, r *http.Reque
 func (h *CompetitionPointsHandler) AdminOffers(w http.ResponseWriter, r *http.Request) {
 	items, err := h.cp.AdminOffers(r.Context())
 	h.list(w, items, err, "could not list offers")
+}
+
+// AdminMembers handles GET /admin/competition-points/members?state=&tier=&country_id=&q=&limit=&offset=.
+func (h *CompetitionPointsHandler) AdminMembers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := repository.MemberFilter{State: q.Get("state"), TierCode: q.Get("tier"), Query: q.Get("q")}
+	f.Limit, _ = strconv.Atoi(q.Get("limit"))
+	f.Offset, _ = strconv.Atoi(q.Get("offset"))
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	if raw := q.Get("country_id"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			utils.Error(w, http.StatusBadRequest, "country_id is not valid")
+			return
+		}
+		f.CountryID = &id
+	}
+	out, err := h.cp.AdminMembers(r.Context(), f)
+	if err != nil {
+		h.writeError(w, err, "could not list members")
+		return
+	}
+	utils.JSON(w, http.StatusOK, out)
 }
 
 // CreateOffer handles POST /admin/competition-points/offers.

@@ -166,6 +166,30 @@ func (s *CompetitionPointsService) AdminOffers(ctx context.Context) ([]models.Pl
 	return s.repo.ListOffers(ctx)
 }
 
+// MembersList is the admin view of who is a member and on which package.
+type MembersList struct {
+	Items    []models.MemberRow          `json:"items"`
+	Total    int                         `json:"total"`
+	Packages []models.MemberPackageCount `json:"packages"`
+}
+
+func (s *CompetitionPointsService) AdminMembers(ctx context.Context, f repository.MemberFilter) (*MembersList, error) {
+	switch f.State {
+	case "", "current", "ended", "all":
+	default:
+		return nil, invalidCP("state must be current, ended or all")
+	}
+	items, total, err := s.repo.ListMembers(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	packages, err := s.repo.MemberPackageCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &MembersList{Items: items, Total: total, Packages: packages}, nil
+}
+
 func (s *CompetitionPointsService) CreateOffer(ctx context.Context, admin AdminActor, in OfferInput) (*models.PlanOffer, error) {
 	o, err := in.toModel(admin.ID, s.platformFeeBPS)
 	if err != nil {

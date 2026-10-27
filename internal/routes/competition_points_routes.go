@@ -62,6 +62,7 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 		r.Use(middleware.RequireRole("admin"))
 		r.Get("/admin/competition-points/settings", h.Settings)
 		r.Get("/admin/competition-points/offers", h.AdminOffers)
+		r.Get("/admin/competition-points/members", h.AdminMembers)
 		r.Get("/admin/competition-points/policies", h.AdminPolicies)
 		r.Post("/admin/competition-points/policies/preview", h.PreviewPolicy)
 		r.Get("/admin/competition-points/approvals", h.AdminApprovals)
