@@ -69,12 +69,36 @@ func adminActor(w http.ResponseWriter, r *http.Request) (services.AdminActor, bo
 
 // ─── Public and customer ──────────────────────────────────────────────────
 
-// List handles GET /competitions.
+// nativeClient is a request from the iOS or Android app: it names itself
+// in X-Client-Channel, and builds that predate the header send Dart's
+// default user agent.
+func nativeClient(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get(ChannelHeader))) {
+	case "ios", "android":
+		return true
+	case "web":
+		return false
+	}
+	return strings.HasPrefix(r.UserAgent(), "Dart/")
+}
+
+// List handles GET /competitions. Rounds entered with competition points
+// are left out for the native apps: those capabilities stay off there
+// until accepted (the server refuses their entries regardless).
 func (h *CompetitionHandler) List(w http.ResponseWriter, r *http.Request) {
 	list, err := h.competitions.ListCompetitions(r.Context(), actorFromContext(r))
 	if err != nil {
 		h.writeError(w, err, "could not list competitions")
 		return
+	}
+	if nativeClient(r) {
+		kept := list[:0]
+		for _, c := range list {
+			if c.PointsUnit != "competition" {
+				kept = append(kept, c)
+			}
+		}
+		list = kept
 	}
 	utils.JSON(w, http.StatusOK, map[string]any{"items": list})
 }
@@ -88,6 +112,10 @@ func (h *CompetitionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	view, err := h.competitions.GetCompetition(r.Context(), id, actorFromContext(r))
 	if err != nil {
 		h.writeError(w, err, "could not get competition")
+		return
+	}
+	if nativeClient(r) && view.PointsUnit == "competition" {
+		utils.Error(w, http.StatusNotFound, "competition not found")
 		return
 	}
 	utils.JSON(w, http.StatusOK, view)

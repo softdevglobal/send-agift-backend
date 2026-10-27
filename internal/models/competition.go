@@ -86,6 +86,11 @@ type Competition struct {
 	PausedAt              *time.Time           `json:"paused_at,omitempty"`
 	ClosedAt              *time.Time           `json:"closed_at,omitempty"`
 	UpdatedByAdminID      *uuid.UUID           `json:"updated_by_admin_id,omitempty"`
+	// PointsUnit is what a play costs: "legacy" points, or "competition"
+	// points held by a reserved entry. CPAllowedSources are the lot sources
+	// a competition-points entry may use.
+	PointsUnit       string   `json:"points_unit"`
+	CPAllowedSources []string `json:"cp_allowed_sources"`
 }
 
 // PrizeReserve maps to finance.prize_reserves.
@@ -254,6 +259,10 @@ type CompetitionView struct {
 	WinnerMethod string               `json:"winner_method"`
 	WinOdds      *int                 `json:"win_odds,omitempty"`
 	Countries    []CompetitionCountry `json:"countries"`
+	// PointsUnit is "legacy" or "competition"; a competition-points round is
+	// entered through a quote and a reserved entry.
+	PointsUnit       string   `json:"points_unit"`
+	CPAllowedSources []string `json:"cp_allowed_sources"`
 	// The countries' codes and names joined with ", ", for screens that
 	// show them on one line.
 	CountryCode                  string         `json:"country_code"`

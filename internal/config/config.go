@@ -112,6 +112,19 @@ type Config struct {
 	FreeGiftEnabled        bool
 	FreeGiftIdentitySecret string
 	FreeGiftTermsVersion   string
+
+	// Competition points (handover v4). Nothing is offered without an
+	// approval record, so there is no on/off flag here: these only tune it.
+	// CPQuoteSecret signs entry quotes (falls back to a key derived from
+	// JWT_SECRET). CPEntryHoldMinutes is how long a reserved entry waits to
+	// start. CPRestoreWindowHours keeps points released from a lot that
+	// expired while held usable for that long; it is a release decision,
+	// with a sandbox default of 24. MembershipTestPayments lets a sandbox
+	// without Stripe confirm membership payments by hand.
+	CPQuoteSecret          string
+	CPEntryHoldMinutes     int
+	CPRestoreWindowHours   int
+	MembershipTestPayments bool
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -172,6 +185,11 @@ func Load() (*Config, error) {
 		FreeGiftEnabled:        strings.EqualFold(strings.TrimSpace(os.Getenv("FREE_GIFT_ENABLED")), "true"),
 		FreeGiftIdentitySecret: os.Getenv("FREE_GIFT_IDENTITY_SECRET"),
 		FreeGiftTermsVersion:   envOr("FREE_GIFT_TERMS_VERSION", "v1"),
+
+		CPQuoteSecret:          os.Getenv("CP_QUOTE_SECRET"),
+		CPEntryHoldMinutes:     intOr("CP_ENTRY_HOLD_MINUTES", 10),
+		CPRestoreWindowHours:   wholeOr("CP_RESTORE_WINDOW_HOURS", 24),
+		MembershipTestPayments: strings.EqualFold(strings.TrimSpace(os.Getenv("MEMBERSHIP_TEST_PAYMENTS")), "true"),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -200,6 +218,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.FreeGiftEnabled && len(cfg.FreeGiftIdentitySecret) < 32 {
 		return nil, fmt.Errorf("FREE_GIFT_IDENTITY_SECRET (32 characters or more) is required when FREE_GIFT_ENABLED=true")
+	}
+	if cfg.CPEntryHoldMinutes < 1 || cfg.CPEntryHoldMinutes > 120 {
+		return nil, fmt.Errorf("CP_ENTRY_HOLD_MINUTES must be 1 to 120")
+	}
+	if cfg.CPRestoreWindowHours < 0 || cfg.CPRestoreWindowHours > 24*30 {
+		return nil, fmt.Errorf("CP_RESTORE_WINDOW_HOURS must be 0 to 720")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")
@@ -259,4 +283,18 @@ func listEnv(keys ...string) []string {
 		}
 	}
 	return out
+}
+
+// wholeOr reads a whole number, zero included, or the fallback when unset
+// or unreadable.
+func wholeOr(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return n
 }

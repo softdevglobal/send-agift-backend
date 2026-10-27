@@ -96,6 +96,10 @@ type lockedRound struct {
 	WinnerMethod     string
 	WinOdds          *int
 	Winners          int
+	// PointsUnit is legacy (the points balance) or competition (a reserved
+	// entry of competition points). RulesVersion is config_version.
+	PointsUnit   string
+	RulesVersion int
 }
 
 func lockRound(ctx context.Context, q querier, id uuid.UUID) (*lockedRound, error) {
@@ -106,7 +110,7 @@ func lockRound(ctx context.Context, q querier, id uuid.UUID) (*lockedRound, erro
 		       c.increment_per_play_cents, c.max_prize_cents, c.continue_at_cap, c.start_prize_cents,
 		       c.current_prize_cents, c.eligible_play_count, c.prize_version,
 		       c.game_version_id, c.server_seed, v.config, now(),
-		       g.slug, c.winner_method, c.win_odds, c.number_of_winners
+		       g.slug, c.winner_method, c.win_odds, c.number_of_winners, c.points_unit, c.config_version
 		from competition.competitions c
 		inner join competition.game_versions v on v.id = c.game_version_id
 		inner join competition.games g on g.id = v.game_id
@@ -115,7 +119,7 @@ func lockRound(ctx context.Context, q querier, id uuid.UUID) (*lockedRound, erro
 		Scan(&r.ID, &r.Status, &r.StartsAt, &r.EndsAt, &r.Timezone, &r.PointsPerAttempt,
 			&r.MaxAttempts, &r.DailyLimit, &r.Growth, &r.Increment, &r.Max, &r.ContinueAtCap,
 			&r.StartPrize, &r.Current, &r.Plays, &r.Version, &r.GameVersionID, &r.Seed, &r.Config, &r.Now,
-			&r.GameSlug, &r.WinnerMethod, &r.WinOdds, &r.Winners)
+			&r.GameSlug, &r.WinnerMethod, &r.WinOdds, &r.Winners, &r.PointsUnit, &r.RulesVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrCompetitionNotFound
 	}
@@ -239,6 +243,9 @@ type PlayInput struct {
 	ClientRequestID string
 	SessionTTL      time.Duration
 	RiskMetadata    map[string]any
+	// EntryID is the reserved competition-points entry this play starts.
+	// Required, and only allowed, on a round that costs competition points.
+	EntryID *uuid.UUID
 }
 
 // PlayOutcome is a committed play, or the original one when the request was
@@ -337,14 +344,25 @@ func (r *CompetitionRepository) StartPlay(ctx context.Context, in PlayInput) (*P
 			return &PlayLimitError{Kind: "daily", Limit: *round.DailyLimit, NextEligibleAt: &next}
 		}
 
-		// 4. Points.
+		// 4. Points: a held entry of competition points, or the legacy
+		// balance.
 		cost := int64(round.PointsPerAttempt)
-		balance, err := lockPointsAccount(ctx, tx, in.CustomerID)
-		if err != nil {
-			return err
+		competitionPoints := round.PointsUnit == "competition"
+		if competitionPoints != (in.EntryID != nil) {
+			if competitionPoints {
+				return ErrEntryRequired
+			}
+			return ErrNotCompetitionCP
 		}
-		if balance < cost {
-			return &InsufficientPointsError{Required: cost, Balance: balance}
+		var balance int64
+		if !competitionPoints {
+			balance, err = lockPointsAccount(ctx, tx, in.CustomerID)
+			if err != nil {
+				return err
+			}
+			if balance < cost {
+				return &InsufficientPointsError{Required: cost, Balance: balance}
+			}
 		}
 
 		// 5. The increment.
@@ -356,7 +374,7 @@ func (r *CompetitionRepository) StartPlay(ctx context.Context, in PlayInput) (*P
 		// 6. Write it all.
 		attemptID := uuid.New()
 		var ledgerID *uuid.UUID
-		if cost > 0 {
+		if !competitionPoints && cost > 0 {
 			id := uuid.New()
 			ledgerID = &id
 			if _, balance, err = applyPoints(ctx, tx, PointsChange{
@@ -431,6 +449,15 @@ func (r *CompetitionRepository) StartPlay(ctx context.Context, in PlayInput) (*P
 		}
 		if err != nil {
 			return err
+		}
+		if competitionPoints {
+			// Captured in this transaction, with the attempt it starts: the
+			// play and its capture commit together or not at all, so a start
+			// is never both played and refunded.
+			if err := captureEntry(ctx, tx, *in.EntryID, in.CustomerID, in.CompetitionID,
+				round.RulesVersion, cost, attemptID); err != nil {
+				return err
+			}
 		}
 
 		newPlayers := int64(0)
@@ -839,6 +866,15 @@ func (r *CompetitionRepository) VoidPlay(ctx context.Context, id, attemptID uuid
 }
 
 func refundPlay(ctx context.Context, q querier, a models.CompetitionAttempt, reason string, actor Actor) error {
+	// A play paid with competition points gets its lots restored instead.
+	cp, err := restoreCapturedEntry(ctx, q, a.ID, reason, CPActor{Type: actor.Type, ID: actor.ID})
+	if err != nil {
+		return err
+	}
+	if cp {
+		_, err = q.Exec(ctx, `update competition.competition_attempts set refunded_at = now() where id = $1`, a.ID)
+		return err
+	}
 	if _, _, err := applyPoints(ctx, q, PointsChange{
 		CustomerID: a.CustomerID, EntryType: models.PointsEntryPlayRefund, Delta: int64(a.PointsSpent),
 		CompetitionID: &a.CompetitionID, AttemptID: &a.ID, IdempotencyKey: "refund:" + a.ID.String(),
@@ -846,7 +882,7 @@ func refundPlay(ctx context.Context, q querier, a models.CompetitionAttempt, rea
 	}); err != nil {
 		return err
 	}
-	_, err := q.Exec(ctx, `update competition.competition_attempts set refunded_at = now() where id = $1`, a.ID)
+	_, err = q.Exec(ctx, `update competition.competition_attempts set refunded_at = now() where id = $1`, a.ID)
 	return err
 }
 

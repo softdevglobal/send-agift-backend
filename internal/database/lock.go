@@ -22,6 +22,7 @@ const (
 	LockStripePayouts       int64 = 7_301_008
 	LockStripeExpiry        int64 = 7_301_009
 	LockPointsPurchaseSync  int64 = 7_301_010
+	LockCompetitionPoints   int64 = 7_301_011
 )
 
 // WithLock runs fn while holding the advisory lock key, first waiting for any

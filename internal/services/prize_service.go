@@ -311,6 +311,9 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 		MinPlaysToWin:                src.MinPlaysToWin,
 		WinOdds:                      src.WinOdds,
 		QuizQuestions:                questions,
+		PointsUnit:                   src.PointsUnit,
+		EntryCostPoints:              duplicateEntryCost(src),
+		CPAllowedSources:             src.CPAllowedSources,
 	}); err != nil {
 		return nil, err
 	}
@@ -672,4 +675,14 @@ func (e Exclusive) run(ctx context.Context, fn func(context.Context) error) (boo
 		return true, fn(ctx)
 	}
 	return e(ctx, fn)
+}
+
+// duplicateEntryCost carries a competition-points round's published entry
+// cost into its copy.
+func duplicateEntryCost(src *models.Competition) *int {
+	if src.PointsUnit != "competition" {
+		return nil
+	}
+	cost := src.PointsPerAttempt
+	return &cost
 }

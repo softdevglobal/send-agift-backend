@@ -288,6 +288,8 @@ func (s *CompetitionService) toView(c *models.Competition) models.CompetitionVie
 		WinnerMethod:                 c.WinnerMethod,
 		WinOdds:                      c.WinOdds,
 		Countries:                    c.Countries,
+		PointsUnit:                   c.PointsUnit,
+		CPAllowedSources:             c.CPAllowedSources,
 		CountryCode:                  c.CountryCodes(),
 		CountryName:                  c.CountryNames(),
 		StartsAt:                     c.StartsAt,
@@ -580,6 +582,9 @@ func publicEntry(row repository.LeaderRow, status string, isMe bool) models.Lead
 type PlayRequest struct {
 	ClientRequestID string
 	RiskMetadata    map[string]any
+	// EntryID starts a reserved competition-points entry. Rounds that cost
+	// competition points need one; rounds on legacy points refuse it.
+	EntryID *uuid.UUID
 }
 
 const maxClientRequestID = 128
@@ -640,6 +645,7 @@ func (s *CompetitionService) Play(ctx context.Context, id uuid.UUID, actor Socia
 		ClientRequestID: req.ClientRequestID,
 		SessionTTL:      time.Duration(games.SessionTTLSeconds(c.GameConfig)) * time.Second,
 		RiskMetadata:    req.RiskMetadata,
+		EntryID:         req.EntryID,
 	})
 	var limit *repository.PlayLimitError
 	var broke *repository.InsufficientPointsError
@@ -678,6 +684,18 @@ func (s *CompetitionService) Play(ctx context.Context, id uuid.UUID, actor Socia
 			"This Idempotency-Key was already used for a different play.", nil))
 	case errors.Is(err, repository.ErrAttemptConflict):
 		return reject(refuse(PlayBusy, "Another play is starting. Try again.", nil))
+	case errors.Is(err, repository.ErrEntryRequired):
+		return reject(refuse(models.ReasonEntryRequired,
+			"This competition is entered with competition points. Review the entry and confirm it first.", nil))
+	case errors.Is(err, repository.ErrNotCompetitionCP):
+		return reject(refuse(models.ReasonCompetitionPointsDisabled,
+			"This competition does not use competition points.", nil))
+	case errors.Is(err, repository.ErrEntryNotFound), errors.Is(err, repository.ErrEntryNotHeld):
+		return reject(refuse(PlayIdempotencyConflict,
+			"That entry is no longer held. Check your competition points and enter again.", nil))
+	case errors.Is(err, repository.ErrEntryStale):
+		return reject(refuse(models.ReasonQuoteExpired,
+			"The competition's rules changed after you entered. Your points will be returned.", nil))
 	default:
 		return nil, err
 	}
@@ -1028,8 +1046,72 @@ type CompetitionInput struct {
 	PrizePoints *int64 `json:"prize_points"`
 	// Quiz rounds: the questions, answers and time limits.
 	QuizQuestions []games.QuizQuestion `json:"quiz_questions"`
+	// PointsUnit "competition" makes the round cost competition points,
+	// at EntryCostPoints per entry, payable from CPAllowedSources. Only a
+	// skill game scored on verified results may use them. Unset is legacy.
+	PointsUnit       string   `json:"points_unit"`
+	EntryCostPoints  *int     `json:"entry_cost_points"`
+	CPAllowedSources []string `json:"cp_allowed_sources"`
 	// The config_version the admin was editing; a stale edit is refused.
 	ConfigVersion *int `json:"config_version"`
+}
+
+// webPlayableGames are the games the website can play and submit, so the
+// games a competition-points round may use.
+var webPlayableGames = map[string]bool{games.Slug2048: true}
+
+func webPlayableList() string {
+	names := make([]string, 0, len(webPlayableGames))
+	for slug := range webPlayableGames {
+		names = append(names, slug)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// competitionPointsTerms checks a round's points unit. A competition-points
+// round must be a skill game whose winner is the best verified score: no
+// chance mechanic, no random draw, no instant win.
+func competitionPointsTerms(in CompetitionInput, chance bool) (unit string, sources []string, cost int, err error) {
+	unit = strings.TrimSpace(in.PointsUnit)
+	if unit == "" {
+		unit = "legacy"
+	}
+	switch unit {
+	case "legacy":
+		return unit, nil, 0, nil
+	case "competition":
+	default:
+		return "", nil, 0, invalid("points_unit must be legacy or competition")
+	}
+	if chance || in.WinnerMethod != "score" {
+		return "", nil, 0, invalid("competition points can only be used for a skill game won by the best verified score")
+	}
+	// Entry is on the independent website first (native competition
+	// capabilities stay off), so the game must have a web client.
+	if !webPlayableGames[in.GameSlug] {
+		return "", nil, 0, invalid("competition points rounds must use a game the website can play: " + webPlayableList())
+	}
+	if in.EntryCostPoints == nil || *in.EntryCostPoints < 1 || *in.EntryCostPoints > 1_000_000 {
+		return "", nil, 0, invalid("entry_cost_points must be a whole number from 1 to 1000000")
+	}
+	allowed := map[string]bool{models.LotSourceGift: true, models.LotSourceMemberBonus: true,
+		models.LotSourceSponsored: true, models.LotSourceCompensation: true}
+	seen := map[string]bool{}
+	for _, raw := range in.CPAllowedSources {
+		src := strings.TrimSpace(raw)
+		if !allowed[src] {
+			return "", nil, 0, invalid("cp_allowed_sources may only contain gift, member_bonus, sponsored or compensation")
+		}
+		if !seen[src] {
+			seen[src] = true
+			sources = append(sources, src)
+		}
+	}
+	if len(sources) == 0 {
+		sources = []string{models.LotSourceGift, models.LotSourceMemberBonus}
+	}
+	return unit, sources, *in.EntryCostPoints, nil
 }
 
 var prizeTypes = map[string]bool{"cash": true, "product": true, "voucher": true, "gift": true, "points": true, "other": true}
@@ -1285,6 +1367,10 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	if in.RequiresIdentityVerification != nil {
 		requiresID = *in.RequiresIdentityVerification
 	}
+	unit, sources, entryCost, err := competitionPointsTerms(in, chance)
+	if err != nil {
+		return err
+	}
 
 	c.Countries = countries
 	c.GameVersionID = pg.Version.ID
@@ -1292,8 +1378,14 @@ func (s *CompetitionService) apply(ctx context.Context, c *models.Competition, i
 	c.StartsAt = in.StartsAt
 	c.EndsAt = in.EndsAt
 	c.Timezone = in.Timezone
-	// A play costs what the game costs everywhere else, set on the game.
+	// A legacy play costs what the game costs everywhere else, set on the
+	// game; a competition-points entry costs what this contest publishes.
 	c.PointsPerAttempt = int(pg.Game.PlayCostPoints)
+	if unit == "competition" {
+		c.PointsPerAttempt = entryCost
+	}
+	c.PointsUnit = unit
+	c.CPAllowedSources = sources
 	c.MaxAttemptsPerCustomer = in.MaxAttemptsPerCustomer
 	c.MinAge = in.MinAge
 	c.RequiresIdentityVerification = requiresID
