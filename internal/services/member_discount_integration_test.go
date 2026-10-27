@@ -228,6 +228,8 @@ func TestMembershipPublishDirectly(t *testing.T) {
 func TestMembershipSyncFromStripe(t *testing.T) {
 	f := newCPFixture(t, "PH")
 	var sessionID, localID string
+	// Stripe ids are unique; a fresh one per run keeps earlier runs' rows apart.
+	subID := "sub_" + uuid.NewString()[:8]
 	now := time.Now().Unix()
 	stripe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -237,21 +239,22 @@ func TestMembershipSyncFromStripe(t *testing.T) {
 			localID = r.PostForm.Get("subscription_data[metadata][membership_subscription_id]")
 			_, _ = fmt.Fprintf(w, `{"id":%q,"url":"https://checkout.stripe.test/%s"}`, sessionID, sessionID)
 		case r.Method == http.MethodGet && r.URL.Path == "/checkout/sessions/"+sessionID:
-			_, _ = fmt.Fprintf(w, `{"id":%q,"status":"complete","payment_status":"paid","subscription":"sub_1","customer":"cus_1"}`, sessionID)
-		case r.Method == http.MethodGet && r.URL.Path == "/subscriptions/sub_1":
-			_, _ = fmt.Fprintf(w, `{"id":"sub_1","customer":"cus_1","status":"active",
+			_, _ = fmt.Fprintf(w, `{"id":%q,"status":"complete","payment_status":"paid","subscription":%q,"customer":"cus_1"}`, sessionID, subID)
+		case r.Method == http.MethodGet && r.URL.Path == "/subscriptions/"+subID:
+			_, _ = fmt.Fprintf(w, `{"id":%q,"customer":"cus_1","status":"active",
 				"metadata":{"kind":"membership","membership_subscription_id":%q},
-				"items":{"data":[{"current_period_end":%d}]}}`, localID, now+30*86400)
+				"items":{"data":[{"current_period_end":%d}]}}`, subID, localID, now+30*86400)
 		case r.Method == http.MethodGet && r.URL.Path == "/invoices":
-			if r.URL.Query().Get("subscription") != "sub_1" {
+			if r.URL.Query().Get("subscription") != subID {
 				http.Error(w, "bad subscription", 400)
 				return
 			}
-			_, _ = fmt.Fprintf(w, `{"data":[{"id":"in_1","status":"paid","amount_paid":999,"currency":"php",
-				"payment_intent":"pi_1","status_transitions":{"paid_at":%d},
-				"parent":{"subscription_details":{"subscription":"sub_1",
+			_, _ = fmt.Fprintf(w, `{"data":[{"id":"in_%s","status":"paid","amount_paid":999,"currency":"php",
+				"payment_intent":"pi_%s","status_transitions":{"paid_at":%d},
+				"parent":{"subscription_details":{"subscription":%q,
 				  "metadata":{"kind":"membership","membership_subscription_id":%q}}},
-				"lines":{"data":[{"period":{"start":%d,"end":%d}}]}}]}`, now, localID, now-60, now+30*86400)
+				"lines":{"data":[{"period":{"start":%d,"end":%d}}]}}]}`,
+				subID, subID, now, subID, localID, now-60, now+30*86400)
 		default:
 			http.NotFound(w, r)
 		}

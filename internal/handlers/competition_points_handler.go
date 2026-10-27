@@ -109,7 +109,7 @@ func (h *CompetitionPointsHandler) Membership(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	out, err := h.cp.Status(r.Context(), id)
+	out, err := h.cp.CurrentStatus(r.Context(), id)
 	if err != nil {
 		h.writeError(w, err, "could not read membership")
 		return

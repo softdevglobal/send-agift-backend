@@ -782,6 +782,21 @@ func (s *CompetitionPointsService) SyncMembership(ctx context.Context, customerI
 	return s.Status(ctx, customerID)
 }
 
+// CurrentStatus is GET /customers/me/membership. While a payment is still
+// being confirmed it asks Stripe first, so the page never waits on a
+// webhook or the background job.
+func (s *CompetitionPointsService) CurrentStatus(ctx context.Context, customerID uuid.UUID) (*models.MembershipStatus, error) {
+	st, err := s.Status(ctx, customerID)
+	if err != nil || s.stripe == nil || st.Subscription == nil || st.Subscription.Provider != "stripe" {
+		return st, err
+	}
+	if st.State == models.MembershipPaymentPending ||
+		(st.CurrentPeriod == nil && st.Subscription.Status == models.SubscriptionActive) {
+		return s.SyncMembership(ctx, customerID)
+	}
+	return st, nil
+}
+
 // syncStripeMemberships is the background job's check for memberships whose
 // webhooks did not arrive.
 func (s *CompetitionPointsService) syncStripeMemberships(ctx context.Context) error {
