@@ -117,6 +117,21 @@ func (h *CompetitionPointsHandler) Membership(w http.ResponseWriter, r *http.Req
 	utils.JSON(w, http.StatusOK, out)
 }
 
+// MemberDiscount handles GET /customers/me/member-discount: the product
+// discount the customer gets on a new order now, for showing in the bag.
+func (h *CompetitionPointsHandler) MemberDiscount(w http.ResponseWriter, r *http.Request) {
+	id, ok := customerUUID(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.cp.MemberDiscount(r.Context(), id)
+	if err != nil {
+		h.writeError(w, err, "could not read the member discount")
+		return
+	}
+	utils.JSON(w, http.StatusOK, out)
+}
+
 // Join handles POST /customers/me/membership/checkout
 // {"offer_id": "...", "renewal_consent": true} with an Idempotency-Key.
 func (h *CompetitionPointsHandler) Join(w http.ResponseWriter, r *http.Request) {

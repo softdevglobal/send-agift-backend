@@ -323,7 +323,7 @@ func (r *CompetitionPointsRepository) qualifyPaidGifts(ctx context.Context, batc
 		free                                      bool
 	}
 	rows, err := r.db.Query(ctx, `
-		select o.id, o.customer_id, o.country_id, pay.id, o.subtotal_amount, o.currency, pay.paid_at,
+		select o.id, o.customer_id, o.country_id, pay.id, o.subtotal_amount - o.member_discount_amount, o.currency, pay.paid_at,
 		       exists (select 1 from promo.free_gift_claims fc where fc.order_id = o.id)
 		from marketplace.orders o
 		inner join lateral (

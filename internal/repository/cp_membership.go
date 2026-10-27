@@ -25,7 +25,7 @@ var (
 
 const offerColumns = `o.id, o.tier_code, o.version, o.country_id, co.name, o.name, o.description,
 	o.currency, o.price_minor, o.interval_unit, o.interval_count, o.member_bonus_points,
-	o.gift_benefits, o.terms_version, o.status, o.effective_from, o.created_by_admin_id,
+	o.member_discount_bps, o.gift_benefits, o.terms_version, o.status, o.effective_from, o.created_by_admin_id,
 	o.submitted_by_admin_id, o.approved_by_admin_id, o.published_at, o.created_at, o.updated_at`
 
 func scanOffer(row scanner) (*models.PlanOffer, error) {
@@ -33,7 +33,7 @@ func scanOffer(row scanner) (*models.PlanOffer, error) {
 	var benefits []byte
 	err := row.Scan(&o.ID, &o.TierCode, &o.Version, &o.CountryID, &o.CountryName, &o.Name,
 		&o.Description, &o.Currency, &o.PriceMinor, &o.IntervalUnit, &o.IntervalCount,
-		&o.MemberBonusPoints, &benefits, &o.TermsVersion, &o.Status, &o.EffectiveFrom,
+		&o.MemberBonusPoints, &o.MemberDiscountBPS, &benefits, &o.TermsVersion, &o.Status, &o.EffectiveFrom,
 		&o.CreatedByAdminID, &o.SubmittedByAdminID, &o.ApprovedByAdminID, &o.PublishedAt,
 		&o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
@@ -120,14 +120,15 @@ func (r *CompetitionPointsRepository) SaveOfferDraft(ctx context.Context, id *uu
 			err := tx.QueryRow(ctx, `
 				insert into membership.plan_offers
 					(tier_code, version, country_id, name, description, currency, price_minor,
-					 interval_unit, interval_count, member_bonus_points, gift_benefits, terms_version,
-					 created_by_admin_id)
+					 interval_unit, interval_count, member_bonus_points, member_discount_bps,
+					 gift_benefits, terms_version, created_by_admin_id)
 				values ($1, (select coalesce(max(version), 0) + 1 from membership.plan_offers
 				             where tier_code = $1 and country_id = $2),
-				        $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+				        $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 				returning id`,
 				o.TierCode, o.CountryID, o.Name, o.Description, o.Currency, o.PriceMinor, o.IntervalUnit,
-				o.IntervalCount, o.MemberBonusPoints, []byte(benefits), o.TermsVersion, o.CreatedByAdminID).
+				o.IntervalCount, o.MemberBonusPoints, o.MemberDiscountBPS, []byte(benefits), o.TermsVersion,
+				o.CreatedByAdminID).
 				Scan(&offerID)
 			if err := mapVersionErr(err); err != nil {
 				return err
@@ -145,9 +146,9 @@ func (r *CompetitionPointsRepository) SaveOfferDraft(ctx context.Context, id *uu
 				update membership.plan_offers
 				set name = $2, description = $3, currency = $4, price_minor = $5, interval_unit = $6,
 				    interval_count = $7, member_bonus_points = $8, gift_benefits = $9,
-				    terms_version = $10, updated_at = now()
+				    terms_version = $10, member_discount_bps = $11, updated_at = now()
 				where id = $1`, *id, o.Name, o.Description, o.Currency, o.PriceMinor, o.IntervalUnit,
-				o.IntervalCount, o.MemberBonusPoints, []byte(benefits), o.TermsVersion); err != nil {
+				o.IntervalCount, o.MemberBonusPoints, []byte(benefits), o.TermsVersion, o.MemberDiscountBPS); err != nil {
 				return mapVersionErr(err)
 			}
 			offerID = *id
@@ -784,4 +785,38 @@ func (r *CompetitionPointsRepository) RenewingSubscriptions(ctx context.Context,
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// MemberDiscount is the product discount a customer gets right now: the
+// percentage (in basis points) of the offer their paid period in force was
+// sold under, with that period. Zero when they have no paid period now.
+// A cancelled membership keeps it to the end of the period already paid for.
+func (r *CompetitionPointsRepository) MemberDiscount(ctx context.Context, customerID uuid.UUID) (bps int, periodID uuid.UUID, err error) {
+	return memberDiscount(ctx, r.db, customerID)
+}
+
+func memberDiscount(ctx context.Context, q querier, customerID uuid.UUID) (bps int, periodID uuid.UUID, err error) {
+	err = q.QueryRow(ctx, `
+		select o.member_discount_bps, p.id
+		from membership.paid_periods p
+		inner join membership.plan_offers o on o.id = p.offer_id
+		where p.customer_id = $1 and p.status = 'paid'
+		  and p.period_start <= now() and now() < p.period_end
+		  and o.member_discount_bps > 0
+		order by o.member_discount_bps desc, p.period_start desc
+		limit 1`, customerID).Scan(&bps, &periodID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, uuid.Nil, nil
+	}
+	return bps, periodID, err
+}
+
+// PeriodEnd is when a paid period ends.
+func (r *CompetitionPointsRepository) PeriodEnd(ctx context.Context, periodID uuid.UUID) (*time.Time, error) {
+	var end time.Time
+	if err := r.db.QueryRow(ctx, `select period_end from membership.paid_periods where id = $1`, periodID).
+		Scan(&end); err != nil {
+		return nil, err
+	}
+	return &end, nil
 }

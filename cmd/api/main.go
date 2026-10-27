@@ -242,15 +242,20 @@ func main() {
 		sum := sha256.Sum256([]byte("cp-quote:" + cfg.JWTSecret))
 		quoteSecret = hex.EncodeToString(sum[:])
 	}
+	competitionPointsRepo := repository.NewCompetitionPointsRepository(pool)
 	competitionPointsService := services.NewCompetitionPointsService(
-		repository.NewCompetitionPointsRepository(pool), competitionService, membershipStripe,
+		competitionPointsRepo, competitionService, membershipStripe,
 		services.CompetitionPointsConfig{
-			WebURL:        cfg.AppWebURL,
-			QuoteSecret:   quoteSecret,
-			HoldTTL:       time.Duration(cfg.CPEntryHoldMinutes) * time.Minute,
-			RestoreWindow: time.Duration(cfg.CPRestoreWindowHours) * time.Hour,
-			TestPayments:  cfg.MembershipTestPayments,
+			WebURL:         cfg.AppWebURL,
+			QuoteSecret:    quoteSecret,
+			HoldTTL:        time.Duration(cfg.CPEntryHoldMinutes) * time.Minute,
+			RestoreWindow:  time.Duration(cfg.CPRestoreWindowHours) * time.Hour,
+			TestPayments:   cfg.MembershipTestPayments,
+			PlatformFeeBPS: cfg.StripeFeeBPS,
 		})
+	// Members get a share of SendAGift's commission back as a discount on
+	// the gifts they buy; the seller's price and payout do not change.
+	orderService.UseMemberDiscounts(competitionPointsRepo.MemberDiscount, cfg.StripeFeeBPS)
 	stripeService.OnMembershipEvent(competitionPointsService.HandleStripeEvent)
 	go competitionPointsService.RunLoop(context.Background(), time.Minute,
 		database.Exclusive(pool, database.LockCompetitionPoints))

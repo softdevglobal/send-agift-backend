@@ -65,15 +65,19 @@ func adminVersionErr(err error) error {
 
 // OfferInput is a membership offer draft.
 type OfferInput struct {
-	TierCode          string   `json:"tier_code"`
-	CountryID         string   `json:"country_id"`
-	Name              string   `json:"name"`
-	Description       *string  `json:"description"`
-	Currency          string   `json:"currency"`
-	PriceMinor        int64    `json:"price_minor"`
-	IntervalUnit      string   `json:"interval_unit"`
-	IntervalCount     int      `json:"interval_count"`
-	MemberBonusPoints int64    `json:"member_bonus_points"`
+	TierCode          string  `json:"tier_code"`
+	CountryID         string  `json:"country_id"`
+	Name              string  `json:"name"`
+	Description       *string `json:"description"`
+	Currency          string  `json:"currency"`
+	PriceMinor        int64   `json:"price_minor"`
+	IntervalUnit      string  `json:"interval_unit"`
+	IntervalCount     int     `json:"interval_count"`
+	MemberBonusPoints int64   `json:"member_bonus_points"`
+	// MemberDiscountBPS is the percentage off the gift price members get, in
+	// basis points (100 = 1%). Funded from SendAGift's commission, so it
+	// cannot be more than that.
+	MemberDiscountBPS int      `json:"member_discount_bps"`
 	GiftBenefits      []string `json:"gift_benefits"`
 	TermsVersion      string   `json:"terms_version"`
 }
@@ -81,7 +85,7 @@ type OfferInput struct {
 var tierCodeRe = regexp.MustCompile(`^[a-z0-9_-]{2,40}$`)
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
-func (in OfferInput) toModel(adminID uuid.UUID) (*models.PlanOffer, error) {
+func (in OfferInput) toModel(adminID uuid.UUID, platformFeeBPS int) (*models.PlanOffer, error) {
 	country, err := uuid.Parse(strings.TrimSpace(in.CountryID))
 	if err != nil {
 		return nil, invalidCP("country_id is required")
@@ -90,7 +94,8 @@ func (in OfferInput) toModel(adminID uuid.UUID) (*models.PlanOffer, error) {
 		TierCode: strings.ToLower(strings.TrimSpace(in.TierCode)), CountryID: country,
 		Name: strings.TrimSpace(in.Name), Currency: strings.ToUpper(strings.TrimSpace(in.Currency)),
 		PriceMinor: in.PriceMinor, IntervalUnit: in.IntervalUnit, IntervalCount: in.IntervalCount,
-		MemberBonusPoints: in.MemberBonusPoints, TermsVersion: strings.TrimSpace(in.TermsVersion),
+		MemberBonusPoints: in.MemberBonusPoints, MemberDiscountBPS: in.MemberDiscountBPS,
+		TermsVersion:     strings.TrimSpace(in.TermsVersion),
 		CreatedByAdminID: &adminID,
 	}
 	if in.Description != nil {
@@ -116,6 +121,14 @@ func (in OfferInput) toModel(adminID uuid.UUID) (*models.PlanOffer, error) {
 		return nil, invalidCP("member_bonus_points (the extra award above ordinary gift points) must be 0 to 10000000")
 	case o.TermsVersion == "":
 		return nil, invalidCP("terms_version is required")
+	case o.MemberDiscountBPS < 0:
+		return nil, invalidCP("member_discount_bps cannot be negative")
+	case o.MemberDiscountBPS > platformFeeBPS:
+		if platformFeeBPS <= 0 {
+			return nil, invalidCP("a member discount is funded from the platform commission, which is not set: set STRIPE_PLATFORM_FEE_BPS first")
+		}
+		return nil, invalidCP(fmt.Sprintf("the member discount (%.2f%%) cannot be more than the platform commission (%.2f%%), which funds it",
+			float64(o.MemberDiscountBPS)/100, float64(platformFeeBPS)/100))
 	}
 	var benefits []string
 	for _, b := range in.GiftBenefits {
@@ -145,7 +158,7 @@ func (s *CompetitionPointsService) AdminOffers(ctx context.Context) ([]models.Pl
 }
 
 func (s *CompetitionPointsService) CreateOffer(ctx context.Context, admin AdminActor, in OfferInput) (*models.PlanOffer, error) {
-	o, err := in.toModel(admin.ID)
+	o, err := in.toModel(admin.ID, s.platformFeeBPS)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +167,7 @@ func (s *CompetitionPointsService) CreateOffer(ctx context.Context, admin AdminA
 }
 
 func (s *CompetitionPointsService) UpdateOffer(ctx context.Context, admin AdminActor, id uuid.UUID, in OfferInput) (*models.PlanOffer, error) {
-	o, err := in.toModel(admin.ID)
+	o, err := in.toModel(admin.ID, s.platformFeeBPS)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +515,9 @@ func (s *CompetitionPointsService) AdminCustomer(ctx context.Context, customerID
 // ReleaseSettings shows which commercial values are still unset, so a
 // sandbox never passes for production.
 type ReleaseSettings struct {
+	// PlatformFeeBPS is SendAGift's commission per sale, in basis points: the
+	// most a member product discount can be.
+	PlatformFeeBPS     int      `json:"platform_fee_bps"`
 	HoldMinutes        int      `json:"hold_minutes"`
 	RestoreWindowHours float64  `json:"restore_window_hours"`
 	MembershipProvider string   `json:"membership_provider"`
@@ -511,6 +527,7 @@ type ReleaseSettings struct {
 
 func (s *CompetitionPointsService) Settings() ReleaseSettings {
 	return ReleaseSettings{
+		PlatformFeeBPS:     s.platformFeeBPS,
 		HoldMinutes:        int(s.holdTTL.Minutes()),
 		RestoreWindowHours: s.restoreWindow.Hours(),
 		MembershipProvider: s.membershipProvider(),

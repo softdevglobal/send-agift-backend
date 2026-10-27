@@ -217,6 +217,14 @@ func (s *StripeService) receiptLines(ctx context.Context, order *repository.Paya
 	if err != nil || len(rows) == 0 {
 		return nil
 	}
+	// A member's discount is not a line of its own on Stripe's page, so a
+	// discounted order is shown as one line for what is actually charged.
+	if order.MemberDiscount > 0 {
+		return []CheckoutLine{{
+			Name:       fmt.Sprintf("SendAGift order %s (member discount applied)", order.OrderNumber),
+			UnitAmount: order.Total, Quantity: 1,
+		}}
+	}
 	sum := 0
 	lines := make([]CheckoutLine, 0, len(rows))
 	for _, r := range rows {

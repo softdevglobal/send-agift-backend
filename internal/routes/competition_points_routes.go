@@ -19,6 +19,7 @@ import (
 //	GET  /customers/me/eligibility                       . What is available here, with reasons
 //	GET  /customers/me/membership                        . Membership, paid periods, bonus state
 //	GET  /customers/me/membership/offers                 . Offers on sale here, with the decision
+//	GET  /customers/me/member-discount                   . Product discount on a new order now
 //	POST /customers/me/membership/checkout               . Start a checkout (Idempotency-Key)
 //	POST /customers/me/membership/cancel                 . Stop renewal at period end
 //	POST /customers/me/membership/test-payment           . Sandbox only
@@ -39,6 +40,7 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 		r.Get("/customers/me/eligibility", h.Eligibility)
 		r.Get("/customers/me/membership", h.Membership)
 		r.Get("/customers/me/membership/offers", h.Offers)
+		r.Get("/customers/me/member-discount", h.MemberDiscount)
 		r.Get("/customers/me/competition-points", h.Wallet)
 		r.Get("/competitions/{id}/entry-quote", h.Quote)
 

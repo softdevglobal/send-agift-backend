@@ -42,6 +42,9 @@ type CompetitionPointsService struct {
 	// restoreWindow keeps units released from an expired lot usable for a
 	// while, so a failed start does not destroy them.
 	restoreWindow time.Duration
+	// platformFeeBPS is SendAGift's commission on each sale. A member
+	// discount is funded from it, so it can never be more than this.
+	platformFeeBPS int
 	// testPayments lets a sandbox confirm a membership payment by hand when
 	// no Stripe key is set. Never on in production.
 	testPayments bool
@@ -55,6 +58,8 @@ type CompetitionPointsConfig struct {
 	HoldTTL       time.Duration
 	RestoreWindow time.Duration
 	TestPayments  bool
+	// PlatformFeeBPS caps member product discounts (STRIPE_PLATFORM_FEE_BPS).
+	PlatformFeeBPS int
 }
 
 func NewCompetitionPointsService(repo *repository.CompetitionPointsRepository, competitions *CompetitionService, stripe *StripeClient, cfg CompetitionPointsConfig) *CompetitionPointsService {
@@ -64,13 +69,14 @@ func NewCompetitionPointsService(repo *repository.CompetitionPointsRepository, c
 	}
 	return &CompetitionPointsService{
 		repo: repo, competitions: competitions, stripe: stripe,
-		webURL:        strings.TrimRight(cfg.WebURL, "/"),
-		quoteSecret:   []byte(cfg.QuoteSecret),
-		quoteTTL:      5 * time.Minute,
-		holdTTL:       hold,
-		restoreWindow: cfg.RestoreWindow,
-		testPayments:  cfg.TestPayments,
-		now:           time.Now,
+		webURL:         strings.TrimRight(cfg.WebURL, "/"),
+		quoteSecret:    []byte(cfg.QuoteSecret),
+		quoteTTL:       5 * time.Minute,
+		holdTTL:        hold,
+		restoreWindow:  cfg.RestoreWindow,
+		platformFeeBPS: cfg.PlatformFeeBPS,
+		testPayments:   cfg.TestPayments,
+		now:            time.Now,
 	}
 }
 
@@ -1131,4 +1137,32 @@ func (s *CompetitionPointsService) RunLoop(ctx context.Context, every time.Durat
 		case <-t.C:
 		}
 	}
+}
+
+// MemberDiscountView is the product discount a customer gets right now.
+type MemberDiscountView struct {
+	// DiscountBPS is the percentage off the gift price, in basis points,
+	// already capped by the platform commission.
+	DiscountBPS int `json:"discount_bps"`
+	// PeriodEnd is when the paid period giving it ends.
+	PeriodEnd *time.Time `json:"period_end,omitempty"`
+}
+
+// MemberDiscount is GET /customers/me/member-discount, for showing the
+// saving in the bag before an order is placed. The order itself is priced on
+// the server, and this is only what it will do.
+func (s *CompetitionPointsService) MemberDiscount(ctx context.Context, customerID uuid.UUID) (*MemberDiscountView, error) {
+	bps, period, err := s.repo.MemberDiscount(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	out := &MemberDiscountView{}
+	if bps <= 0 || s.platformFeeBPS <= 0 {
+		return out, nil
+	}
+	out.DiscountBPS = min(bps, s.platformFeeBPS)
+	if end, err := s.repo.PeriodEnd(ctx, period); err == nil {
+		out.PeriodEnd = end
+	}
+	return out, nil
 }

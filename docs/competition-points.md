@@ -67,6 +67,36 @@ All under `/api/v1/admin/competition-points`.
 A published offer or policy never changes. A new price or rule is a new
 version, and orders and periods keep the version they were sold under.
 
+## Member product discount
+
+A membership package can give members a percentage off the gift price.
+
+- **Who pays for it:** SendAGift, out of its own commission
+  (`STRIPE_PLATFORM_FEE_BPS`, 790 = 7.9%). The **seller's price and payout do
+  not change**: the line price is still the seller's list price, and the
+  commission is still worked out on it.
+- **What the member pays:** the items less the discount, plus delivery. The
+  order's `total_amount` is already net of it, and the order records
+  `member_discount_amount` and `member_discount_bps`.
+- **Cap:** a package's discount cannot be more than the platform commission,
+  checked when the package is saved, and again when an order is priced, so a
+  lowered commission can never make the platform pay out of pocket. With no
+  commission set, no discount can be offered.
+- **Who gets it:** a customer with a paid membership period in force now (a
+  cancelled membership keeps it to the end of the period paid for). The server
+  prices every order; the bag only previews it through
+  `GET /customers/me/member-discount`.
+- **Rounding:** each line's discount is worked out on its list price and
+  rounded down.
+- **Competition points:** a gift earns points on what the customer actually
+  paid for the items, so the discount is taken off the eligible spend.
+- **Stripe's payment page** shows a discounted order as one line for what is
+  charged, named "member discount applied".
+
+Set the percentage in the package wizard (**Admin → Memberships**, step
+"Member perks"). It is part of the version sold, so changing it creates a new
+version like any other change.
+
 ## Rules as implemented (proposed defaults from the handover)
 
 - **Period anchor:** the gift's payment capture time (`finance.payments.paid_at`).
