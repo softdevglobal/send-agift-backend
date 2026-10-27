@@ -434,7 +434,7 @@ func (s *CompetitionPointsService) Join(ctx context.Context, customerID uuid.UUI
 			Currency:  offer.Currency, PriceMinor: offer.PriceMinor,
 			IntervalUnit: offer.IntervalUnit, IntervalCount: offer.IntervalCount,
 			CustomerEmail: ev.Email,
-			SuccessURL:    s.webURL + "/account/competition-points?welcome=membership",
+			SuccessURL:    s.webURL + "/account/points?welcome=membership",
 			CancelURL:     s.webURL + "/membership?checkout=cancelled",
 		}, "membership-checkout-"+sub.ID.String())
 		if err != nil {

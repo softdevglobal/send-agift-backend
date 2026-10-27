@@ -638,8 +638,8 @@ type PaidPeriodResult struct {
 
 // RecordPaidPeriod turns a paid invoice into a paid period and, once per
 // canonical period, its bonus slot. A package whose bonus is credited on
-// payment puts the bonus in the account now, as its own lot with no expiry,
-// so unused points carry into later periods; otherwise the slot waits for a
+// payment credits the bonus to the customer's points (My points) now, where
+// unused points carry into later periods; otherwise the slot waits for a
 // qualifying gift. Repeating the same invoice changes nothing.
 func (r *CompetitionPointsRepository) RecordPaidPeriod(ctx context.Context, inv PaidInvoice) (*PaidPeriodResult, error) {
 	if !inv.PeriodEnd.After(inv.PeriodStart) {
@@ -729,18 +729,18 @@ func (r *CompetitionPointsRepository) RecordPaidPeriod(ctx context.Context, inv 
 		if trigger != models.BonusTriggerPayment {
 			return nil
 		}
-		reason := "member bonus for the membership period from " + inv.PeriodStart.UTC().Format("2 Jan 2006")
-		lot, _, err := grantCPLot(ctx, tx, CPGrant{
-			CustomerID: s.CustomerID, Source: models.LotSourceMemberBonus, SourceID: slotID, Quantity: bonus,
-			Key: "cp:bonus:" + slotID.String(), Actor: systemActor, Reason: &reason,
-		})
-		if err != nil {
+		reason := "Membership bonus for the period from " + inv.PeriodStart.UTC().Format("2 Jan 2006")
+		if _, _, err := applyPoints(ctx, tx, PointsChange{
+			CustomerID: s.CustomerID, EntryType: models.PointsEntryMemberBonus, Delta: bonus,
+			ReferenceType: ref("membership_bonus_slot"), ReferenceID: &slotID,
+			IdempotencyKey: "member-bonus:" + slotID.String(), Reason: &reason, ActorType: "system",
+		}); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			update membership.bonus_slots
-			set status = 'awarded', awarded_lot_id = $2, awarded_at = now(), updated_at = now()
-			where id = $1 and status = 'unawarded'`, slotID, lot); err != nil {
+			set status = 'awarded', awarded_at = now(), updated_at = now()
+			where id = $1 and status = 'unawarded'`, slotID); err != nil {
 			return err
 		}
 		res.BonusCredited = bonus
@@ -795,15 +795,58 @@ func (r *CompetitionPointsRepository) SetPeriodPaymentStatus(ctx context.Context
 			return nil
 		}
 		if gift == nil && lot != nil {
-			// Credited with the payment: the payment's refund takes back what
-			// is unused. Points already held or spent open a case.
+			// Credited as competition points before they moved to My points.
 			return reverseBonusLot(ctx, tx, customerID, periodID, slotID, *lot, status)
+		}
+		if gift == nil {
+			// Credited to My points with the payment: its refund takes back
+			// what the customer still has. Points already spent open a case.
+			return reverseMemberBonusPoints(ctx, tx, customerID, periodID, slotID, status)
 		}
 		return openCase(ctx, tx, "membership_dispute", customerID, "bonus_slot", slotID, map[string]any{
 			"period_id": periodID, "payment_status": status,
 		})
 	})
 	return changed, err
+}
+
+// reverseMemberBonusPoints takes a refunded period's bonus back out of the
+// customer's points, as much as their balance allows.
+func reverseMemberBonusPoints(ctx context.Context, tx pgx.Tx, customerID, periodID, slotID uuid.UUID, status string) error {
+	var credited int64
+	err := tx.QueryRow(ctx, `select amount_delta from points.points_ledger
+		where idempotency_key = $1`, "member-bonus:"+slotID.String()).Scan(&credited)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	balance, err := lockPointsAccount(ctx, tx, customerID)
+	if err != nil {
+		return err
+	}
+	take := min(credited, balance)
+	reason := "Membership payment " + status
+	if take > 0 {
+		if _, _, err := applyPoints(ctx, tx, PointsChange{
+			CustomerID: customerID, EntryType: models.PointsEntryMemberBonusReversal, Delta: -take,
+			ReferenceType: ref("membership_bonus_slot"), ReferenceID: &slotID,
+			IdempotencyKey: "member-bonus-reversal:" + slotID.String(), Reason: &reason, ActorType: "system",
+		}); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `update membership.bonus_slots
+		set status = 'reversed', status_reason = $2, updated_at = now() where id = $1`, slotID, reason); err != nil {
+		return err
+	}
+	if take < credited {
+		return openCase(ctx, tx, "membership_dispute", customerID, "bonus_slot", slotID, map[string]any{
+			"period_id": periodID, "payment_status": status, "already_spent": credited - take,
+		})
+	}
+	return nil
 }
 
 // reverseBonusLot takes back the unused units of a bonus credited with a

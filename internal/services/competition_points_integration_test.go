@@ -275,6 +275,14 @@ func (f *cpFixture) lots(customer uuid.UUID, source string) (n, total int64) {
 	return n, total
 }
 
+// myPoints is the customer's My points balance.
+func (f *cpFixture) myPoints(customer uuid.UUID) int64 {
+	f.t.Helper()
+	var n int64
+	f.scan(&n, `select coalesce((select balance from points.points_accounts where customer_id = $1), 0)`, customer)
+	return n
+}
+
 func (f *cpFixture) available(customer uuid.UUID) int64 {
 	f.t.Helper()
 	w, err := f.cp.Wallet(f.ctx, customer)
@@ -299,8 +307,8 @@ func (f *cpFixture) reconciled() {
 // ─── Rewards ─────────────────────────────────────────────────────────────
 
 // A package whose bonus is credited on payment: each paid period puts its
-// bonus in the account at once, unused points carry into the next period,
-// and a refunded payment takes back what is unused.
+// bonus in My points at once, unused points carry into the next period, and
+// a refunded payment takes back what is unused.
 func TestCompetitionPointsBonusOnPayment(t *testing.T) {
 	f := newCPFixture(t, "NZ")
 	o, err := f.cp.CreateOffer(f.ctx, f.adminA, OfferInput{
@@ -324,7 +332,7 @@ func TestCompetitionPointsBonusOnPayment(t *testing.T) {
 		OfferID: o.ID, RenewalConsent: true, IdempotencyKey: uuid.NewString()}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if got := f.available(member); got != 0 {
+	if got := f.myPoints(member); got != 0 {
 		t.Fatalf("an unpaid checkout credited %d", got)
 	}
 	st, err := f.cp.Status(f.ctx, member)
@@ -336,30 +344,27 @@ func TestCompetitionPointsBonusOnPayment(t *testing.T) {
 	if _, err := f.cp.TestPay(f.ctx, member); err != nil {
 		t.Fatalf("pay: %v", err)
 	}
-	if got := f.available(member); got != 1000 {
+	if got := f.myPoints(member); got != 1000 {
 		t.Fatalf("after payment: %d, want 1000", got)
 	}
 	if st, _ = f.cp.Status(f.ctx, member); st.State != models.MembershipBonusUnlocked {
 		t.Fatalf("paid status: %s", st.State)
 	}
 	// Spend 800 of it, then renew: 200 left over plus the new 1000.
-	f.exec(`
-		with t as (insert into points.cp_transactions (operation_key, kind, customer_id, actor_type)
-		           values ('test-spend-' || $1::uuid::text, 'capture', $1::uuid, 'system') returning id),
-		     l as (update points.cp_lots set available = available - 800, consumed = consumed + 800
-		           where customer_id = $1 returning id)
-		insert into points.cp_postings (transaction_id, lot_id, bucket, delta)
-		select t.id, l.id, b.bucket, b.delta
-		from t, l, (values ('available', -800::bigint), ('consumed', 800::bigint)) b(bucket, delta)`, member)
+	f.exec(`update points.points_accounts set balance = balance - 800 where customer_id = $1`, member)
 	if _, err := f.cp.TestPay(f.ctx, member); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
-	if got := f.available(member); got != 1200 {
+	if got := f.myPoints(member); got != 1200 {
 		t.Fatalf("after renewal: %d, want 1200 (200 carried over + 1000)", got)
 	}
-	// Paying the same invoice twice credits nothing more.
-	if n, total := f.lots(member, models.LotSourceMemberBonus); n != 2 || total != 2000 {
-		t.Fatalf("bonus lots %d/%d", n, total)
+	// One ledger row per paid period, in My points, none as competition points.
+	if n := f.count(`select count(*) from points.points_ledger where customer_id = $1 and entry_type = 'member_bonus'`,
+		member); n != 2 {
+		t.Fatalf("member bonus entries %d, want 2", n)
+	}
+	if n, _ := f.lots(member, models.LotSourceMemberBonus); n != 0 {
+		t.Fatalf("a bonus credited on payment should not be a competition points lot")
 	}
 
 	// The renewal's payment is refunded: its unused 1000 are taken back.
@@ -369,7 +374,7 @@ func TestCompetitionPointsBonusOnPayment(t *testing.T) {
 	if _, err := f.repo.SetPeriodPaymentStatus(f.ctx, "test", invoice, "refunded"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.available(member); got != 200 {
+	if got := f.myPoints(member); got != 200 {
 		t.Fatalf("after refund: %d, want 200", got)
 	}
 	f.reconciled()

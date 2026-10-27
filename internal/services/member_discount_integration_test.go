@@ -292,7 +292,7 @@ func TestMembershipSyncFromStripe(t *testing.T) {
 		if st.CurrentPeriod == nil || st.State != models.MembershipBonusUnlocked {
 			t.Fatalf("after sync %d: %s %+v", i, st.State, st.CurrentPeriod)
 		}
-		if got := f.available(member); got != 1000 {
+		if got := f.myPoints(member); got != 1000 {
 			t.Fatalf("after sync %d: %d points, want 1000", i, got)
 		}
 	}
