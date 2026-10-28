@@ -60,11 +60,7 @@ func adminActor(w http.ResponseWriter, r *http.Request) (services.AdminActor, bo
 		utils.Error(w, http.StatusUnauthorized, "unauthorized")
 		return services.AdminActor{}, false
 	}
-	role, _ := r.Context().Value(middleware.RoleContextKey).(string)
-	return services.AdminActor{
-		ID: id, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
-		SuperAdmin: strings.EqualFold(role, "superadmin"),
-	}, true
+	return services.AdminActor{ID: id, IP: r.RemoteAddr, UserAgent: r.UserAgent()}, true
 }
 
 // ─── Public and customer ──────────────────────────────────────────────────
@@ -486,7 +482,7 @@ func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallba
 		utils.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, services.ErrRedemptionLocked):
 		utils.JSON(w, http.StatusLocked, map[string]any{"error": err.Error(), "code": "REDEMPTION_LOCKED"})
-	case errors.Is(err, services.ErrNotEligible), errors.Is(err, services.ErrSuperAdminOnly):
+	case errors.Is(err, services.ErrNotEligible):
 		utils.Error(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, services.ErrInvalidCompetition), errors.Is(err, services.ErrInvalidReview),
 		errors.Is(err, services.ErrInvalidClaim), errors.Is(err, services.ErrInvalidReserve):

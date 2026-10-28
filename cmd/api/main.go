@@ -86,7 +86,7 @@ func main() {
 	gameService := services.NewGameService(gameRepo)
 	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, countries, pointsRepo)
 	gameService.UseCompetitions(competitionService)
-	// Every practice play costs the points a Super Admin set for that game
+	// Every practice play costs the points an admin set for that game
 	// (competition.games.play_cost_points), taken on the server when it starts.
 	gameService.ChargeForPlays(pointsRepo)
 	pointsService := services.NewPointsService(pointsRepo)

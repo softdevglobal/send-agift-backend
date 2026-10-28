@@ -124,7 +124,7 @@ func (r *MessagingRepository) FindByOrderItem(ctx context.Context, orderItemID s
 }
 
 // GetForParticipant returns a conversation only if userID is a participant with the given role.
-// role is normalized (superadmin → admin). This blocks cross-role / other-seller access.
+// role is lowercased. This blocks cross-role / other-seller access.
 func (r *MessagingRepository) GetForParticipant(ctx context.Context, conversationID, userID, role string) (*models.Conversation, error) {
 	c := &models.Conversation{}
 	err := r.db.QueryRow(ctx, `

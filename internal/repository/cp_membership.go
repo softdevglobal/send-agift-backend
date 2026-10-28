@@ -321,7 +321,7 @@ func (r *CompetitionPointsRepository) TransitionOffer(ctx context.Context, id uu
 }
 
 // PublishOffer puts a draft straight on sale, with no second approver. It is
-// for a Super Admin (the route already requires one and a fresh password), so
+// for an admin (the route already requires one and a fresh password), so
 // the two-person rule of the submit-and-approve path does not apply. The
 // version it replaces is retired, and from here the version is immutable.
 func (r *CompetitionPointsRepository) PublishOffer(ctx context.Context, id, adminID uuid.UUID, audit models.AuditEntry) (*models.PlanOffer, error) {

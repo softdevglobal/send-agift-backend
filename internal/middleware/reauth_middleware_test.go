@@ -27,7 +27,7 @@ func TestRequireReauth(t *testing.T) {
 	}
 	fresh, _ := utils.GenerateJWT("admin-1", "a@x", "reauth", secret, time.Minute)
 	expired, _ := utils.GenerateJWT("admin-1", "a@x", "reauth", secret, -time.Minute)
-	login, _ := utils.GenerateJWT("admin-1", "a@x", "superadmin", secret, time.Minute)
+	login, _ := utils.GenerateJWT("admin-1", "a@x", "admin", secret, time.Minute)
 	other, _ := utils.GenerateJWT("admin-2", "b@x", "reauth", secret, time.Minute)
 
 	for name, tc := range map[string]struct {

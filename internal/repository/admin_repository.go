@@ -21,7 +21,7 @@ func NewAdminRepository(db *pgxpool.Pool) *AdminRepository {
 }
 
 // CountAdmins tells us whether any admin exists yet. The bootstrap
-// endpoint uses this to only allow creating the FIRST superadmin for free.
+// endpoint uses this to only allow creating the FIRST admin for free.
 func (r *AdminRepository) CountAdmins(ctx context.Context) (int, error) {
 	var count int
 	err := r.db.QueryRow(ctx, `select count(*) from admin.admin_users`).Scan(&count)
@@ -36,7 +36,7 @@ func (r *AdminRepository) CreateAdmin(ctx context.Context, a *models.Admin) erro
 		returning id, role, status, created_at, updated_at, image_url`
 	role := a.Role
 	if role == "" {
-		role = "superadmin"
+		role = "admin"
 	}
 	return r.db.QueryRow(ctx, query, a.Email, a.PasswordHash, a.DisplayName, role, a.MFARequired, a.ImageURL).
 		Scan(&a.ID, &a.Role, &a.Status, &a.CreatedAt, &a.UpdatedAt, &a.ImageURL)

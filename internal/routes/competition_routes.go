@@ -32,7 +32,7 @@ import (
 // review queue and the leaderboard freeze, plus creating, duplicating and
 // editing drafts.
 //
-// Superadmin JWT: everything that changes prize economics or pays out.
+// Admin JWT, too: everything that changes prize economics or pays out.
 // editing a published competition, reserve, publishing, pause/resume/close/cancel, prize adjustments,
 // voids and refunds, finalising, draws, winners, claims, settlement and
 // points (spec §2, AC-13). Every one is audited, and the ones that move money
@@ -72,9 +72,8 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 
 		r.Get("/admin/competitions", c.AdminList)
 		r.Get("/admin/competitions/{id}", c.AdminGet)
-		// Any admin may set up drafts: nothing moves money and no player
-		// sees one until a Super Admin funds and publishes it. Editing a
-		// published competition is Super Admin only, checked in the service.
+		// Any admin may set up and edit competitions. No player sees one
+		// until an admin funds and publishes it.
 		r.Post("/admin/competitions", c.Create)
 		r.Put("/admin/competitions/{id}", c.Update)
 		r.Patch("/admin/competitions/{id}", c.Update)
@@ -94,10 +93,10 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 		r.Get("/admin/customers/{customerID}/points", p.CustomerWallet)
 	})
 
-	// Super Admin: prize economics and payouts.
+	// Prize economics and payouts.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
-		r.Use(middleware.RequireRole("superadmin"))
+		r.Use(middleware.RequireRole("admin"))
 
 		r.Put("/admin/competitions/{id}/prize-reserve", c.SetReserve)
 		r.Post("/admin/competitions/{id}/prize-reserve/fund", c.FundReserve)

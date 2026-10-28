@@ -30,7 +30,7 @@ import (
 //	POST /competitions/{id}/entries/{entryID}/start      . Start the attempt it pays for
 //	POST /competitions/{id}/entries/{entryID}/cancel     . Release an entry not started
 //
-// Admin JWT views everything; a Super Admin changes it. Changes that move
+// Admin JWT views and changes everything. Changes that move
 // what customers are offered also need a fresh password confirmation
 // (X-Reauth-Token). Activating an emergency stop deliberately does not, so
 // it can happen at once.
@@ -74,7 +74,7 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
-		r.Use(middleware.RequireRole("superadmin"))
+		r.Use(middleware.RequireRole("admin"))
 		r.Post("/admin/competition-points/stops", h.ActivateStop)
 		r.Post("/admin/competition-points/run", h.RunNow)
 

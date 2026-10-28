@@ -73,7 +73,7 @@ func newCPFixture(t *testing.T, iso string) *cpFixture {
 	}
 	c := cpCountries[iso]
 	f := &cpFixture{t: t, ctx: ctx, pool: pool, iso: iso, currency: c.currency, prefix: c.prefix, digits: c.digits,
-		adminA: AdminActor{ID: uuid.New(), SuperAdmin: true}, adminB: AdminActor{ID: uuid.New(), SuperAdmin: true}}
+		adminA: AdminActor{ID: uuid.New()}, adminB: AdminActor{ID: uuid.New()}}
 	f.scan(&f.country, `
 		insert into core.countries (iso_code, name, default_currency, default_timezone)
 		values ($1, $2, $3, 'UTC')
@@ -894,7 +894,7 @@ func TestCompetitionPointsControls(t *testing.T) {
 		t.Fatalf("the database must refuse editing a submitted offer")
 	}
 
-	// Approvals need a second admin too.
+	// Approvals.
 	expires := time.Now().Add(24 * time.Hour)
 	test := "test"
 	a, err := f.cp.RequestApproval(f.ctx, f.adminA, ApprovalInput{Operation: models.OpMembershipSale,
@@ -902,10 +902,7 @@ func TestCompetitionPointsControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A Super Admin may approve what they recorded themselves; an ordinary
-	// admin may not.
-	_, err = f.cp.DecideApproval(f.ctx, AdminActor{ID: f.adminA.ID}, a.ID, true)
-	wantCP(t, err, "SECOND_APPROVER_REQUIRED")
+	// An admin may approve what they recorded themselves.
 	if _, err := f.cp.DecideApproval(f.ctx, f.adminA, a.ID, true); err != nil {
 		t.Fatal(err)
 	}

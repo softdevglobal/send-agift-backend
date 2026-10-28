@@ -202,7 +202,7 @@ func (h *CompetitionHandler) Events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ─── Super Admin ──────────────────────────────────────────────────────────
+// ─── Admin ──────────────────────────────────────────────────────────
 
 // Pause handles POST /admin/competitions/{id}/pause.
 func (h *CompetitionHandler) Pause() http.HandlerFunc {

@@ -22,7 +22,6 @@ var (
 	ErrCompetitionNotLive  = errors.New("competition is not open yet")
 	ErrCompetitionClosed   = errors.New("competition has closed")
 	ErrCompetitionLocked   = errors.New("competition rules are locked once it has started")
-	ErrSuperAdminOnly      = errors.New("only a super admin can change a published competition")
 	ErrCompetitionState    = errors.New("competition is not in the right state for this action")
 	ErrInvalidCompetition  = errors.New("invalid competition")
 	ErrScheduleBlocked     = errors.New("competition cannot be scheduled")
@@ -108,9 +107,6 @@ type AdminActor struct {
 	ID        uuid.UUID
 	IP        string
 	UserAgent string
-	// SuperAdmin may change a published competition; other admins only
-	// set up drafts.
-	SuperAdmin bool
 }
 
 func (a AdminActor) ledgerActor() repository.Actor {
@@ -1448,11 +1444,6 @@ func (s *CompetitionService) UpdateCompetition(ctx context.Context, admin AdminA
 	}
 	if !competitionEditable(c.Status, c.StartsAt, s.now()) {
 		return nil, ErrCompetitionLocked
-	}
-	// Editing a scheduled competition takes it back to draft, pulling it
-	// from players: that is a Super Admin's call.
-	if c.Status != "draft" && !admin.SuperAdmin {
-		return nil, ErrSuperAdminOnly
 	}
 	before := *c
 	if err := s.apply(ctx, c, in); err != nil {

@@ -762,7 +762,7 @@ func (r *CompetitionRepository) Close(ctx context.Context, id uuid.UUID, audit m
 
 // ─── Admin money movements ────────────────────────────────────────────────
 
-// AdjustPrize posts a Super Admin's change to the prize, with its reason, as
+// AdjustPrize posts an admin's change to the prize, with its reason, as
 // a new ledger entry (spec §2.1). Allowed from publication until the round
 // is finalised.
 func (r *CompetitionRepository) AdjustPrize(ctx context.Context, id uuid.UUID, delta int64, reason string, actor Actor, audit models.AuditEntry) (*models.PrizeLedgerEntry, error) {
@@ -1336,7 +1336,7 @@ func (r *CompetitionRepository) ReconcilableIDs(ctx context.Context) ([]uuid.UUI
 	return out, rows.Err()
 }
 
-// Analytics gathers the Super Admin dashboard figures for a round (spec §10).
+// Analytics gathers the admin dashboard figures for a round (spec §10).
 func (r *CompetitionRepository) Analytics(ctx context.Context, id uuid.UUID) (*models.CompetitionAnalytics, error) {
 	a := &models.CompetitionAnalytics{
 		CompetitionID: id, RejectedByReason: map[string]int64{},

@@ -92,15 +92,9 @@ type SendMessageInput struct {
 	Attachments []ChatAttachmentInput `json:"attachments"`
 }
 
-// normalizeMessagingRole lowercases the role and treats "superadmin" as "admin"
-// for the purposes of messaging permissions (matches the route doc comment:
-// "superadmin counts as admin")
+// normalizeMessagingRole lowercases the role for messaging permissions.
 func normalizeMessagingRole(role string) string {
-	role = strings.ToLower(role)
-	if role == "superadmin" {
-		return "admin"
-	}
-	return role
+	return strings.ToLower(role)
 }
 
 // Start opens a conversation for the authenticated customer, seller, or admin.

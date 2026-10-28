@@ -46,7 +46,7 @@ func RegisterGameRoutes(r chi.Router, games *handlers.GameHandler, jwtSecret str
 
 	// Admin console: who is playing, who is winning, and the anti-cheat
 	// review queue. These boards carry full names and emails, so they need a
-	// signed-in admin (superadmin counts as one) and are never public.
+	// signed-in admin and are never public.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("admin"))
@@ -57,8 +57,7 @@ func RegisterGameRoutes(r chi.Router, games *handlers.GameHandler, jwtSecret str
 		r.Post("/admin/games/scores/{sessionID}/review", games.AdminReviewScore)
 	})
 
-	// What each game costs to play: any platform admin (superadmin counts as
-	// one), with a fresh password confirmation (X-Reauth-Token), audited.
+	// What each game costs to play: any platform admin, with a fresh password confirmation (X-Reauth-Token), audited.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("admin"))

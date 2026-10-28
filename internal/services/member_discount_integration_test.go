@@ -159,7 +159,7 @@ func TestMemberDiscountOfferCap(t *testing.T) {
 	}
 }
 
-// A Super Admin can publish a membership package alone: no second approver.
+// An admin can publish a membership package alone: no second approver.
 func TestMembershipPublishDirectly(t *testing.T) {
 	f := newCPFixture(t, "PH")
 	mk := func(name string) *OfferInput {

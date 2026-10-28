@@ -36,7 +36,7 @@ func TestRequireAuthEndsSessionsBeforeTheCutoff(t *testing.T) {
 
 	customer, _ := utils.GenerateJWT("c-1", "a@x", "customer", secret, time.Hour)
 	seller, _ := utils.GenerateJWT("s-1", "s@x", "seller", secret, time.Hour)
-	admin, _ := utils.GenerateJWT("a-1", "a@x", "superadmin", secret, time.Hour)
+	admin, _ := utils.GenerateJWT("a-1", "a@x", "admin", secret, time.Hour)
 
 	UseSessionChecker(fakeSessions{})
 	if got := call(customer); got != http.StatusNoContent {

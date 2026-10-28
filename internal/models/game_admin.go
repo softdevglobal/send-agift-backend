@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// AdminPlayer identifies a player to a superadmin. Unlike the public boards
+// AdminPlayer identifies a player to an admin. Unlike the public boards
 // it carries the full name and email. Admins need to know who is winning.
 type AdminPlayer struct {
 	Kind        string     `json:"kind"` // customer or guest
@@ -16,7 +16,7 @@ type AdminPlayer struct {
 	CountryName *string    `json:"country_name,omitempty"`
 }
 
-// AdminGameSummary is one game in the superadmin games overview.
+// AdminGameSummary is one game in the admin games overview.
 type AdminGameSummary struct {
 	Slug         string `json:"slug"`
 	Name         string `json:"name"`
@@ -34,7 +34,7 @@ type AdminGameSummary struct {
 	// a replay engine). The only plays PlayCostPoints applies to. Chance
 	// games and quizzes run inside competitions only.
 	Practice bool `json:"practice"`
-	// PlayCostPoints is what one practice play costs; a Super Admin sets it.
+	// PlayCostPoints is what one practice play costs; an admin sets it.
 	PlayCostPoints int64        `json:"play_cost_points"`
 	TopScore       *int64       `json:"top_score,omitempty"`
 	TopPlayer      *AdminPlayer `json:"top_player,omitempty"`
@@ -58,7 +58,7 @@ type AdminGameLeaderboard struct {
 	Entries []AdminLeaderboardRow `json:"entries"`
 }
 
-// AdminGameScore is one recorded practice score, as a superadmin sees it.
+// AdminGameScore is one recorded practice score, as an admin sees it.
 // including the anti-cheat verdict and why.
 type AdminGameScore struct {
 	SessionID        uuid.UUID        `json:"session_id"`

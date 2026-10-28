@@ -13,7 +13,7 @@ import (
 //
 // Auth stack for every route below:
 //  1. RequireAuth    . Valid JWT required; puts user_id + role on context
-//  2. RequireRole    . Customer | seller | admin (superadmin passes as admin)
+//  2. RequireRole    . Customer | seller | admin
 //
 // Product rules (AliExpress-like):
 //   - product_inquiry / order: stay open by default; close is optional; order Start auto-reopens if closed

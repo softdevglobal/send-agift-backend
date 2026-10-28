@@ -25,12 +25,12 @@ import (
 //	POST /payments/points/webhook
 //
 // Packages: sellers read GET /sellers/me/points/packages; admins read
-// GET /admin/points/packages; a Super Admin creates and edits them with
+// GET /admin/points/packages; an admin creates and edits them with
 // POST /admin/points/packages and PUT /admin/points/packages/{packageID}.
 // With the Stripe provider, POST /sellers/me/points/purchases/{id}/sync
 // re-checks a payment when the seller comes back from Stripe.
 //
-// Admin JWT views purchases; a Super Admin with a fresh password
+// Admin JWT views purchases; an admin with a fresh password
 // confirmation (X-Reauth-Token) confirms or fails them, which credits or
 // refuses the points.
 func RegisterSellerPointsRoutes(r chi.Router, h *handlers.SellerPointsHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
@@ -61,7 +61,7 @@ func RegisterSellerPointsRoutes(r chi.Router, h *handlers.SellerPointsHandler, j
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
-		r.Use(middleware.RequireRole("superadmin"))
+		r.Use(middleware.RequireRole("admin"))
 		r.Use(middleware.RequireReauth(jwtSecret))
 		r.Post("/admin/points/purchases/{purchaseID}/confirm", h.AdminConfirm)
 		r.Post("/admin/points/purchases/{purchaseID}/fail", h.AdminFail)

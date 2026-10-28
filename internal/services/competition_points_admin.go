@@ -211,7 +211,7 @@ func (s *CompetitionPointsService) UpdateOffer(ctx context.Context, admin AdminA
 // OfferTransition moves an offer version: submit, approve (publish),
 // return_to_draft, suspend, resume or retire.
 func (s *CompetitionPointsService) OfferTransition(ctx context.Context, admin AdminActor, id uuid.UUID, action string) (*models.PlanOffer, error) {
-	// A Super Admin publishes a membership package directly: no second
+	// An admin publishes a membership package directly: no second
 	// approver is needed for it.
 	if action == "publish" {
 		out, err := s.repo.PublishOffer(ctx, id, admin.ID, admin.cpAudit("membership_offer.publish", "membership_offer"))
@@ -228,7 +228,7 @@ func (s *CompetitionPointsService) OfferTransition(ctx context.Context, admin Ad
 	if err != nil {
 		return nil, adminVersionErr(err)
 	}
-	if out.Status == models.VersionPublished && admin.SuperAdmin {
+	if out.Status == models.VersionPublished {
 		return out, s.openMembershipMarket(ctx, admin, out)
 	}
 	return out, nil
@@ -236,7 +236,7 @@ func (s *CompetitionPointsService) OfferTransition(ctx context.Context, admin Ad
 
 // openMembershipMarket records the approvals a published package needs to be
 // on sale in its country: membership sales on the web, renewals, and gift
-// points earning so the member bonus can be awarded. A Super Admin publishing
+// points earning so the member bonus can be awarded. An admin publishing
 // the package is the approval; one that already covers an operation is kept.
 func (s *CompetitionPointsService) openMembershipMarket(ctx context.Context, admin AdminActor, o *models.PlanOffer) error {
 	provider := s.membershipProvider()
@@ -433,8 +433,7 @@ type ApprovalInput struct {
 	MinAge      *int    `json:"min_age"`
 	EvidenceRef string  `json:"evidence_ref"`
 	Notes       *string `json:"notes"`
-	// ApproveNow records the approval and approves it in the same step. A
-	// Super Admin only.
+	// ApproveNow records the approval and approves it in the same step.
 	ApproveNow    bool       `json:"approve_now"`
 	EffectiveFrom *time.Time `json:"effective_from"`
 	ExpiresAt     *time.Time `json:"expires_at"`
@@ -515,9 +514,8 @@ func (s *CompetitionPointsService) DecideApproval(ctx context.Context, admin Adm
 	if approve {
 		action = "capability_approval.approve"
 	}
-	// Approvals are Super Admin only, and a Super Admin may approve one they
-	// recorded themselves.
-	out, err := s.repo.DecideApproval(ctx, id, admin.ID, approve, admin.SuperAdmin, admin.cpAudit(action, "capability_approval"))
+	// An admin may approve one they recorded themselves.
+	out, err := s.repo.DecideApproval(ctx, id, admin.ID, approve, true, admin.cpAudit(action, "capability_approval"))
 	return out, adminVersionErr(err)
 }
 

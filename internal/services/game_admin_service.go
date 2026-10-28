@@ -20,7 +20,7 @@ var ErrScoreNotReviewable = errors.New("this score can no longer be reviewed")
 const adminBoardLimit = 200
 
 // AdminGames returns every game in the catalog with its activity and best
-// scorer, for the superadmin console.
+// scorer, for the admin console.
 func (s *GameService) AdminGames(ctx context.Context) ([]models.AdminGameSummary, error) {
 	list, err := s.games.AdminGameSummaries(ctx)
 	if err != nil {

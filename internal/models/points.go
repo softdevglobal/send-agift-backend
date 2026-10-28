@@ -214,7 +214,7 @@ type PointsPurchase struct {
 }
 
 // PointPackage is a ready-made bundle of points a seller can buy, set up by
-// a Super Admin. BonusPoints come on top of Points.
+// an admin. BonusPoints come on top of Points.
 type PointPackage struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`

@@ -11,7 +11,7 @@ import (
 	"myapp/internal/utils"
 )
 
-// Superadmin views of the game collection: activity per game, full
+// Admin views of the game collection: activity per game, full
 // leaderboards with real names, and the anti-cheat review queue.
 
 func queryLimit(r *http.Request) int {
