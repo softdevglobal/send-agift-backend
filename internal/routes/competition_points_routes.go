@@ -22,6 +22,7 @@ import (
 //	GET  /customers/me/member-discount                   . Product discount on a new order now
 //	POST /customers/me/membership/checkout               . Start a checkout (Idempotency-Key)
 //	POST /customers/me/membership/cancel                 . Stop renewal at period end
+//	POST /customers/me/membership/resume                 . Turn renewal back on
 //	POST /customers/me/membership/sync                   . Confirm a checkout's payment with Stripe
 //	POST /customers/me/membership/test-payment           . Sandbox only
 //	GET  /customers/me/competition-points                . Lots, holds, pending gifts, activity
@@ -49,6 +50,7 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 			r.Use(middleware.RateLimitByUser(20, time.Minute))
 			r.Post("/customers/me/membership/checkout", h.Join)
 			r.Post("/customers/me/membership/cancel", h.CancelMembership)
+			r.Post("/customers/me/membership/resume", h.ResumeMembership)
 			r.Post("/customers/me/membership/sync", h.SyncMembership)
 			r.Post("/customers/me/membership/test-payment", h.TestPay)
 			r.Post("/competitions/{id}/entries", h.Reserve)

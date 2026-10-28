@@ -548,6 +548,59 @@ func (s *CompetitionPointsService) Cancel(ctx context.Context, customerID uuid.U
 	return s.Status(ctx, customerID)
 }
 
+// Resume turns renewal back on for a membership set to end at its period
+// end. It renews again only where renewals are still approved.
+func (s *CompetitionPointsService) Resume(ctx context.Context, customerID uuid.UUID, channel string) (*models.MembershipStatus, error) {
+	sub, err := s.repo.LiveSubscription(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	if sub == nil || sub.ProviderSubscriptionID == nil || !sub.CancelAtPeriodEnd ||
+		(sub.Status != models.SubscriptionCancelling && sub.Status != models.SubscriptionActive) {
+		return nil, cpRefuse(http.StatusConflict, "NOTHING_TO_RESUME",
+			"There is no ending membership to turn renewal back on for.", "view_membership")
+	}
+	ev, err := s.repo.Evidence(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+	provider := sub.Provider
+	d, _, err := s.decide(ctx, ev, models.OpMembershipRenewal, channel, &provider)
+	if err != nil {
+		return nil, err
+	}
+	if !d.Allowed {
+		return nil, refusalFrom(d)
+	}
+	switch sub.Provider {
+	case "stripe":
+		if s.stripe == nil {
+			return nil, cpRefuse(http.StatusServiceUnavailable, models.ReasonProviderUnavailable,
+				"We couldn't reach the payment provider. Please try again.", "retry")
+		}
+		stripeSub, err := s.stripe.ResumeSubscription(ctx, *sub.ProviderSubscriptionID,
+			"membership-resume-"+sub.ID.String()+"-"+s.now().UTC().Format("20060102150405"))
+		if err != nil {
+			return nil, cpRefuse(http.StatusBadGateway, models.ReasonProviderUnavailable,
+				"We couldn't turn renewal back on with the payment provider. Please try again.", "retry")
+		}
+		if _, err := s.applyStripeSubscription(ctx, stripeSub); err != nil {
+			return nil, err
+		}
+	default:
+		if _, err := s.repo.ApplyProviderSubscription(ctx, repository.ProviderSubscriptionUpdate{
+			Provider: sub.Provider, ProviderSubscriptionID: *sub.ProviderSubscriptionID, LocalID: &sub.ID,
+			ProviderStatus: "active", CancelAtPeriodEnd: false,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.repo.ClearCancelRequest(ctx, sub.ID); err != nil {
+		return nil, err
+	}
+	return s.Status(ctx, customerID)
+}
+
 // Status is GET /customers/me/membership: the period in force, its bonus
 // and the actual next charge.
 func (s *CompetitionPointsService) Status(ctx context.Context, customerID uuid.UUID) (*models.MembershipStatus, error) {

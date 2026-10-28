@@ -111,6 +111,18 @@ func (c *StripeClient) CancelSubscriptionAtPeriodEnd(ctx context.Context, id, id
 	return &sub, nil
 }
 
+// ResumeSubscription turns renewal back on for a membership that was set to
+// end at its period end.
+func (c *StripeClient) ResumeSubscription(ctx context.Context, id, idempotencyKey string) (*StripeSubscription, error) {
+	form := url.Values{}
+	form.Set("cancel_at_period_end", "false")
+	var sub StripeSubscription
+	if err := c.do(ctx, http.MethodPost, "/subscriptions/"+url.PathEscape(id), form, idempotencyKey, &sub); err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}
+
 // GetSubscription reads a subscription's current state.
 func (c *StripeClient) GetSubscription(ctx context.Context, id string) (*StripeSubscription, error) {
 	var sub StripeSubscription

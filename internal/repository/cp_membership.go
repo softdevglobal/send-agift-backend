@@ -700,6 +700,13 @@ func (r *CompetitionPointsRepository) RequestCancel(ctx context.Context, id uuid
 	return err
 }
 
+// ClearCancelRequest records that the customer turned renewal back on.
+func (r *CompetitionPointsRepository) ClearCancelRequest(ctx context.Context, id uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `update membership.subscriptions
+		set cancel_requested_at = null, updated_at = now() where id = $1`, id)
+	return err
+}
+
 // ─── Paid periods ────────────────────────────────────────────────────────
 
 // PaidInvoice is a provider-confirmed payment for one membership period.

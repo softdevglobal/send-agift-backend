@@ -1034,3 +1034,24 @@ func TestAdminMembersList(t *testing.T) {
 		t.Fatalf("an unknown state must be refused")
 	}
 }
+
+// A member who cancelled can turn renewal back on before the period ends.
+func TestMembershipResumeRenewal(t *testing.T) {
+	f := newCPFixture(t, "NZ")
+	o := f.offer(0)
+	member := f.customer()
+	f.join(member, o)
+	st, err := f.cp.Cancel(f.ctx, member)
+	if err != nil || st.Subscription == nil || !st.Subscription.CancelAtPeriodEnd || st.NextChargeAt != nil {
+		t.Fatalf("after cancel: %+v %v", st, err)
+	}
+	st, err = f.cp.Resume(f.ctx, member, "web")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if st.Subscription.CancelAtPeriodEnd || st.Subscription.Status != models.SubscriptionActive || st.NextChargeAt == nil {
+		t.Fatalf("after resume: %+v", st.Subscription)
+	}
+	_, err = f.cp.Resume(f.ctx, member, "web")
+	wantCP(t, err, "NOTHING_TO_RESUME")
+}

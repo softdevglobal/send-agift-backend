@@ -176,6 +176,21 @@ func (h *CompetitionPointsHandler) CancelMembership(w http.ResponseWriter, r *ht
 	utils.JSON(w, http.StatusOK, out)
 }
 
+// ResumeMembership handles POST /customers/me/membership/resume: turns
+// renewal back on for a membership set to end.
+func (h *CompetitionPointsHandler) ResumeMembership(w http.ResponseWriter, r *http.Request) {
+	id, ok := customerUUID(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.cp.Resume(r.Context(), id, channelOf(r))
+	if err != nil {
+		h.writeError(w, err, "could not turn renewal back on")
+		return
+	}
+	utils.JSON(w, http.StatusOK, out)
+}
+
 // TestPay handles POST /customers/me/membership/test-payment (sandbox only).
 func (h *CompetitionPointsHandler) TestPay(w http.ResponseWriter, r *http.Request) {
 	id, ok := customerUUID(w, r)
