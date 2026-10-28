@@ -593,7 +593,7 @@ func (s *CompetitionPointsService) Status(ctx context.Context, customerID uuid.U
 				"Your membership is active. Gifts earn ordinary points.", "send_gift"
 		case (slot.Status == models.BonusAwarded || slot.Status == models.BonusRestored) && slot.QualifyingGiftID == nil:
 			st.State, st.Message, st.NextAction = models.MembershipBonusUnlocked,
-				fmt.Sprintf("Your member bonus of %d competition points for this period is in your account.", slot.BonusPoints),
+				fmt.Sprintf("Your member bonus of %d points for this period is in My points.", slot.BonusPoints),
 				"view_points"
 		case slot.Status == models.BonusAwarded || slot.Status == models.BonusRestored:
 			st.State, st.Message, st.NextAction = models.MembershipBonusUnlocked,
