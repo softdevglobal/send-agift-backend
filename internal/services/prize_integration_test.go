@@ -1164,8 +1164,8 @@ func TestCompetitionAnnouncementPush(t *testing.T) {
 	}
 }
 
-// Any admin can set up a draft; changing a published competition. Which
-// pulls it back to draft. Takes a Super Admin.
+// An admin can set up a draft, and can also change it once it is
+// published, which pulls it back to draft.
 func TestDraftEditingRoles(t *testing.T) {
 	f := newPrizeFixture(t)
 	rules := "Highest score wins."
@@ -1177,7 +1177,6 @@ func TestDraftEditingRoles(t *testing.T) {
 		PrizeCurrency: &f.currency, OfficialRules: &rules, StartPrizeCents: &start,
 	}
 	admin := AdminActor{ID: uuid.New()}
-	super := AdminActor{ID: uuid.New(), SuperAdmin: true}
 
 	view, err := f.svc.CreateCompetition(f.ctx, admin, in)
 	if err != nil {
@@ -1188,22 +1187,19 @@ func TestDraftEditingRoles(t *testing.T) {
 		t.Fatalf("an admin should edit a draft: %v", err)
 	}
 
-	if _, err := f.svc.SetReserve(f.ctx, super, view.ID, ReserveInput{
+	if _, err := f.svc.SetReserve(f.ctx, admin, view.ID, ReserveInput{
 		ReserveAmount: start, Currency: f.currency, FundingSource: "sendagift"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.FundReserve(f.ctx, super, view.ID, "escrow #1"); err != nil {
+	if _, err := f.svc.FundReserve(f.ctx, admin, view.ID, "escrow #1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.ScheduleCompetition(f.ctx, super, view.ID); err != nil {
+	if _, err := f.svc.ScheduleCompetition(f.ctx, admin, view.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := f.svc.UpdateCompetition(f.ctx, admin, view.ID, in); !errors.Is(err, ErrSuperAdminOnly) {
-		t.Fatalf("an admin must not edit a published competition: %v", err)
-	}
-	if _, err := f.svc.UpdateCompetition(f.ctx, super, view.ID, in); err != nil {
-		t.Fatalf("a super admin may: %v", err)
+	if _, err := f.svc.UpdateCompetition(f.ctx, admin, view.ID, in); err != nil {
+		t.Fatalf("an admin should edit a published competition: %v", err)
 	}
 }
 

@@ -82,6 +82,8 @@ func New(
 	stripe *handlers.StripeHandler,
 	// Handler for the first free gift program (off unless FREE_GIFT_ENABLED)
 	freeGifts *handlers.FreeGiftHandler,
+	// Handler instance that manages memberships and competition points
+	competitionPoints *handlers.CompetitionPointsHandler,
 	// Secret key used to sign and verify JWT tokens
 	jwtSecret string,
 	// Returns an http.Handler interface that can be used by the server
@@ -226,6 +228,11 @@ func New(
 		// seller's marketing budget
 		// Example: POST /api/v1/customers/me/free-gifts
 		RegisterFreeGiftRoutes(r, freeGifts, jwtSecret, sellers.RequireActive)
+
+		// Competition points (handover v4): memberships, the competition
+		// points wallet, competition entries and their admin controls
+		// Example: GET /api/v1/customers/me/competition-points
+		RegisterCompetitionPointsRoutes(r, competitionPoints, jwtSecret)
 	})
 
 	// Return the fully configured router

@@ -73,7 +73,7 @@ type LoginResult struct {
 	Role  string `json:"role"`
 }
 
-// Bootstrap creates the first superadmin when none exist, or when the bootstrap secret matches.
+// Bootstrap creates the first admin when none exist, or when the bootstrap secret matches.
 func (s *AuthService) Bootstrap(ctx context.Context, in BootstrapInput) (*models.Admin, error) {
 	count, err := s.admins.CountAdmins(ctx) // count the number of admins
 	if err != nil {
@@ -97,7 +97,7 @@ func (s *AuthService) Bootstrap(ctx context.Context, in BootstrapInput) (*models
 		Email:        in.Email,
 		PasswordHash: hash,
 		DisplayName:  in.DisplayName,
-		Role:         "superadmin",
+		Role:         "admin",
 		MFARequired:  true,
 		ImageURL:     in.ImageURL,
 	}

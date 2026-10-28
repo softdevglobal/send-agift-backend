@@ -128,7 +128,8 @@ const competitionSelect = `
 	       c.increment_per_play_cents, c.max_prize_cents, c.continue_at_cap, c.daily_play_limit,
 	       c.min_plays_to_win, c.current_prize_cents, c.eligible_play_count, c.unique_player_count,
 	       c.prize_version, c.final_prize_cents, c.round_no, c.previous_round_id, c.config_version,
-	       c.paused_at, c.closed_at, c.updated_by_admin_id, g.game_type, c.win_odds, c.prize_points
+	       c.paused_at, c.closed_at, c.updated_by_admin_id, g.game_type, c.win_odds, c.prize_points,
+	       c.points_unit, c.cp_allowed_sources
 	from competition.competitions c
 	inner join competition.game_versions v on v.id = c.game_version_id
 	inner join competition.games g on g.id = v.game_id`
@@ -149,7 +150,8 @@ func scanCompetition(row scanner) (*models.Competition, error) {
 		&c.IncrementPerPlayCents, &c.MaxPrizeCents, &c.ContinueAtCap, &c.DailyPlayLimit,
 		&c.MinPlaysToWin, &c.CurrentPrizeCents, &c.EligiblePlayCount, &c.UniquePlayerCount,
 		&c.PrizeVersion, &c.FinalPrizeCents, &c.RoundNo, &c.PreviousRoundID, &c.ConfigVersion,
-		&c.PausedAt, &c.ClosedAt, &c.UpdatedByAdminID, &c.GameType, &c.WinOdds, &c.PrizePoints)
+		&c.PausedAt, &c.ClosedAt, &c.UpdatedByAdminID, &c.GameType, &c.WinOdds, &c.PrizePoints,
+		&c.PointsUnit, &c.CPAllowedSources)
 	if err != nil {
 		return nil, err
 	}
@@ -256,9 +258,10 @@ func (r *CompetitionRepository) Create(ctx context.Context, c *models.Competitio
 				 created_by_admin_id,
 				 prize_growth_enabled, prize_type, winner_method, start_prize_cents, increment_per_play_cents,
 				 max_prize_cents, continue_at_cap, daily_play_limit, min_plays_to_win,
-				 round_no, previous_round_id, updated_by_admin_id, win_odds, prize_points)
+				 round_no, previous_round_id, updated_by_admin_id, win_odds, prize_points,
+				 points_unit, cp_allowed_sources)
 			values ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-			        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $16, $28, $29)
+			        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $16, $28, $29, $30, $31)
 			returning id, status, config_version, created_at, updated_at`,
 			c.GameVersionID, c.Title, c.StartsAt, c.EndsAt, c.Timezone, c.ServerSeed,
 			c.PointsPerAttempt, c.MaxAttemptsPerCustomer, c.MinAge, c.RequiresIdentityVerification,
@@ -266,7 +269,8 @@ func (r *CompetitionRepository) Create(ctx context.Context, c *models.Competitio
 			c.CreatedByAdminID,
 			c.PrizeGrowthEnabled, c.PrizeType, c.WinnerMethod, c.StartPrizeCents, c.IncrementPerPlayCents,
 			c.MaxPrizeCents, c.ContinueAtCap, c.DailyPlayLimit, c.MinPlaysToWin,
-			roundNo(c.RoundNo), c.PreviousRoundID, c.WinOdds, c.PrizePoints).
+			roundNo(c.RoundNo), c.PreviousRoundID, c.WinOdds, c.PrizePoints,
+			pointsUnit(c.PointsUnit), cpSources(c.CPAllowedSources)).
 			Scan(&c.ID, &c.Status, &c.ConfigVersion, &c.CreatedAt, &c.UpdatedAt)
 		if err != nil {
 			return err
@@ -312,7 +316,8 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 			    prize_growth_enabled = $16, prize_type = $17, winner_method = $18, start_prize_cents = $19,
 			    increment_per_play_cents = $20, max_prize_cents = $21, continue_at_cap = $22,
 			    daily_play_limit = $23, min_plays_to_win = $24, updated_by_admin_id = $25,
-			    win_odds = $26, prize_points = $27, config_version = config_version + 1,
+			    win_odds = $26, prize_points = $27, points_unit = $28, cp_allowed_sources = $29,
+			    config_version = config_version + 1,
 			    status = 'draft', updated_at = now()
 			where id = $1
 			returning config_version`,
@@ -321,7 +326,8 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 			c.NumberOfWinners, c.PrizeDescription, c.PrizeValueAmount, c.PrizeCurrency, c.OfficialRules,
 			c.PrizeGrowthEnabled, c.PrizeType, c.WinnerMethod, c.StartPrizeCents,
 			c.IncrementPerPlayCents, c.MaxPrizeCents, c.ContinueAtCap,
-			c.DailyPlayLimit, c.MinPlaysToWin, c.UpdatedByAdminID, c.WinOdds, c.PrizePoints).
+			c.DailyPlayLimit, c.MinPlaysToWin, c.UpdatedByAdminID, c.WinOdds, c.PrizePoints,
+			pointsUnit(c.PointsUnit), cpSources(c.CPAllowedSources)).
 			Scan(&c.ConfigVersion); err != nil {
 			return err
 		}
@@ -334,6 +340,22 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 		audit.After = c
 		return insertAudit(ctx, tx, audit)
 	})
+}
+
+// pointsUnit defaults an unset unit to legacy points.
+func pointsUnit(u string) string {
+	if u == "" {
+		return "legacy"
+	}
+	return u
+}
+
+// cpSources defaults unset sources to gift points and member bonuses.
+func cpSources(s []string) []string {
+	if len(s) == 0 {
+		return []string{models.LotSourceGift, models.LotSourceMemberBonus}
+	}
+	return s
 }
 
 // saveCountries replaces the countries a competition runs in.

@@ -49,6 +49,9 @@ type StripeService struct {
 	onPointsCheckout func(ctx context.Context, cs StripeCheckoutSession) error
 	// cancelUnpaid cancels an order nobody paid for.
 	cancelUnpaid func(ctx context.Context, customerID, orderID string) error
+	// onMembership applies events that belong to memberships. It reports
+	// whether the event was a membership's alone.
+	onMembership func(ctx context.Context, ev *StripeEvent) (bool, error)
 
 	// publishableKey goes to the app for Stripe's in-app payment sheet.
 	publishableKey string
@@ -78,6 +81,12 @@ func (s *StripeService) OnOrderPaid(fn func(ctx context.Context, orderID uuid.UU
 // is applied (see SellerPointsService.HandleStripeCheckout).
 func (s *StripeService) OnPointsCheckout(fn func(ctx context.Context, cs StripeCheckoutSession) error) {
 	s.onPointsCheckout = fn
+}
+
+// OnMembershipEvent sets how membership checkouts, subscriptions, invoices
+// and their refunds are applied.
+func (s *StripeService) OnMembershipEvent(fn func(ctx context.Context, ev *StripeEvent) (bool, error)) {
+	s.onMembership = fn
 }
 
 // CancelUnpaidWith sets how an abandoned, unpaid order is cancelled.
@@ -208,6 +217,14 @@ func (s *StripeService) receiptLines(ctx context.Context, order *repository.Paya
 	if err != nil || len(rows) == 0 {
 		return nil
 	}
+	// A member's discount is not a line of its own on Stripe's page, so a
+	// discounted order is shown as one line for what is actually charged.
+	if order.MemberDiscount > 0 {
+		return []CheckoutLine{{
+			Name:       fmt.Sprintf("SendAGift order %s (member discount applied)", order.OrderNumber),
+			UnitAmount: order.Total, Quantity: 1,
+		}}
+	}
 	sum := 0
 	lines := make([]CheckoutLine, 0, len(rows))
 	for _, r := range rows {
@@ -318,6 +335,12 @@ func (s *StripeService) HandlePlatformWebhook(ctx context.Context, body []byte, 
 		return err
 	}
 	return s.handleOnce(ctx, ev, func() error {
+		if s.onMembership != nil {
+			handled, err := s.onMembership(ctx, ev)
+			if err != nil || handled {
+				return err
+			}
+		}
 		switch ev.Type {
 		case "checkout.session.completed", "checkout.session.async_payment_succeeded":
 			var cs StripeCheckoutSession

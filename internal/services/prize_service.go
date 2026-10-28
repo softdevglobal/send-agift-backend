@@ -15,7 +15,7 @@ import (
 	"myapp/internal/repository"
 )
 
-// Super Admin operations on a round's prize and lifecycle (Progressive Prize
+// Admin operations on a round's prize and lifecycle (Progressive Prize
 // spec §2.1, §8–§10). Every one of them is a ledger entry or a state change
 // written together with its audit row; none edits history.
 
@@ -52,7 +52,7 @@ func (s *CompetitionService) CloseCompetition(ctx context.Context, admin AdminAc
 	return s.lifecycle(ctx, admin, id, "competition.closed", s.repo.Close)
 }
 
-// AdjustPrizeInput is a Super Admin changing the prize. The reason is
+// AdjustPrizeInput is an admin changing the prize. The reason is
 // mandatory and kept on the ledger for good.
 type AdjustPrizeInput struct {
 	AmountDeltaCents int64  `json:"amount_delta_cents"`
@@ -193,7 +193,7 @@ func (s *CompetitionService) Reconcile(ctx context.Context, id uuid.UUID) (*mode
 	return s.repo.Reconcile(ctx, id)
 }
 
-// Analytics is the Super Admin dashboard for one round (spec §10).
+// Analytics is the admin dashboard for one round (spec §10).
 func (s *CompetitionService) Analytics(ctx context.Context, id uuid.UUID) (*models.CompetitionAnalytics, error) {
 	if _, err := s.load(ctx, id); err != nil {
 		return nil, err
@@ -311,6 +311,9 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 		MinPlaysToWin:                src.MinPlaysToWin,
 		WinOdds:                      src.WinOdds,
 		QuizQuestions:                questions,
+		PointsUnit:                   src.PointsUnit,
+		EntryCostPoints:              duplicateEntryCost(src),
+		CPAllowedSources:             src.CPAllowedSources,
 	}); err != nil {
 		return nil, err
 	}
@@ -535,7 +538,7 @@ func (s *PointsService) SearchCustomers(ctx context.Context, query string) ([]mo
 	return s.points.SearchCustomers(ctx, query, 200)
 }
 
-// AdjustPointsInput is a Super Admin granting or taking points. The key
+// AdjustPointsInput is an admin granting or taking points. The key
 // makes a retried request harmless.
 type AdjustPointsInput struct {
 	Amount         int64  `json:"amount"`
@@ -601,7 +604,7 @@ func (s *PointsService) MyEarningRule(ctx context.Context, actor SocialActor) (*
 	return s.points.RuleForCustomer(ctx, *id)
 }
 
-// EarningRuleInput is a Super Admin setting one country's rule.
+// EarningRuleInput is an admin setting one country's rule.
 type EarningRuleInput struct {
 	Enabled       bool `json:"enabled"`
 	PointsPerUnit int  `json:"points_per_unit"`
@@ -672,4 +675,14 @@ func (e Exclusive) run(ctx context.Context, fn func(context.Context) error) (boo
 		return true, fn(ctx)
 	}
 	return e(ctx, fn)
+}
+
+// duplicateEntryCost carries a competition-points round's published entry
+// cost into its copy.
+func duplicateEntryCost(src *models.Competition) *int {
+	if src.PointsUnit != "competition" {
+		return nil
+	}
+	cost := src.PointsPerAttempt
+	return &cost
 }

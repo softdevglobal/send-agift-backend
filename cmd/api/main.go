@@ -1,12 +1,14 @@
 package main
 
 import (
-	"context"  // context is used to manage the lifecycle of a request
-	"fmt"      // fmt is used to format and print text
-	"log"      // log is used to log messages to the console
-	"net/http" // net/http is used to create and manage HTTP servers and clients
-	"strings"  // strings is used to read the points payment provider name
-	"time"     // time is used to measure and manage time-related operations
+	"context"       // context is used to manage the lifecycle of a request
+	"crypto/sha256" // sha256 derives the entry-quote signing key when none is set
+	"encoding/hex"  // hex encodes that derived key
+	"fmt"           // fmt is used to format and print text
+	"log"           // log is used to log messages to the console
+	"net/http"      // net/http is used to create and manage HTTP servers and clients
+	"strings"       // strings is used to read the points payment provider name
+	"time"          // time is used to measure and manage time-related operations
 
 	"github.com/google/uuid"
 
@@ -84,7 +86,7 @@ func main() {
 	gameService := services.NewGameService(gameRepo)
 	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, countries, pointsRepo)
 	gameService.UseCompetitions(competitionService)
-	// Every practice play costs the points a Super Admin set for that game
+	// Every practice play costs the points an admin set for that game
 	// (competition.games.play_cost_points), taken on the server when it starts.
 	gameService.ChargeForPlays(pointsRepo)
 	pointsService := services.NewPointsService(pointsRepo)
@@ -228,6 +230,40 @@ func main() {
 	} else {
 		log.Printf("⚠️  STRIPE_SECRET_KEY is not set: card payments and seller payouts are off.")
 	}
+	// Competition points (handover v4): memberships, gift points, the member
+	// bonus and reserve-then-capture entries. Nothing is offered until an
+	// approval record covers it; see docs/competition-points.md.
+	var membershipStripe *services.StripeClient
+	if stripeService.Enabled() {
+		membershipStripe = stripeClient
+	}
+	quoteSecret := cfg.CPQuoteSecret
+	if quoteSecret == "" {
+		sum := sha256.Sum256([]byte("cp-quote:" + cfg.JWTSecret))
+		quoteSecret = hex.EncodeToString(sum[:])
+	}
+	competitionPointsRepo := repository.NewCompetitionPointsRepository(pool)
+	competitionPointsService := services.NewCompetitionPointsService(
+		competitionPointsRepo, competitionService, membershipStripe,
+		services.CompetitionPointsConfig{
+			WebURL:         cfg.AppWebURL,
+			QuoteSecret:    quoteSecret,
+			HoldTTL:        time.Duration(cfg.CPEntryHoldMinutes) * time.Minute,
+			RestoreWindow:  time.Duration(cfg.CPRestoreWindowHours) * time.Hour,
+			TestPayments:   cfg.MembershipTestPayments,
+			PlatformFeeBPS: cfg.StripeFeeBPS,
+		})
+	// Members get a share of SendAGift's commission back as a discount on
+	// the gifts they buy; the seller's price and payout do not change.
+	orderService.UseMemberDiscounts(competitionPointsRepo.MemberDiscount, cfg.StripeFeeBPS)
+	stripeService.OnMembershipEvent(competitionPointsService.HandleStripeEvent)
+	go competitionPointsService.RunLoop(context.Background(), time.Minute,
+		database.Exclusive(pool, database.LockCompetitionPoints))
+	if cfg.MembershipTestPayments && !stripeService.Enabled() {
+		log.Printf("⚠️  MEMBERSHIP_TEST_PAYMENTS=true: membership payments can be confirmed by hand (sandbox only).")
+	}
+	competitionPointsHandler := handlers.NewCompetitionPointsHandler(competitionPointsService)
+
 	stripeHandler := handlers.NewStripeHandler(stripeService)
 	giftReviewHandler := handlers.NewGiftReviewHandler(services.NewGiftReviewService(orders, customers, loginCodeService, cfg.JWTSecret, cfg.JWTExpiry))
 	// Customer sign-in with Google, Facebook and Apple. A provider without keys
@@ -294,7 +330,7 @@ func main() {
 		fmt.Println("🎁 Free gift program: on")
 	}
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, freeGiftHandler, cfg.JWTSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, freeGiftHandler, competitionPointsHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

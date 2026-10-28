@@ -121,7 +121,7 @@ func TestPointsSellerDebitNeverCreatesDebt(t *testing.T) {
 
 func TestPointsPackagesAndValidation(t *testing.T) {
 	f := newPointsFixture(t, "manual")
-	admin := AdminActor{ID: uuid.New(), SuperAdmin: true}
+	admin := AdminActor{ID: uuid.New()}
 
 	bad := []PackageInput{
 		{Name: "", Points: 100, PriceCents: 1000},

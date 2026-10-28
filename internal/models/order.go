@@ -8,20 +8,27 @@ import (
 
 // Order maps to marketplace.orders. One checkout, one header row.
 type Order struct {
-	ID              uuid.UUID  `json:"id"`
-	OrderNumber     string     `json:"order_number"`
-	CustomerID      uuid.UUID  `json:"customer_id"`
-	RecipientID     *uuid.UUID `json:"recipient_id,omitempty"`
-	CountryID       uuid.UUID  `json:"country_id"`
-	CustomerType    string     `json:"customer_type"`
-	DeliveryDate    time.Time  `json:"delivery_date"`
-	Status          string     `json:"status"`
-	SubtotalAmount  int        `json:"subtotal_amount"`
-	DeliveryAmount  int        `json:"delivery_amount"`
-	TotalAmount     int        `json:"total_amount"`
-	Currency        string     `json:"currency"`
-	GiftMessage     *string    `json:"gift_message,omitempty"`
-	MediaGreetingID *uuid.UUID `json:"media_greeting_id,omitempty"`
+	ID             uuid.UUID  `json:"id"`
+	OrderNumber    string     `json:"order_number"`
+	CustomerID     uuid.UUID  `json:"customer_id"`
+	RecipientID    *uuid.UUID `json:"recipient_id,omitempty"`
+	CountryID      uuid.UUID  `json:"country_id"`
+	CustomerType   string     `json:"customer_type"`
+	DeliveryDate   time.Time  `json:"delivery_date"`
+	Status         string     `json:"status"`
+	SubtotalAmount int        `json:"subtotal_amount"`
+	DeliveryAmount int        `json:"delivery_amount"`
+	TotalAmount    int        `json:"total_amount"`
+	// MemberDiscountAmount is what a member saved on the items, funded by
+	// SendAGift. TotalAmount is already net of it: subtotal + delivery -
+	// discount. Line prices stay the seller's list prices.
+	MemberDiscountAmount int `json:"member_discount_amount"`
+	// MemberDiscountBPS is the percentage it was given at, in basis points.
+	MemberDiscountBPS  int        `json:"member_discount_bps"`
+	MemberPaidPeriodID *uuid.UUID `json:"-"`
+	Currency           string     `json:"currency"`
+	GiftMessage        *string    `json:"gift_message,omitempty"`
+	MediaGreetingID    *uuid.UUID `json:"media_greeting_id,omitempty"`
 	// Points the sender attached to the gift, and where they are:
 	// none | held (taken from the sender, not yet delivered) | delivered
 	// (reached the recipient's account) | returned (back to the sender) |
@@ -63,15 +70,18 @@ type OrderItemTracking struct {
 
 // OrderItem maps to marketplace.order_items. One product from one shop.
 type OrderItem struct {
-	ID               uuid.UUID `json:"id"`
-	OrderID          uuid.UUID `json:"order_id"`
-	SellerID         uuid.UUID `json:"seller_id"`
-	ShopID           uuid.UUID `json:"shop_id"`
-	ProductID        uuid.UUID `json:"product_id"`
-	Quantity         int       `json:"quantity"`
-	UnitAmount       int       `json:"unit_amount"`
-	TotalAmount      int       `json:"total_amount"`
-	FulfilmentStatus string    `json:"fulfilment_status"`
+	ID          uuid.UUID `json:"id"`
+	OrderID     uuid.UUID `json:"order_id"`
+	SellerID    uuid.UUID `json:"seller_id"`
+	ShopID      uuid.UUID `json:"shop_id"`
+	ProductID   uuid.UUID `json:"product_id"`
+	Quantity    int       `json:"quantity"`
+	UnitAmount  int       `json:"unit_amount"`
+	TotalAmount int       `json:"total_amount"`
+	// MemberDiscountAmount is this line's share of a member's discount. It
+	// is never taken off TotalAmount: the seller is paid on the list price.
+	MemberDiscountAmount int    `json:"-"`
+	FulfilmentStatus     string `json:"fulfilment_status"`
 	// The product's reward points as sold, and where they are:
 	// none | reserved (held from the seller until delivery) | awarded |
 	// released (back to the seller, line cancelled) | reversed (taken back

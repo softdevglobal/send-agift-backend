@@ -25,7 +25,7 @@ type bootstrapRequest struct {
 	ImageURL    *string `json:"image_url"`
 }
 
-// Bootstrap creates the very first superadmin (HTTP layer only).
+// Bootstrap creates the very first admin (HTTP layer only).
 func (h *AuthHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	var req bootstrapRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -53,7 +53,7 @@ func (h *AuthHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.JSON(w, http.StatusCreated, map[string]interface{}{
-		"message": "superadmin created",
+		"message": "admin created",
 		"id":      admin.ID,
 	})
 }

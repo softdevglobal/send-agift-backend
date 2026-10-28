@@ -101,7 +101,7 @@ func (s *SellerPointsService) AdminPackages(ctx context.Context) ([]models.Point
 	return s.points.ListPackages(ctx, false)
 }
 
-// PackageInput is a Super Admin setting up a package.
+// PackageInput is an admin setting up a package.
 type PackageInput struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description"`

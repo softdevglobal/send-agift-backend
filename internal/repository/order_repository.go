@@ -296,13 +296,15 @@ func insertOrderHeader(ctx context.Context, q querier, order *models.Order) erro
 			order_number, customer_id, recipient_id, country_id, customer_type,
 			delivery_date, status, subtotal_amount, delivery_amount, total_amount,
 			currency, gift_message, media_greeting_id, gift_points, gift_points_status,
-			order_kind, free_gift_cost, free_gift_budget_status, idempotency_key
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			order_kind, free_gift_cost, free_gift_budget_status, idempotency_key,
+			member_discount_amount, member_discount_bps, member_paid_period_id
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 		returning id, created_at, updated_at`,
 		order.OrderNumber, order.CustomerID, order.RecipientID, order.CountryID, order.CustomerType,
 		order.DeliveryDate, order.Status, order.SubtotalAmount, order.DeliveryAmount, order.TotalAmount,
 		order.Currency, order.GiftMessage, order.MediaGreetingID, order.GiftPoints, order.GiftPointsStatus,
 		order.OrderKind, order.FreeGiftCost, order.FreeGiftBudgetStatus, order.IdempotencyKey,
+		order.MemberDiscountAmount, order.MemberDiscountBPS, order.MemberPaidPeriodID,
 	).Scan(&order.ID, &order.CreatedAt, &order.UpdatedAt)
 	return mapOrderWriteError(err)
 }
@@ -321,12 +323,13 @@ func insertOrderLines(ctx context.Context, q querier, orderID uuid.UUID, items [
 			insert into marketplace.order_items (
 				order_id, seller_id, shop_id, product_id, quantity,
 				unit_amount, total_amount, fulfilment_status,
-				reward_points_per_unit, reward_points, reward_status
-			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				reward_points_per_unit, reward_points, reward_status, member_discount_amount
+			) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 			returning id, created_at, updated_at`,
 			items[i].OrderID, items[i].SellerID, items[i].ShopID, items[i].ProductID, items[i].Quantity,
 			items[i].UnitAmount, items[i].TotalAmount, items[i].FulfilmentStatus,
 			items[i].RewardPointsPerUnit, items[i].RewardPoints, items[i].RewardStatus,
+			items[i].MemberDiscountAmount,
 		).Scan(&items[i].ID, &items[i].CreatedAt, &items[i].UpdatedAt)
 		if err != nil {
 			return err
@@ -400,7 +403,7 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string)
 		select id, order_number, customer_id, recipient_id, country_id, customer_type,
 		       delivery_date, status, subtotal_amount, delivery_amount, total_amount,
 		       currency, gift_message, media_greeting_id, gift_points, gift_points_status,
-		       order_kind, free_gift_cost,
+		       order_kind, free_gift_cost, member_discount_amount, member_discount_bps,
 		       created_at, updated_at
 		from marketplace.orders
 		where customer_id = $1
@@ -417,7 +420,7 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID string)
 			&o.ID, &o.OrderNumber, &o.CustomerID, &o.RecipientID, &o.CountryID, &o.CustomerType,
 			&o.DeliveryDate, &o.Status, &o.SubtotalAmount, &o.DeliveryAmount, &o.TotalAmount,
 			&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.GiftPoints, &o.GiftPointsStatus,
-			&o.OrderKind, &o.FreeGiftCost,
+			&o.OrderKind, &o.FreeGiftCost, &o.MemberDiscountAmount, &o.MemberDiscountBPS,
 			&o.CreatedAt, &o.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -433,7 +436,7 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 		select id, order_number, customer_id, recipient_id, country_id, customer_type,
 		       delivery_date, status, subtotal_amount, delivery_amount, total_amount,
 		       currency, gift_message, media_greeting_id, gift_points, gift_points_status,
-		       order_kind, free_gift_cost,
+		       order_kind, free_gift_cost, member_discount_amount, member_discount_bps,
 		       created_at, updated_at
 		from marketplace.orders
 		where id = $1 and customer_id = $2`, orderID, customerID,
@@ -441,7 +444,7 @@ func (r *OrderRepository) GetByIDForCustomer(ctx context.Context, customerID, or
 		&o.ID, &o.OrderNumber, &o.CustomerID, &o.RecipientID, &o.CountryID, &o.CustomerType,
 		&o.DeliveryDate, &o.Status, &o.SubtotalAmount, &o.DeliveryAmount, &o.TotalAmount,
 		&o.Currency, &o.GiftMessage, &o.MediaGreetingID, &o.GiftPoints, &o.GiftPointsStatus,
-		&o.OrderKind, &o.FreeGiftCost,
+		&o.OrderKind, &o.FreeGiftCost, &o.MemberDiscountAmount, &o.MemberDiscountBPS,
 		&o.CreatedAt, &o.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

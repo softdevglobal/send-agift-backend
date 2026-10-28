@@ -131,6 +131,10 @@ type StripeCheckoutSession struct {
 	Metadata map[string]string `json:"metadata"`
 	// PaymentIntent is the card payment behind a completed session.
 	PaymentIntent string `json:"payment_intent"`
+	// Subscription and Customer are set on a completed subscription-mode
+	// session.
+	Subscription string `json:"subscription"`
+	Customer     string `json:"customer"`
 }
 
 // CheckoutLine is one row on Stripe's payment page: a gift, or a delivery.

@@ -94,7 +94,7 @@ type SharedSource struct {
 	Plays    int64  `json:"plays"`
 }
 
-// CompetitionAnalytics is the Super Admin dashboard for one round (spec §10).
+// CompetitionAnalytics is the admin dashboard for one round (spec §10).
 type CompetitionAnalytics struct {
 	CompetitionID        uuid.UUID        `json:"competition_id"`
 	Currency             *string          `json:"currency,omitempty"`

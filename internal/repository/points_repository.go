@@ -118,7 +118,7 @@ func applyPoints(ctx context.Context, q querier, ch PointsChange) (entryID uuid.
 	case models.PointsEntryPlayRefund, models.PointsEntryGiftReturned:
 		spent = -ch.Delta // gives back what was spent
 	case models.PointsEntryOrderReversal, models.PointsEntryProductRewardReversal,
-		models.PointsEntryGiftReversal:
+		models.PointsEntryGiftReversal, models.PointsEntryMemberBonusReversal:
 		earned = ch.Delta // takes back what was earned
 	default:
 		if ch.Delta > 0 {
@@ -320,6 +320,10 @@ func describePointsEntry(e models.PointsEntry) string {
 		return "Prize won: " + game
 	case models.PointsEntrySignupBonus:
 		return "Welcome bonus"
+	case models.PointsEntryMemberBonus:
+		return "Membership bonus"
+	case models.PointsEntryMemberBonusReversal:
+		return "Membership payment refunded"
 	case models.PointsEntryGiftSent:
 		return "Sent with gift " + order
 	case models.PointsEntryGiftReceived:
@@ -357,11 +361,12 @@ func (r *PointsRepository) Wallet(ctx context.Context, customerID uuid.UUID, lim
 			coalesce(sum(amount_delta) filter (where entry_type in
 				('gift_points_received', 'gift_points_reversal', 'signup_bonus')), 0),
 			coalesce(sum(amount_delta) filter (where entry_type = 'prize_points'), 0),
+			coalesce(sum(amount_delta) filter (where entry_type in ('member_bonus', 'member_bonus_reversal')), 0),
 			coalesce(-sum(amount_delta) filter (where entry_type in ('play_debit', 'play_refund')), 0),
 			coalesce(-sum(amount_delta) filter (where entry_type in
 				('gift_points_sent', 'gift_points_returned')), 0)
 		from points.points_ledger where customer_id = $1`, customerID).
-		Scan(&w.Totals.FromPurchases, &w.Totals.FromGifts, &w.Totals.FromPrizes,
+		Scan(&w.Totals.FromPurchases, &w.Totals.FromGifts, &w.Totals.FromPrizes, &w.Totals.FromMembership,
 			&w.Totals.SpentOnGames, &w.Totals.SentAsGifts); err != nil {
 		return nil, err
 	}

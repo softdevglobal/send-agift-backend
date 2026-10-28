@@ -44,12 +44,15 @@ Diagram entity names use underscores because Mermaid does not allow dots, so
 | `messaging` | customer ↔ seller and support chat | `conversations`, `conversation_participants`, `messages`, `message_attachments` |
 | `support` | support ticket metadata for admin chats | `cases` |
 | `social` | reel likes and comments | `reel_likes`, `reel_comments` |
-| `competition` | skill games and prize competitions | `games`, `game_versions`, `game_sessions`, `game_scores`, `competitions`, `competition_attempts`, `score_submissions`, `leaderboard_snapshots`, `competition_winners`, `prize_claims` |
+| `competition` | skill games and prize competitions | `games`, `game_versions`, `game_sessions`, `game_scores`, `competitions`, `competition_attempts`, `score_submissions`, `leaderboard_snapshots`, `competition_winners`, `prize_claims`, `cp_entries`, `cp_entry_lots` |
 | `finance` | prize money held for competitions | `prize_reserves` |
-| `points` | customer and seller points: balances, the append-only ledger, earning rules, seller purchases | `points_accounts`, `seller_points_accounts`, `points_ledger`, `points_earning_rules`, `points_purchases` |
+| `points` | customer and seller points: balances, the append-only ledger, earning rules, seller purchases; competition points: reward policies, gift qualifications, lots and their balanced ledger | `points_accounts`, `seller_points_accounts`, `points_ledger`, `points_earning_rules`, `points_purchases`, `reward_policies`, `gift_qualifications`, `cp_lots`, `cp_transactions`, `cp_postings`, `cp_review_cases` |
+| `membership` | paid memberships: versioned offers, subscriptions, provider-confirmed paid periods and their one bonus slot each (`000076`) | `plan_offers`, `subscriptions`, `paid_periods`, `bonus_slots` |
 | `public` | migration bookkeeping only | `schema_migrations` |
 
 `admin.audit_log` (added by `000029`) also lives in the `admin` schema.
+`core.capability_approvals` and `core.emergency_stops` (added by `000076`) gate competition points;
+see [docs/competition-points.md](docs/competition-points.md).
 
 The `messaging`, `support`, `social`, `competition`, `finance` and `points` schemas are listed for completeness
 and summarised in [section 19](#19-migration-history); this document details the gifting

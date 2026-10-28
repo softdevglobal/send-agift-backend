@@ -60,21 +60,41 @@ func adminActor(w http.ResponseWriter, r *http.Request) (services.AdminActor, bo
 		utils.Error(w, http.StatusUnauthorized, "unauthorized")
 		return services.AdminActor{}, false
 	}
-	role, _ := r.Context().Value(middleware.RoleContextKey).(string)
-	return services.AdminActor{
-		ID: id, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
-		SuperAdmin: strings.EqualFold(role, "superadmin"),
-	}, true
+	return services.AdminActor{ID: id, IP: r.RemoteAddr, UserAgent: r.UserAgent()}, true
 }
 
 // ─── Public and customer ──────────────────────────────────────────────────
 
-// List handles GET /competitions.
+// nativeClient is a request from the iOS or Android app: it names itself
+// in X-Client-Channel, and builds that predate the header send Dart's
+// default user agent.
+func nativeClient(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get(ChannelHeader))) {
+	case "ios", "android":
+		return true
+	case "web":
+		return false
+	}
+	return strings.HasPrefix(r.UserAgent(), "Dart/")
+}
+
+// List handles GET /competitions. Rounds entered with competition points
+// are left out for the native apps: those capabilities stay off there
+// until accepted (the server refuses their entries regardless).
 func (h *CompetitionHandler) List(w http.ResponseWriter, r *http.Request) {
 	list, err := h.competitions.ListCompetitions(r.Context(), actorFromContext(r))
 	if err != nil {
 		h.writeError(w, err, "could not list competitions")
 		return
+	}
+	if nativeClient(r) {
+		kept := list[:0]
+		for _, c := range list {
+			if c.PointsUnit != "competition" {
+				kept = append(kept, c)
+			}
+		}
+		list = kept
 	}
 	utils.JSON(w, http.StatusOK, map[string]any{"items": list})
 }
@@ -88,6 +108,10 @@ func (h *CompetitionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	view, err := h.competitions.GetCompetition(r.Context(), id, actorFromContext(r))
 	if err != nil {
 		h.writeError(w, err, "could not get competition")
+		return
+	}
+	if nativeClient(r) && view.PointsUnit == "competition" {
+		utils.Error(w, http.StatusNotFound, "competition not found")
 		return
 	}
 	utils.JSON(w, http.StatusOK, view)
@@ -458,7 +482,7 @@ func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallba
 		utils.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, services.ErrRedemptionLocked):
 		utils.JSON(w, http.StatusLocked, map[string]any{"error": err.Error(), "code": "REDEMPTION_LOCKED"})
-	case errors.Is(err, services.ErrNotEligible), errors.Is(err, services.ErrSuperAdminOnly):
+	case errors.Is(err, services.ErrNotEligible):
 		utils.Error(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, services.ErrInvalidCompetition), errors.Is(err, services.ErrInvalidReview),
 		errors.Is(err, services.ErrInvalidClaim), errors.Is(err, services.ErrInvalidReserve):

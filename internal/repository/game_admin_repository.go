@@ -240,7 +240,7 @@ func (r *GameRepository) AdminScores(ctx context.Context, slug, status string, l
 	return out, rows.Err()
 }
 
-// ReviewScore records a superadmin's verdict on a practice score, together
+// ReviewScore records an admin's verdict on a practice score, together
 // with its audit-log row. Only held or accepted scores can change: a log that
 // failed to replay has no valid score to restore.
 func (r *GameRepository) ReviewScore(ctx context.Context, sessionID uuid.UUID, status string, reason *string, audit models.AuditEntry) error {

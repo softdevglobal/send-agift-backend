@@ -15,7 +15,7 @@ type Game struct {
 	Description *string   `json:"description,omitempty"`
 	GameType    string    `json:"game_type"`
 	Status      string    `json:"status"`
-	// PlayCostPoints is what one practice play costs, set by a Super Admin.
+	// PlayCostPoints is what one practice play costs, set by an admin.
 	PlayCostPoints int64     `json:"play_cost_points"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`

@@ -49,6 +49,56 @@ type OrderService struct {
 	requirePayment bool
 	// afterCancel runs once an order is cancelled (to refund it).
 	afterCancel func(ctx context.Context, orderID uuid.UUID)
+	// memberDiscount finds the product discount a customer is owed now, and
+	// platformFeeBPS is the most it may be: members are given back part of
+	// SendAGift's own commission, never the seller's share.
+	memberDiscount func(ctx context.Context, customerID uuid.UUID) (bps int, periodID uuid.UUID, err error)
+	platformFeeBPS int
+}
+
+// UseMemberDiscounts turns on member product discounts. find reports the
+// percentage (basis points) a customer's paid period gives them; feeBPS is
+// the platform's commission, which caps it. With no commission nothing is
+// discounted: there would be nothing to fund it from.
+func (s *OrderService) UseMemberDiscounts(find func(ctx context.Context, customerID uuid.UUID) (int, uuid.UUID, error), feeBPS int) {
+	s.memberDiscount = find
+	s.platformFeeBPS = feeBPS
+}
+
+// MemberDiscountFor is the discount a customer would get on an order now,
+// for showing in the bag before it is placed.
+func (s *OrderService) MemberDiscountFor(ctx context.Context, customerID uuid.UUID) (bps int, err error) {
+	bps, _, err = s.currentMemberDiscount(ctx, customerID)
+	return bps, err
+}
+
+// currentMemberDiscount is the percentage in force, already capped.
+func (s *OrderService) currentMemberDiscount(ctx context.Context, customerID uuid.UUID) (int, uuid.UUID, error) {
+	if s.memberDiscount == nil || s.platformFeeBPS <= 0 {
+		return 0, uuid.Nil, nil
+	}
+	bps, period, err := s.memberDiscount(ctx, customerID)
+	if err != nil || bps <= 0 {
+		return 0, uuid.Nil, err
+	}
+	return min(bps, s.platformFeeBPS), period, nil
+}
+
+// applyMemberDiscount spreads a member's discount over the order's lines,
+// each worked out on the seller's list price and rounded down, and returns
+// the total. A line's total is left as the list price: the seller is paid
+// on it, and the platform's commission is taken from it, as for anyone.
+func applyMemberDiscount(items []models.OrderItem, bps int) int {
+	if bps <= 0 {
+		return 0
+	}
+	total := 0
+	for i := range items {
+		off := items[i].TotalAmount * bps / 10000
+		items[i].MemberDiscountAmount = off
+		total += off
+	}
+	return total
 }
 
 // RequirePayment makes an order's confirmation, recipient account and
@@ -265,6 +315,13 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		deliveryAmount += d.Amount
 	}
 
+	// A member's discount comes off what they pay, not off the seller's price.
+	memberBPS, memberPeriod, err := s.currentMemberDiscount(ctx, cid)
+	if err != nil {
+		return nil, err
+	}
+	memberDiscount := applyMemberDiscount(items, memberBPS)
+
 	order := &models.Order{
 		OrderNumber:     newOrderNumber(),
 		CustomerID:      cid,
@@ -275,11 +332,16 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		Status:          "pending_payment",
 		SubtotalAmount:  subtotal,
 		DeliveryAmount:  deliveryAmount,
-		TotalAmount:     subtotal + deliveryAmount,
+		TotalAmount:     subtotal + deliveryAmount - memberDiscount,
 		Currency:        currency,
 		GiftMessage:     in.GiftMessage,
 		MediaGreetingID: mediaGreetingID,
 		GiftPoints:      in.GiftPoints,
+	}
+	if memberDiscount > 0 {
+		order.MemberDiscountAmount = memberDiscount
+		order.MemberDiscountBPS = memberBPS
+		order.MemberPaidPeriodID = &memberPeriod
 	}
 
 	err = s.orders.Create(ctx, order, items, deliveries)

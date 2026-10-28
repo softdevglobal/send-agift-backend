@@ -44,7 +44,7 @@ type GameService struct {
 	points *repository.PointsRepository
 }
 
-// ChargeForPlays makes each practice play cost the points a Super Admin set
+// ChargeForPlays makes each practice play cost the points an admin set
 // for that game, taken on the server when the session starts. A game that
 // costs anything then needs a signed-in customer to play.
 func (s *GameService) ChargeForPlays(wallet *repository.PointsRepository) {

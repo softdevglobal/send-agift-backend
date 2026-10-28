@@ -31,6 +31,11 @@ const (
 	// Points won as a competition prize.
 	PointsEntryPrizePoints = "prize_points"
 
+	// A paid membership period's bonus, and its reversal when that payment
+	// is refunded.
+	PointsEntryMemberBonus         = "member_bonus"
+	PointsEntryMemberBonusReversal = "member_bonus_reversal"
+
 	// Sellers' entries: points bought, and points paid out as product rewards
 	// (or returned when a rewarded order is refunded).
 	PointsEntryPointsPurchase      = "points_purchase"
@@ -56,7 +61,7 @@ func PointsCategory(entryType string) string {
 	switch entryType {
 	case PointsEntryOrderReward, PointsEntryProductReward:
 		return PointsCategoryProductPurchase
-	case PointsEntryGiftReceived, PointsEntryPrizePoints, PointsEntrySignupBonus:
+	case PointsEntryGiftReceived, PointsEntryPrizePoints, PointsEntrySignupBonus, PointsEntryMemberBonus:
 		return PointsCategoryGiftReward
 	case PointsEntryGiftSent:
 		return PointsCategoryGiftSent
@@ -67,7 +72,8 @@ func PointsCategory(entryType string) string {
 	case PointsEntryRewardFunding:
 		return PointsCategoryRewardFunding
 	case PointsEntryPlayRefund, PointsEntryOrderReversal, PointsEntryProductRewardReversal,
-		PointsEntryGiftReturned, PointsEntryGiftReversal, PointsEntryRewardFundingReturn:
+		PointsEntryGiftReturned, PointsEntryGiftReversal, PointsEntryRewardFundingReturn,
+		PointsEntryMemberBonusReversal:
 		return PointsCategoryRefund
 	default:
 		return PointsCategoryAdminAdjustment
@@ -114,6 +120,8 @@ type PointsTotals struct {
 	FromPurchases int64 `json:"from_purchases"`
 	FromGifts     int64 `json:"from_gifts"`
 	FromPrizes    int64 `json:"from_prizes"`
+	// Membership bonuses, net of any taken back after a refund.
+	FromMembership int64 `json:"from_membership"`
 	// Net of any plays refunded.
 	SpentOnGames int64 `json:"spent_on_games"`
 	// Net of any returned because the gift never arrived.
@@ -206,7 +214,7 @@ type PointsPurchase struct {
 }
 
 // PointPackage is a ready-made bundle of points a seller can buy, set up by
-// a Super Admin. BonusPoints come on top of Points.
+// an admin. BonusPoints come on top of Points.
 type PointPackage struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`

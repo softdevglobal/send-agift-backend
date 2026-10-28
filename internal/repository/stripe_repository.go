@@ -42,6 +42,8 @@ type PayableOrder struct {
 	Paid        bool
 	// CustomerEmail pre-fills the payment page.
 	CustomerEmail string
+	// MemberDiscount is what a member saved, already taken off Total.
+	MemberDiscount int
 }
 
 // GetPayableOrder reads the customer's own order. Paid is true once a
@@ -52,11 +54,11 @@ func (r *StripeRepository) GetPayableOrder(ctx context.Context, customerID, orde
 		select o.id, o.order_number, o.status, o.total_amount, o.currency,
 		       exists (select 1 from finance.payments p
 		               where p.order_id = o.id and p.status in ('succeeded', 'refunded')),
-		       coalesce(c.email::text, '')
+		       coalesce(c.email::text, ''), o.member_discount_amount
 		from marketplace.orders o
 		join customer.customers c on c.id = o.customer_id
 		where o.id = $1 and o.customer_id = $2`, orderID, customerID,
-	).Scan(&o.ID, &o.OrderNumber, &o.Status, &o.Total, &o.Currency, &o.Paid, &o.CustomerEmail)
+	).Scan(&o.ID, &o.OrderNumber, &o.Status, &o.Total, &o.Currency, &o.Paid, &o.CustomerEmail, &o.MemberDiscount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrStripeOrderNotFound
 	}
