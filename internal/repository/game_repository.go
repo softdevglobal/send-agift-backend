@@ -40,7 +40,7 @@ func NewGameRepository(db *pgxpool.Pool) *GameRepository {
 // with that version. Anything still in draft stays invisible to the app.
 func (r *GameRepository) ListPlayable(ctx context.Context) ([]models.GameView, error) {
 	rows, err := r.db.Query(ctx, `
-		select g.slug, g.name, g.description, g.game_type, v.version, v.config, g.play_cost_points
+		select g.slug, g.name, g.description, g.game_type, v.version, v.config, g.entry_cost
 		from competition.games g
 		inner join competition.game_versions v
 		        on v.game_id = g.id and v.status = 'approved'
@@ -56,7 +56,7 @@ func (r *GameRepository) ListPlayable(ctx context.Context) ([]models.GameView, e
 		var gv models.GameView
 		var rawConfig []byte
 		if err := rows.Scan(&gv.Slug, &gv.Name, &gv.Description, &gv.GameType, &gv.Version, &rawConfig,
-			&gv.PlayCostPoints); err != nil {
+			&gv.EntryCost); err != nil {
 			return nil, err
 		}
 		gv.Config = json.RawMessage(rawConfig)
@@ -79,7 +79,7 @@ func (r *GameRepository) GetPlayableBySlug(ctx context.Context, slug string) (*P
 	err := r.db.QueryRow(ctx, `
 		select g.id, g.slug, g.name, g.description, g.game_type, g.status, g.created_at, g.updated_at,
 		       v.id, v.game_id, v.version, v.config, v.status, v.approved_at, v.created_at,
-		       g.play_cost_points
+		       g.entry_cost
 		from competition.games g
 		inner join competition.game_versions v
 		        on v.game_id = g.id and v.status = 'approved'
@@ -89,7 +89,7 @@ func (r *GameRepository) GetPlayableBySlug(ctx context.Context, slug string) (*P
 			&pg.Game.GameType, &pg.Game.Status, &pg.Game.CreatedAt, &pg.Game.UpdatedAt,
 			&pg.Version.ID, &pg.Version.GameID, &pg.Version.Version, &rawConfig,
 			&pg.Version.Status, &pg.Version.ApprovedAt, &pg.Version.CreatedAt,
-			&pg.Game.PlayCostPoints,
+			&pg.Game.EntryCost,
 		)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrGameNotFound
@@ -112,16 +112,18 @@ type CreateSessionInput struct {
 	ServerSeed    string
 	Config        json.RawMessage
 	ExpiresAt     time.Time
-	// ChargePoints is what the play costs the customer, debited in the same
+	// ChargeEntries is what the play costs the customer, debited in the same
 	// transaction as the session: no play without payment, no payment
 	// without a play. ChargeReason names the game on the ledger row.
-	ChargePoints int64
-	ChargeReason string
+	ChargeEntries int64
+	ChargeReason  string
 }
 
-// CreateSession records a new play before the first move is made. A play
-// that costs points fails with ErrPointsInsufficient, recording nothing,
-// when the customer does not hold them.
+// CreateSession records a new play before the first move is made. Games
+// are played by signed-in customers only, where the game is switched on
+// for their country and state: anything else fails with an EntryGateError.
+// A play that costs entries fails with ErrEntriesInsufficient, recording
+// nothing, when the customer does not hold them.
 func (r *GameRepository) CreateSession(ctx context.Context, in CreateSessionInput) (*models.GameSession, error) {
 	config := []byte(in.Config)
 	if len(config) == 0 {
@@ -133,6 +135,15 @@ func (r *GameRepository) CreateSession(ctx context.Context, in CreateSessionInpu
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	if in.Identity.CustomerID == nil {
+		return nil, &EntryGateError{Gate: &models.EntryGate{
+			Code: models.GateAccount, Message: "Sign in to play.",
+		}}
+	}
+	if err := requirePlay(ctx, tx, *in.Identity.CustomerID, &in.GameVersionID, nil); err != nil {
+		return nil, err
+	}
 
 	var s models.GameSession
 	var scannedConfig []byte
@@ -151,14 +162,11 @@ func (r *GameRepository) CreateSession(ctx context.Context, in CreateSessionInpu
 	}
 	s.Config = json.RawMessage(scannedConfig)
 
-	if in.ChargePoints > 0 {
-		if in.Identity.CustomerID == nil {
-			return nil, ErrPointsInsufficient
-		}
+	if in.ChargeEntries > 0 {
 		reason := in.ChargeReason
-		if _, _, err := applyPoints(ctx, tx, PointsChange{
-			CustomerID: *in.Identity.CustomerID, EntryType: models.PointsEntryPlayDebit,
-			Delta: -in.ChargePoints, ReferenceType: ref("game_session"), ReferenceID: &s.ID,
+		if _, _, err := applyEntries(ctx, tx, EntriesChange{
+			CustomerID: *in.Identity.CustomerID, EntryType: models.EntryPlayDebit,
+			Delta: -in.ChargeEntries, GameSessionID: &s.ID,
 			IdempotencyKey: "game-play:" + s.ID.String(), Reason: &reason,
 			ActorType: "customer", ActorID: in.Identity.CustomerID,
 		}); err != nil {

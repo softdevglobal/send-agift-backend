@@ -38,7 +38,7 @@ type Competition struct {
 	// Never serialised: it is only handed out with a live attempt, so nobody
 	// can study the board before the competition opens.
 	ServerSeed                   string     `json:"-"`
-	PointsPerAttempt             int        `json:"points_per_attempt"`
+	EntriesPerAttempt            int        `json:"entries_per_attempt"`
 	MaxAttemptsPerCustomer       int        `json:"max_attempts_per_customer"`
 	MinAge                       int        `json:"min_age"`
 	RequiresIdentityVerification bool       `json:"requires_identity_verification"`
@@ -64,8 +64,6 @@ type Competition struct {
 	WinnerMethod       string `json:"winner_method"`
 	// Instant-win rounds: each play wins with probability 1 in WinOdds.
 	WinOdds *int `json:"win_odds,omitempty"`
-	// Points prizes: what each validated winner receives.
-	PrizePoints *int64 `json:"prize_points,omitempty"`
 	// Quiz rounds: the questions with their answers. Loaded only for admins;
 	// players get them without answers, one play at a time.
 	QuizQuestions         []games.QuizQuestion `json:"quiz_questions,omitempty"`
@@ -86,11 +84,16 @@ type Competition struct {
 	PausedAt              *time.Time           `json:"paused_at,omitempty"`
 	ClosedAt              *time.Time           `json:"closed_at,omitempty"`
 	UpdatedByAdminID      *uuid.UUID           `json:"updated_by_admin_id,omitempty"`
-	// PointsUnit is what a play costs: "legacy" points, or "competition"
-	// points held by a reserved entry. CPAllowedSources are the lot sources
-	// a competition-points entry may use.
-	PointsUnit       string   `json:"points_unit"`
-	CPAllowedSources []string `json:"cp_allowed_sources"`
+	// States the round is open to. Empty is every state of its countries.
+	States []CompetitionState `json:"states"`
+}
+
+// CompetitionState is a state a competition is open to.
+type CompetitionState struct {
+	StateID   uuid.UUID `json:"state_id"`
+	CountryID uuid.UUID `json:"country_id"`
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
 }
 
 // PrizeReserve maps to finance.prize_reserves.
@@ -109,17 +112,17 @@ type PrizeReserve struct {
 
 // CompetitionAttempt maps to competition.competition_attempts.
 type CompetitionAttempt struct {
-	ID             uuid.UUID  `json:"id"`
-	CompetitionID  uuid.UUID  `json:"competition_id"`
-	CustomerID     uuid.UUID  `json:"-"`
-	SessionID      uuid.UUID  `json:"session_id"`
-	PointsLedgerID *uuid.UUID `json:"-"`
-	PointsSpent    int        `json:"points_spent"`
-	AttemptNumber  int        `json:"attempt_number"`
-	Status         string     `json:"status"`
-	VoidReason     *string    `json:"void_reason,omitempty"`
-	StartedAt      time.Time  `json:"started_at"`
-	SubmittedAt    *time.Time `json:"submitted_at,omitempty"`
+	ID            uuid.UUID  `json:"id"`
+	CompetitionID uuid.UUID  `json:"competition_id"`
+	CustomerID    uuid.UUID  `json:"-"`
+	SessionID     uuid.UUID  `json:"session_id"`
+	EntryLedgerID *uuid.UUID `json:"-"`
+	EntriesSpent  int        `json:"entries_spent"`
+	AttemptNumber int        `json:"attempt_number"`
+	Status        string     `json:"status"`
+	VoidReason    *string    `json:"void_reason,omitempty"`
+	StartedAt     time.Time  `json:"started_at"`
+	SubmittedAt   *time.Time `json:"submitted_at,omitempty"`
 
 	ClientRequestID     *string    `json:"-"`
 	PrizeIncrementCents int64      `json:"prize_increment_cents"`
@@ -205,6 +208,15 @@ func (c *Competition) HasCountry(id uuid.UUID) bool {
 }
 
 // CountryIDs lists the countries the competition runs in.
+// StateIDs are the ids of the states the round is limited to.
+func (c *Competition) StateIDs() []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(c.States))
+	for _, s := range c.States {
+		ids = append(ids, s.StateID)
+	}
+	return ids
+}
+
 func (c *Competition) CountryIDs() []uuid.UUID {
 	out := make([]uuid.UUID, len(c.Countries))
 	for i, co := range c.Countries {
@@ -259,10 +271,8 @@ type CompetitionView struct {
 	WinnerMethod string               `json:"winner_method"`
 	WinOdds      *int                 `json:"win_odds,omitempty"`
 	Countries    []CompetitionCountry `json:"countries"`
-	// PointsUnit is "legacy" or "competition"; a competition-points round is
-	// entered through a quote and a reserved entry.
-	PointsUnit       string   `json:"points_unit"`
-	CPAllowedSources []string `json:"cp_allowed_sources"`
+	// States the round is open to. Empty is every state of its countries.
+	States []CompetitionState `json:"states"`
 	// The countries' codes and names joined with ", ", for screens that
 	// show them on one line.
 	CountryCode                  string         `json:"country_code"`
@@ -270,8 +280,8 @@ type CompetitionView struct {
 	StartsAt                     time.Time      `json:"starts_at"`
 	EndsAt                       time.Time      `json:"ends_at"`
 	Timezone                     string         `json:"timezone"`
-	PointsPerAttempt             int            `json:"points_per_attempt"`
-	PointsDeductionEnabled       bool           `json:"points_deduction_enabled"`
+	EntriesPerAttempt            int            `json:"entries_per_attempt"`
+	EntriesDeductionEnabled      bool           `json:"entries_deduction_enabled"`
 	MaxAttemptsPerCustomer       int            `json:"max_attempts_per_customer"`
 	MinAge                       int            `json:"min_age"`
 	RequiresIdentityVerification bool           `json:"requires_identity_verification"`
@@ -289,7 +299,6 @@ type CompetitionView struct {
 	// and nothing grows.
 	PrizeGrowthEnabled    bool   `json:"prize_growth_enabled"`
 	PrizeType             string `json:"prize_type"`
-	PrizePoints           *int64 `json:"prize_points,omitempty"`
 	StartPrizeCents       int64  `json:"start_prize_cents"`
 	CurrentPrizeCents     int64  `json:"current_prize_cents"`
 	IncrementPerPlayCents int64  `json:"increment_per_play_cents"`
@@ -315,7 +324,7 @@ type CompetitionMe struct {
 	// when the next day's plays open.
 	PlaysLeftToday   *int       `json:"plays_left_today,omitempty"`
 	DailyResetAt     *time.Time `json:"daily_reset_at,omitempty"`
-	PointsBalance    int64      `json:"points_balance"`
+	EntriesBalance   int64      `json:"entries_balance"`
 	BestScore        *int64     `json:"best_score,omitempty"`
 	Rank             *int       `json:"rank,omitempty"`
 	Eligible         bool       `json:"eligible"`
@@ -360,20 +369,20 @@ type AttemptStartView struct {
 	AttemptID         uuid.UUID       `json:"attempt_id"`
 	AttemptNumber     int             `json:"attempt_number"`
 	AttemptsRemaining int             `json:"attempts_remaining"`
-	PointsSpent       int             `json:"points_spent"`
+	EntriesSpent      int             `json:"entries_spent"`
 	Session           GameSessionView `json:"session"`
 
 	// The play receipt (spec §5.2). A retried request with the same
 	// idempotency key returns the original receipt with Replayed set.
-	PlayID                uuid.UUID `json:"play_id"`
-	Status                string    `json:"status"`
-	WalletPointsRemaining int64     `json:"wallet_points_remaining"`
-	PrizeBeforeCents      int64     `json:"prize_before_cents"`
-	PrizeIncrementCents   int64     `json:"prize_increment_cents"`
-	PrizeAfterCents       int64     `json:"prize_after_cents"`
-	PrizeCapReached       bool      `json:"prize_cap_reached"`
-	PlayedAt              time.Time `json:"played_at"`
-	Replayed              bool      `json:"replayed"`
+	PlayID              uuid.UUID `json:"play_id"`
+	Status              string    `json:"status"`
+	EntriesRemaining    int64     `json:"entries_remaining"`
+	PrizeBeforeCents    int64     `json:"prize_before_cents"`
+	PrizeIncrementCents int64     `json:"prize_increment_cents"`
+	PrizeAfterCents     int64     `json:"prize_after_cents"`
+	PrizeCapReached     bool      `json:"prize_cap_reached"`
+	PlayedAt            time.Time `json:"played_at"`
+	Replayed            bool      `json:"replayed"`
 	// The game-specific result (spec §5.2): a chance play's outcome. Skill
 	// plays have none until their score is submitted.
 	Result json.RawMessage `json:"result,omitempty"`

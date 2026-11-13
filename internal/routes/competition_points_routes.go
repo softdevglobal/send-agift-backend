@@ -43,8 +43,6 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 		r.Get("/customers/me/membership", h.Membership)
 		r.Get("/customers/me/membership/offers", h.Offers)
 		r.Get("/customers/me/member-discount", h.MemberDiscount)
-		r.Get("/customers/me/competition-points", h.Wallet)
-		r.Get("/competitions/{id}/entry-quote", h.Quote)
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimitByUser(20, time.Minute))
@@ -53,9 +51,6 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 			r.Post("/customers/me/membership/resume", h.ResumeMembership)
 			r.Post("/customers/me/membership/sync", h.SyncMembership)
 			r.Post("/customers/me/membership/test-payment", h.TestPay)
-			r.Post("/competitions/{id}/entries", h.Reserve)
-			r.Post("/competitions/{id}/entries/{entryID}/start", h.StartEntry)
-			r.Post("/competitions/{id}/entries/{entryID}/cancel", h.CancelEntry)
 		})
 	})
 
@@ -65,13 +60,8 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 		r.Get("/admin/competition-points/settings", h.Settings)
 		r.Get("/admin/competition-points/offers", h.AdminOffers)
 		r.Get("/admin/competition-points/members", h.AdminMembers)
-		r.Get("/admin/competition-points/policies", h.AdminPolicies)
-		r.Post("/admin/competition-points/policies/preview", h.PreviewPolicy)
 		r.Get("/admin/competition-points/approvals", h.AdminApprovals)
 		r.Get("/admin/competition-points/stops", h.AdminStops)
-		r.Get("/admin/competition-points/cases", h.AdminCases)
-		r.Get("/admin/competition-points/reconciliation", h.Reconcile)
-		r.Get("/admin/competition-points/customers/{customerID}", h.AdminCustomer)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -86,14 +76,9 @@ func RegisterCompetitionPointsRoutes(r chi.Router, h *handlers.CompetitionPoints
 			r.Put("/admin/competition-points/offers/{offerID}", h.UpdateOffer)
 			r.Delete("/admin/competition-points/offers/{offerID}", h.DeleteOffer)
 			r.Post("/admin/competition-points/offers/{offerID}/{action}", h.OfferAction)
-			r.Post("/admin/competition-points/policies", h.CreatePolicy)
-			r.Put("/admin/competition-points/policies/{policyID}", h.UpdatePolicy)
-			r.Delete("/admin/competition-points/policies/{policyID}", h.DeletePolicy)
-			r.Post("/admin/competition-points/policies/{policyID}/{action}", h.PolicyAction)
 			r.Post("/admin/competition-points/approvals", h.RequestApproval)
 			r.Post("/admin/competition-points/approvals/{approvalID}/{action}", h.ApprovalAction)
 			r.Post("/admin/competition-points/stops/{stopID}/lift", h.LiftStop)
-			r.Post("/admin/competition-points/cases/{caseID}/resolve", h.ResolveCase)
 		})
 	})
 }

@@ -27,6 +27,9 @@ type Customer struct {
 	// default password it started with.
 	PasswordChangeRequired bool       `json:"password_change_required"`
 	PhoneVerifiedAt        *time.Time `json:"phone_verified_at,omitempty"`
+	// StateID is the state or region given at sign-up. It is set when the
+	// account is created; read the current one from /customers/me/state.
+	StateID *uuid.UUID `json:"state_id,omitempty"`
 }
 
 // CustomerAddress maps to customer.customer_addresses.

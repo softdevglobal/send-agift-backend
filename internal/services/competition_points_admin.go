@@ -65,24 +65,20 @@ func adminVersionErr(err error) error {
 
 // OfferInput is a membership offer draft.
 type OfferInput struct {
-	TierCode          string  `json:"tier_code"`
-	CountryID         string  `json:"country_id"`
-	Name              string  `json:"name"`
-	Description       *string `json:"description"`
-	Currency          string  `json:"currency"`
-	PriceMinor        int64   `json:"price_minor"`
-	IntervalUnit      string  `json:"interval_unit"`
-	IntervalCount     int     `json:"interval_count"`
-	MemberBonusPoints int64   `json:"member_bonus_points"`
+	TierCode      string  `json:"tier_code"`
+	CountryID     string  `json:"country_id"`
+	Name          string  `json:"name"`
+	Description   *string `json:"description"`
+	Currency      string  `json:"currency"`
+	PriceMinor    int64   `json:"price_minor"`
+	IntervalUnit  string  `json:"interval_unit"`
+	IntervalCount int     `json:"interval_count"`
 	// MemberDiscountBPS is the percentage off the gift price members get, in
 	// basis points (100 = 1%). Funded from SendAGift's commission, so it
 	// cannot be more than that.
-	MemberDiscountBPS int `json:"member_discount_bps"`
-	// BonusTrigger is when the member bonus is credited: payment (the
-	// default) or first_gift.
-	BonusTrigger string   `json:"bonus_trigger"`
-	GiftBenefits []string `json:"gift_benefits"`
-	TermsVersion string   `json:"terms_version"`
+	MemberDiscountBPS int      `json:"member_discount_bps"`
+	GiftBenefits      []string `json:"gift_benefits"`
+	TermsVersion      string   `json:"terms_version"`
 }
 
 var tierCodeRe = regexp.MustCompile(`^[a-z0-9_-]{2,40}$`)
@@ -97,8 +93,9 @@ func (in OfferInput) toModel(adminID uuid.UUID, platformFeeBPS int) (*models.Pla
 		TierCode: strings.ToLower(strings.TrimSpace(in.TierCode)), CountryID: country,
 		Name: strings.TrimSpace(in.Name), Currency: strings.ToUpper(strings.TrimSpace(in.Currency)),
 		PriceMinor: in.PriceMinor, IntervalUnit: in.IntervalUnit, IntervalCount: in.IntervalCount,
-		MemberBonusPoints: in.MemberBonusPoints, MemberDiscountBPS: in.MemberDiscountBPS,
-		BonusTrigger:     strings.TrimSpace(in.BonusTrigger),
+		MemberDiscountBPS: in.MemberDiscountBPS,
+		// Memberships no longer carry a points bonus.
+		MemberBonusPoints: 0, BonusTrigger: models.BonusTriggerPayment,
 		TermsVersion:     strings.TrimSpace(in.TermsVersion),
 		CreatedByAdminID: &adminID,
 	}
@@ -108,12 +105,7 @@ func (in OfferInput) toModel(adminID uuid.UUID, platformFeeBPS int) (*models.Pla
 			o.Description = &d
 		}
 	}
-	if o.BonusTrigger == "" {
-		o.BonusTrigger = models.BonusTriggerPayment
-	}
 	switch {
-	case o.BonusTrigger != models.BonusTriggerPayment && o.BonusTrigger != models.BonusTriggerFirstGift:
-		return nil, invalidCP("bonus_trigger must be payment or first_gift")
 	case !tierCodeRe.MatchString(o.TierCode):
 		return nil, invalidCP("tier_code must be 2 to 40 lowercase letters, digits, - or _")
 	case o.Name == "" || len(o.Name) > 80:
@@ -126,8 +118,6 @@ func (in OfferInput) toModel(adminID uuid.UUID, platformFeeBPS int) (*models.Pla
 		return nil, invalidCP("interval_unit must be day, week, month or year")
 	case o.IntervalCount < 1 || o.IntervalCount > 365:
 		return nil, invalidCP("interval_count must be 1 to 365")
-	case o.MemberBonusPoints < 0 || o.MemberBonusPoints > 10_000_000:
-		return nil, invalidCP("member_bonus_points (the extra award above ordinary gift points) must be 0 to 10000000")
 	case o.TermsVersion == "":
 		return nil, invalidCP("terms_version is required")
 	case o.MemberDiscountBPS < 0:
@@ -309,118 +299,6 @@ func transitionTarget(action string) (string, error) {
 	return "", invalidCP("action must be publish, submit, approve, return_to_draft, suspend, resume or retire")
 }
 
-// ─── Reward policies ─────────────────────────────────────────────────────
-
-// PolicyInput is a reward policy draft.
-type PolicyInput struct {
-	CountryID         string `json:"country_id"`
-	MinEligibleMinor  int64  `json:"min_eligible_minor"`
-	ExcludeFreeGifts  *bool  `json:"exclude_free_gifts"`
-	BaseMode          string `json:"base_mode"`
-	BaseFixedPoints   int64  `json:"base_fixed_points"`
-	BasePointsPerUnit int    `json:"base_points_per_unit"`
-	BaseCapPoints     *int64 `json:"base_cap_points"`
-	ExpiryDays        *int   `json:"expiry_days"`
-}
-
-func (in PolicyInput) toModel(adminID uuid.UUID) (*models.RewardPolicy, error) {
-	country, err := uuid.Parse(strings.TrimSpace(in.CountryID))
-	if err != nil {
-		return nil, invalidCP("country_id is required")
-	}
-	exclude := true
-	if in.ExcludeFreeGifts != nil {
-		exclude = *in.ExcludeFreeGifts
-	}
-	p := &models.RewardPolicy{
-		CountryID: country, MinEligibleMinor: in.MinEligibleMinor, ExcludeFreeGifts: exclude,
-		BaseMode: in.BaseMode, BaseCapPoints: in.BaseCapPoints, ExpiryDays: in.ExpiryDays,
-		CreatedByAdminID: &adminID,
-	}
-	switch in.BaseMode {
-	case "fixed":
-		if in.BaseFixedPoints < 1 || in.BaseFixedPoints > 10_000_000 {
-			return nil, invalidCP("base_fixed_points must be 1 to 10000000 for a fixed award")
-		}
-		p.BaseFixedPoints = in.BaseFixedPoints
-	case "per_currency_unit":
-		if in.BasePointsPerUnit < 1 || in.BasePointsPerUnit > 10000 {
-			return nil, invalidCP("base_points_per_unit must be 1 to 10000")
-		}
-		p.BasePointsPerUnit = in.BasePointsPerUnit
-	default:
-		return nil, invalidCP("base_mode must be fixed or per_currency_unit")
-	}
-	switch {
-	case p.MinEligibleMinor < 0:
-		return nil, invalidCP("min_eligible_minor cannot be negative")
-	case p.BaseCapPoints != nil && *p.BaseCapPoints < 1:
-		return nil, invalidCP("base_cap_points must be positive when set")
-	case p.ExpiryDays != nil && (*p.ExpiryDays < 1 || *p.ExpiryDays > 3650):
-		return nil, invalidCP("expiry_days must be 1 to 3650 when set")
-	}
-	return p, nil
-}
-
-func (s *CompetitionPointsService) AdminPolicies(ctx context.Context) ([]models.RewardPolicy, error) {
-	return s.repo.ListPolicies(ctx)
-}
-
-func (s *CompetitionPointsService) CreatePolicy(ctx context.Context, admin AdminActor, in PolicyInput) (*models.RewardPolicy, error) {
-	p, err := in.toModel(admin.ID)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.repo.SavePolicyDraft(ctx, nil, p, admin.cpAudit("reward_policy.create", "reward_policy"))
-	return out, adminVersionErr(err)
-}
-
-func (s *CompetitionPointsService) UpdatePolicy(ctx context.Context, admin AdminActor, id uuid.UUID, in PolicyInput) (*models.RewardPolicy, error) {
-	p, err := in.toModel(admin.ID)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.repo.SavePolicyDraft(ctx, &id, p, admin.cpAudit("reward_policy.update", "reward_policy"))
-	return out, adminVersionErr(err)
-}
-
-func (s *CompetitionPointsService) PolicyTransition(ctx context.Context, admin AdminActor, id uuid.UUID, action string) (*models.RewardPolicy, error) {
-	to, err := transitionTarget(action)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.repo.TransitionPolicy(ctx, id, to, admin.ID, admin.cpAudit("reward_policy."+action, "reward_policy"))
-	return out, adminVersionErr(err)
-}
-
-func (s *CompetitionPointsService) DeletePolicy(ctx context.Context, admin AdminActor, id uuid.UUID) error {
-	return adminVersionErr(s.repo.DeletePolicyDraft(ctx, id, admin.cpAudit("reward_policy.delete", "reward_policy")))
-}
-
-// PolicyPreview shows what an ordinary and a member scenario would earn,
-// before a policy is published.
-type PolicyPreview struct {
-	EligibleMinor   int64 `json:"eligible_minor"`
-	Qualifies       bool  `json:"qualifies"`
-	BasePoints      int64 `json:"base_points"`
-	MemberBonus     int64 `json:"member_bonus"`
-	MemberFirstGift int64 `json:"member_first_gift_total"`
-}
-
-func (s *CompetitionPointsService) PreviewPolicy(in PolicyInput, eligibleMinor, memberBonus int64, currency string) (*PolicyPreview, error) {
-	p, err := in.toModel(uuid.Nil)
-	if err != nil {
-		return nil, err
-	}
-	out := &PolicyPreview{EligibleMinor: eligibleMinor, Qualifies: eligibleMinor >= p.MinEligibleMinor}
-	if out.Qualifies {
-		out.BasePoints = repository.BasePoints(p, eligibleMinor, strings.ToUpper(currency))
-		out.MemberBonus = memberBonus
-		out.MemberFirstGift = out.BasePoints + memberBonus
-	}
-	return out, nil
-}
-
 // ─── Approvals ───────────────────────────────────────────────────────────
 
 // ApprovalInput is a request to record evidence for one operation.
@@ -575,63 +453,12 @@ func (s *CompetitionPointsService) LiftStop(ctx context.Context, admin AdminActo
 	return out, adminVersionErr(err)
 }
 
-// ─── Operations ──────────────────────────────────────────────────────────
-
-func (s *CompetitionPointsService) AdminCases(ctx context.Context, status string) ([]models.CPReviewCase, error) {
-	if status != "" && status != "open" && status != "resolved" {
-		return nil, invalidCP("status must be open or resolved")
-	}
-	return s.repo.ListCases(ctx, status)
-}
-
-func (s *CompetitionPointsService) ResolveCase(ctx context.Context, admin AdminActor, id uuid.UUID, resolution string) error {
-	resolution = strings.TrimSpace(resolution)
-	if resolution == "" {
-		return invalidCP("resolution is required")
-	}
-	err := s.repo.ResolveCase(ctx, id, admin.ID, resolution, admin.cpAudit("cp_case.resolve", "cp_review_case"))
-	if errors.Is(err, repository.ErrVersionNotFound) {
-		return cpRefuse(http.StatusNotFound, "NOT_FOUND", "That case is not open.", "reload")
-	}
-	return err
-}
-
-func (s *CompetitionPointsService) Reconcile(ctx context.Context) (*models.CPReconciliation, error) {
-	return s.repo.ReconcileCompetitionPoints(ctx)
-}
-
-// CustomerOverview is a customer's competition points and membership, for
-// support.
-type CustomerOverview struct {
-	Wallet      *models.CPWallet         `json:"wallet"`
-	Membership  *models.MembershipStatus `json:"membership"`
-	Eligibility *models.Eligibility      `json:"eligibility"`
-}
-
-func (s *CompetitionPointsService) AdminCustomer(ctx context.Context, customerID uuid.UUID) (*CustomerOverview, error) {
-	w, err := s.Wallet(ctx, customerID)
-	if err != nil {
-		return nil, err
-	}
-	m, err := s.Status(ctx, customerID)
-	if err != nil {
-		return nil, err
-	}
-	e, err := s.Eligibility(ctx, customerID, "web")
-	if err != nil {
-		return nil, err
-	}
-	return &CustomerOverview{Wallet: w, Membership: m, Eligibility: e}, nil
-}
-
 // ReleaseSettings shows which commercial values are still unset, so a
 // sandbox never passes for production.
 type ReleaseSettings struct {
 	// PlatformFeeBPS is SendAGift's commission per sale, in basis points: the
 	// most a member product discount can be.
 	PlatformFeeBPS     int      `json:"platform_fee_bps"`
-	HoldMinutes        int      `json:"hold_minutes"`
-	RestoreWindowHours float64  `json:"restore_window_hours"`
 	MembershipProvider string   `json:"membership_provider"`
 	TestPayments       bool     `json:"test_payments"`
 	OpenDecisions      []string `json:"open_decisions"`
@@ -640,21 +467,12 @@ type ReleaseSettings struct {
 func (s *CompetitionPointsService) Settings() ReleaseSettings {
 	return ReleaseSettings{
 		PlatformFeeBPS:     s.platformFeeBPS,
-		HoldMinutes:        int(s.holdTTL.Minutes()),
-		RestoreWindowHours: s.restoreWindow.Hours(),
 		MembershipProvider: s.membershipProvider(),
 		TestPayments:       s.testPayments,
-		// The decisions Appendix B leaves to the owner. They are configured,
-		// not built in; the release review records each one.
+		// Commercial decisions that are configured, not built in.
 		OpenDecisions: []string{
-			"Tier prices, intervals and member bonus quantities (membership offers)",
-			"Ordinary point formula, minimum spend and caps (reward policies)",
-			"Period anchor: payment capture time is the implemented proposal",
-			"Points expiry and spend order: soonest expiry first is implemented",
-			"Restoration window for holds released after expiry (CP_RESTORE_WINDOW_HOURS)",
-			"Refund and restoration rules beyond the implemented defaults",
-			"Entry costs and caps per contest",
-			"Approved countries, channels, providers and age thresholds (approval records)",
+			"Membership prices, intervals and member discounts (membership packages)",
+			"Approved countries, channels and providers for selling memberships (approval records)",
 		},
 	}
 }

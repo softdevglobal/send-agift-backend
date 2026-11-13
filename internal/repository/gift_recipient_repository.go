@@ -33,7 +33,6 @@ type OrderEmailSummary struct {
 	TotalAmount    int
 	Currency       string
 	GiftMessage    *string
-	GiftPoints     int64
 	CreatedAt      time.Time
 
 	CustomerID    uuid.UUID
@@ -58,7 +57,7 @@ func (r *OrderRepository) OrderEmailSummary(ctx context.Context, orderID uuid.UU
 	err := r.db.QueryRow(ctx, `
 		select o.id, o.order_number, o.status, o.country_id, o.delivery_date,
 		       o.subtotal_amount, o.delivery_amount, o.total_amount, o.currency,
-		       o.gift_message, o.gift_points, o.created_at,
+		       o.gift_message, o.created_at,
 		       c.id, c.email, c.display_name,
 		       r.name, nullif(trim(r.email), ''), nullif(trim(r.phone), ''), ra.city,
 		       o.recipient_customer_id, coalesce(rc.password_change_required, false)
@@ -75,7 +74,7 @@ func (r *OrderRepository) OrderEmailSummary(ctx context.Context, orderID uuid.UU
 	).Scan(
 		&s.OrderID, &s.OrderNumber, &s.Status, &s.CountryID, &s.DeliveryDate,
 		&s.SubtotalAmount, &s.DeliveryAmount, &s.TotalAmount, &s.Currency,
-		&s.GiftMessage, &s.GiftPoints, &s.CreatedAt,
+		&s.GiftMessage, &s.CreatedAt,
 		&s.CustomerID, &s.CustomerEmail, &s.CustomerName,
 		&s.RecipientName, &s.RecipientEmail, &s.RecipientPhone, &s.RecipientCity,
 		&s.RecipientCustomerID, &s.RecipientPasswordChangeRequired,
@@ -168,7 +167,7 @@ func (r *OrderRepository) ListReceivedGifts(ctx context.Context, customerID stri
 	rows, err := r.db.Query(ctx, `
 		select o.id, o.order_number,
 		       coalesce(nullif(trim(c.display_name), ''), split_part(c.email::text, '@', 1)),
-		       o.gift_message, o.gift_points, o.updated_at,
+		       o.gift_message, o.updated_at,
 		       oi.id, oi.product_id, p.name, p.slug, p.image_url, shp.name, oi.quantity,
 		       oi.fulfilment_status, pr.id
 		from marketplace.orders o
@@ -192,7 +191,7 @@ func (r *OrderRepository) ListReceivedGifts(ctx context.Context, customerID stri
 		var g models.ReceivedGift
 		var it models.ReceivedGiftItem
 		if err := rows.Scan(
-			&g.OrderID, &g.OrderNumber, &g.SenderName, &g.GiftMessage, &g.GiftPoints, &g.DeliveredAt,
+			&g.OrderID, &g.OrderNumber, &g.SenderName, &g.GiftMessage, &g.DeliveredAt,
 			&it.ID, &it.ProductID, &it.ProductName, &it.ProductSlug, &it.ProductImageURL, &it.ShopName,
 			&it.Quantity, &it.FulfilmentStatus, &it.ReviewID,
 		); err != nil {

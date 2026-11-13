@@ -78,23 +78,26 @@ func nativeClient(r *http.Request) bool {
 	return strings.HasPrefix(r.UserAgent(), "Dart/")
 }
 
-// List handles GET /competitions. Rounds entered with competition points
-// are left out for the native apps: those capabilities stay off there
-// until accepted (the server refuses their entries regardless).
+// requireNativeApp refuses a play that does not come from the iOS or
+// Android app: games are played in the mobile app only, and the website
+// shows what is open. It reports whether the request may go on.
+func requireNativeApp(w http.ResponseWriter, r *http.Request) bool {
+	if nativeClient(r) {
+		return true
+	}
+	utils.JSON(w, http.StatusForbidden, map[string]any{
+		"error": "Games are played in the SendAGift mobile app.",
+		"code":  "MOBILE_APP_ONLY",
+	})
+	return false
+}
+
+// List handles GET /competitions.
 func (h *CompetitionHandler) List(w http.ResponseWriter, r *http.Request) {
 	list, err := h.competitions.ListCompetitions(r.Context(), actorFromContext(r))
 	if err != nil {
 		h.writeError(w, err, "could not list competitions")
 		return
-	}
-	if nativeClient(r) {
-		kept := list[:0]
-		for _, c := range list {
-			if c.PointsUnit != "competition" {
-				kept = append(kept, c)
-			}
-		}
-		list = kept
 	}
 	utils.JSON(w, http.StatusOK, map[string]any{"items": list})
 }
@@ -108,10 +111,6 @@ func (h *CompetitionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	view, err := h.competitions.GetCompetition(r.Context(), id, actorFromContext(r))
 	if err != nil {
 		h.writeError(w, err, "could not get competition")
-		return
-	}
-	if nativeClient(r) && view.PointsUnit == "competition" {
-		utils.Error(w, http.StatusNotFound, "competition not found")
 		return
 	}
 	utils.JSON(w, http.StatusOK, view)
@@ -144,6 +143,9 @@ func (h *CompetitionHandler) Leaderboard(w http.ResponseWriter, r *http.Request)
 func (h *CompetitionHandler) StartAttempt(w http.ResponseWriter, r *http.Request) {
 	id, ok := competitionID(w, r)
 	if !ok {
+		return
+	}
+	if !requireNativeApp(w, r) {
 		return
 	}
 	req := playRequest(r)

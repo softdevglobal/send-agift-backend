@@ -18,27 +18,28 @@ type AdminPlayer struct {
 
 // AdminGameSummary is one game in the admin games overview.
 type AdminGameSummary struct {
-	Slug         string `json:"slug"`
-	Name         string `json:"name"`
-	GameType     string `json:"game_type"`
-	Status       string `json:"status"`
-	Version      string `json:"version"`
-	Playable     bool   `json:"playable"`
-	Plays        int    `json:"plays"`
-	Scores       int    `json:"scores"`
-	Players      int    `json:"players"`
-	UnderReview  int    `json:"under_review"`
-	Rejected     int    `json:"rejected"`
-	Competitions int    `json:"competitions"`
+	ID           uuid.UUID `json:"id"`
+	Slug         string    `json:"slug"`
+	Name         string    `json:"name"`
+	GameType     string    `json:"game_type"`
+	Status       string    `json:"status"`
+	Version      string    `json:"version"`
+	Playable     bool      `json:"playable"`
+	Plays        int       `json:"plays"`
+	Scores       int       `json:"scores"`
+	Players      int       `json:"players"`
+	UnderReview  int       `json:"under_review"`
+	Rejected     int       `json:"rejected"`
+	Competitions int       `json:"competitions"`
 	// Practice is whether customers can play it on its own (a skill game with
-	// a replay engine). The only plays PlayCostPoints applies to. Chance
+	// a replay engine). The only plays EntryCost applies to. Chance
 	// games and quizzes run inside competitions only.
 	Practice bool `json:"practice"`
-	// PlayCostPoints is what one practice play costs; an admin sets it.
-	PlayCostPoints int64        `json:"play_cost_points"`
-	TopScore       *int64       `json:"top_score,omitempty"`
-	TopPlayer      *AdminPlayer `json:"top_player,omitempty"`
-	LastPlayedAt   *time.Time   `json:"last_played_at,omitempty"`
+	// EntryCost is what one practice play costs; an admin sets it.
+	EntryCost    int64        `json:"entry_cost"`
+	TopScore     *int64       `json:"top_score,omitempty"`
+	TopPlayer    *AdminPlayer `json:"top_player,omitempty"`
+	LastPlayedAt *time.Time   `json:"last_played_at,omitempty"`
 }
 
 // AdminLeaderboardRow is one player on a game's full practice board.

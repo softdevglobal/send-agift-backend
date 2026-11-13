@@ -16,10 +16,10 @@ type CountryCapability struct {
 	DomesticDeliveryEnabled      bool      `json:"domestic_delivery_enabled"`
 	InternationalDeliveryEnabled bool      `json:"international_delivery_enabled"`
 	MembershipsEnabled           bool      `json:"memberships_enabled"`
-	PointsEarningEnabled         bool      `json:"points_earning_enabled"`
-	PointsUsageEnabled           bool      `json:"points_usage_enabled"`
+	EntriesEarningEnabled        bool      `json:"entries_earning_enabled"`
+	EntriesUsageEnabled          bool      `json:"entries_usage_enabled"`
 	SkillCompetitionsEnabled     bool      `json:"skill_competitions_enabled"`
-	// Progressive prizes (a prize that grows from points-paid plays) need
+	// Progressive prizes (a prize that grows from plays paid for with game entries) need
 	// their own legal sign-off per country, separate from skill competitions.
 	ProgressivePrizesEnabled bool `json:"progressive_prizes_enabled"`
 	// Chance games (spin, scratch, draw…) with a prize: their own legal gate.

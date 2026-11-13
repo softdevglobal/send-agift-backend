@@ -55,10 +55,8 @@ func New(
 	games *handlers.GameHandler,
 	// Handler instance that manages skill competitions, leaderboards and winners
 	competitions *handlers.CompetitionHandler,
-	// Handler instance that manages customers' points wallets
-	points *handlers.PointsHandler,
-	// Handler instance that manages sellers buying points
-	sellerPoints *handlers.SellerPointsHandler,
+	// Handler instance that manages game entries, states and advertising packages
+	gameEntries *handlers.GameEntriesHandler,
 	// Handler instance that issues presigned S3 upload/download URLs
 	media *handlers.MediaHandler,
 	// Handler instance that proxies Google Places address lookups
@@ -196,11 +194,12 @@ func New(
 
 		// Skill competitions: live leaderboards, official attempts, winners, prize claims
 		// Example: GET /api/v1/competitions/{id}/leaderboard
-		RegisterCompetitionRoutes(r, competitions, points, jwtSecret)
+		RegisterCompetitionRoutes(r, competitions, jwtSecret)
 
-		// Sellers buying points, and the admin/webhook that confirm payment
-		// Example: POST /api/v1/sellers/me/points/purchases
-		RegisterSellerPointsRoutes(r, sellerPoints, jwtSecret, sellers.RequireActive)
+		// Game entries, customers' states, sellers' advertising packages and
+		// the admin switches that turn games on per country, state and game
+		// Example: GET /api/v1/customers/me/game-entries
+		RegisterGameEntriesRoutes(r, gameEntries, jwtSecret, sellers.RequireActive)
 
 		// Card payments for orders, seller payout setup, and Stripe's webhooks
 		// Example: POST /api/v1/customers/me/orders/{id}/pay
@@ -229,9 +228,8 @@ func New(
 		// Example: POST /api/v1/customers/me/free-gifts
 		RegisterFreeGiftRoutes(r, freeGifts, jwtSecret, sellers.RequireActive)
 
-		// Competition points (handover v4): memberships, the competition
-		// points wallet, competition entries and their admin controls
-		// Example: GET /api/v1/customers/me/competition-points
+		// Memberships and their admin controls
+		// Example: GET /api/v1/customers/me/membership
 		RegisterCompetitionPointsRoutes(r, competitionPoints, jwtSecret)
 	})
 

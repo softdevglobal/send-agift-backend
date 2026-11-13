@@ -15,10 +15,10 @@ type Game struct {
 	Description *string   `json:"description,omitempty"`
 	GameType    string    `json:"game_type"`
 	Status      string    `json:"status"`
-	// PlayCostPoints is what one practice play costs, set by an admin.
-	PlayCostPoints int64     `json:"play_cost_points"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// EntryCost is what one practice play costs, set by an admin.
+	EntryCost int64     `json:"entry_cost"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // GameVersion maps to competition.game_versions. Config carries the rules the
@@ -79,9 +79,9 @@ type GameView struct {
 	GameType    string          `json:"game_type"`
 	Version     string          `json:"version"`
 	Config      json.RawMessage `json:"config"`
-	// PlayCostPoints is what one play costs, set per game by a Super
+	// EntryCost is what one play costs, set per game by a Super
 	// Admin; 0 is free.
-	PlayCostPoints int64 `json:"play_cost_points"`
+	EntryCost int64 `json:"entry_cost"`
 }
 
 // GameSessionView is handed to the client when a play starts. The seed is what
@@ -96,8 +96,8 @@ type GameSessionView struct {
 	StartedAt time.Time       `json:"started_at"`
 	ExpiresAt time.Time       `json:"expires_at"`
 	// What this play cost and the balance it left, when it cost anything.
-	PointsCharged int64  `json:"points_charged,omitempty"`
-	PointsBalance *int64 `json:"points_balance,omitempty"`
+	EntriesCharged int64  `json:"entries_charged,omitempty"`
+	EntriesBalance *int64 `json:"entries_balance,omitempty"`
 }
 
 // GameScoreView is the result of a submission.

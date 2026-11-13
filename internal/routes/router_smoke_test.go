@@ -9,17 +9,17 @@ import (
 
 // The whole router must build: chi panics at startup on clashing patterns.
 func TestRouterBuilds(t *testing.T) {
-	h := New(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "secret")
+	h := New(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "secret")
 	for _, path := range []string{
 		"/api/v1/competitions/00000000-0000-0000-0000-000000000000/plays",
 		"/api/v1/admin/competitions/00000000-0000-0000-0000-000000000000/prize-adjustments",
-		"/api/v1/admin/customers/00000000-0000-0000-0000-000000000000/points/adjustments",
-		"/api/v1/sellers/me/points/purchases",
-		"/api/v1/admin/points/purchases/00000000-0000-0000-0000-000000000000/confirm",
+		"/api/v1/admin/customers/00000000-0000-0000-0000-000000000000/game-entries/adjustments",
+		"/api/v1/sellers/me/advertising/purchases",
+		"/api/v1/admin/advertising/purchases/00000000-0000-0000-0000-000000000000/confirm",
 		"/api/v1/sellers/me/shops",
 		"/api/v1/customers/me/membership/checkout",
-		"/api/v1/competitions/00000000-0000-0000-0000-000000000000/entries",
-		"/api/v1/competitions/00000000-0000-0000-0000-000000000000/entries/00000000-0000-0000-0000-000000000000/start",
+		"/api/v1/customers/me/game-entries/free",
+		"/api/v1/admin/games-control/program/stop",
 		"/api/v1/admin/competition-points/approvals/00000000-0000-0000-0000-000000000000/approve",
 		"/api/v1/admin/competition-points/stops",
 	} {

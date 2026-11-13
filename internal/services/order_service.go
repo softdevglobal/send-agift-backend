@@ -26,17 +26,7 @@ var (
 	ErrOrderNotCancellable    = errors.New("order cannot be cancelled")
 	ErrOrderItemNotFound      = errors.New("order item not found")
 	ErrOrderItemNotAcceptable = errors.New("order item cannot be accepted")
-	// ErrGiftPoints is points attached to a gift that cannot be sent.
-	ErrGiftPoints = errors.New("gift points cannot be sent")
-	// ErrOrderRewardSpent is cancelling an order whose reward points have
-	// already been spent.
-	ErrOrderRewardSpent = errors.New("this order's reward points have already been spent, so it can no longer be cancelled here. Contact support")
-	// ErrGiftPointsBalance is more points attached than the customer holds.
-	ErrGiftPointsBalance = errors.New("not enough points to attach to this gift")
 )
-
-// maxGiftPoints caps what one gift can carry.
-const maxGiftPoints = 1_000_000
 
 type OrderService struct {
 	orders    *repository.OrderRepository
@@ -147,10 +137,6 @@ type OrderCreateInput struct {
 	DeliveryAmount  *int                      `json:"delivery_amount"`
 	Items           []OrderItemInput          `json:"items"`
 	ShippingQuotes  []OrderShippingQuoteInput `json:"shipping_quotes"`
-	// GiftPoints are points from the customer's own balance to send with
-	// the gift. They reach the recipient on delivery if the recipient's
-	// email belongs to a SendAGift account, and come back otherwise.
-	GiftPoints int64 `json:"gift_points"`
 }
 
 func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCreateInput) (*models.OrderDetails, error) {
@@ -190,20 +176,6 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		return nil, ErrInvalidOrder
 	}
 
-	if in.GiftPoints < 0 || in.GiftPoints > maxGiftPoints {
-		return nil, fmt.Errorf("%w: gift_points must be 0 to %d", ErrGiftPoints, maxGiftPoints)
-	}
-
-	if in.GiftPoints > 0 {
-		id, err := uuid.Parse(customerID)
-		if err != nil {
-			return nil, ErrCustomerNotFound
-		}
-		if err := ensureCanRedeem(ctx, s.customers, id); err != nil {
-			return nil, err
-		}
-	}
-
 	var recipientID *uuid.UUID
 	if in.RecipientID != nil && strings.TrimSpace(*in.RecipientID) != "" {
 		rec, err := s.customers.GetRecipientByID(ctx, customerID, strings.TrimSpace(*in.RecipientID))
@@ -214,13 +186,6 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 			return nil, err
 		}
 		recipientID = &rec.ID
-		// Points find the recipient's account by email, so there has to be one.
-		if in.GiftPoints > 0 && (rec.Email == nil || strings.TrimSpace(*rec.Email) == "") {
-			return nil, fmt.Errorf("%w: add the recipient's email address to send them points", ErrGiftPoints)
-		}
-	}
-	if in.GiftPoints > 0 && recipientID == nil {
-		return nil, fmt.Errorf("%w: choose a recipient to send points to", ErrGiftPoints)
 	}
 
 	var mediaGreetingID *uuid.UUID
@@ -289,9 +254,6 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 			UnitAmount:       snap.PriceAmount,
 			TotalAmount:      lineTotal,
 			FulfilmentStatus: "pending",
-			// Reserved from the seller when the order is written; dropped to
-			// zero there if they cannot cover it.
-			RewardPointsPerUnit: snap.RewardPoints,
 		})
 	}
 
@@ -336,7 +298,6 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		Currency:        currency,
 		GiftMessage:     in.GiftMessage,
 		MediaGreetingID: mediaGreetingID,
-		GiftPoints:      in.GiftPoints,
 	}
 	if memberDiscount > 0 {
 		order.MemberDiscountAmount = memberDiscount
@@ -348,9 +309,6 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	if errors.Is(err, repository.ErrOrderDuplicate) {
 		order.OrderNumber = newOrderNumber()
 		err = s.orders.Create(ctx, order, items, deliveries)
-	}
-	if errors.Is(err, repository.ErrPointsInsufficient) {
-		return nil, ErrGiftPointsBalance
 	}
 	if err != nil {
 		return nil, err
@@ -544,9 +502,6 @@ func (s *OrderService) Cancel(ctx context.Context, customerID, orderID string) (
 		}
 		if errors.Is(err, repository.ErrOrderNotCancellable) {
 			return nil, ErrOrderNotCancellable
-		}
-		if errors.Is(err, repository.ErrRewardSpent) {
-			return nil, ErrOrderRewardSpent
 		}
 		return nil, err
 	}

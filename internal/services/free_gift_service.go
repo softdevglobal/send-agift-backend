@@ -389,7 +389,7 @@ func (s *FreeGiftService) Send(ctx context.Context, customerID, idempotencyKey s
 		UnitAmount:       snap.PriceAmount,
 		TotalAmount:      snap.PriceAmount,
 		FulfilmentStatus: "pending",
-		RewardStatus:     "none", // a free gift earns no reward points
+		EntriesStatus:    "none", // a free gift earns no game entries
 	}}
 	shops := map[string]uuid.UUID{shopID.String(): sellerID}
 

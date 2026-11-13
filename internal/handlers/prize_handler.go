@@ -79,6 +79,9 @@ func (h *CompetitionHandler) Play(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !requireNativeApp(w, r) {
+		return
+	}
 	view, err := h.competitions.Play(r.Context(), id, actorFromContext(r), playRequest(r))
 	if err != nil {
 		h.writePlayError(w, err)
@@ -114,7 +117,7 @@ func (h *CompetitionHandler) writePlayError(w http.ResponseWriter, err error) {
 	switch refusal.Code {
 	case services.PlayLimitReached, services.PlayIdempotencyConflict, services.PlayPrizeCapReached, services.PlayBusy:
 		status = http.StatusConflict
-	case services.PlayInsufficientPoints:
+	case services.PlayInsufficientEntries:
 		status = http.StatusUnprocessableEntity
 	case services.PlayNotEligible:
 		status = http.StatusForbidden
@@ -345,128 +348,6 @@ func (h *CompetitionHandler) Analytics(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, a)
 }
 
-// ─── Points ───────────────────────────────────────────────────────────────
-
-// PointsHandler serves the points wallet.
-type PointsHandler struct {
-	points *services.PointsService
-}
-
-func NewPointsHandler(points *services.PointsService) *PointsHandler {
-	return &PointsHandler{points: points}
-}
-
-// MyWallet handles GET /customers/me/points.
-func (h *PointsHandler) MyWallet(w http.ResponseWriter, r *http.Request) {
-	wallet, err := h.points.MyWallet(r.Context(), actorFromContext(r))
-	if err != nil {
-		h.writeError(w, err, "could not read points")
-		return
-	}
-	utils.JSON(w, http.StatusOK, wallet)
-}
-
-// SearchCustomers handles GET /admin/customers?q=.
-func (h *PointsHandler) SearchCustomers(w http.ResponseWriter, r *http.Request) {
-	list, err := h.points.SearchCustomers(r.Context(), r.URL.Query().Get("q"))
-	if err != nil {
-		h.writeError(w, err, "could not search customers")
-		return
-	}
-	utils.JSON(w, http.StatusOK, map[string]any{"items": list})
-}
-
-// CustomerWallet handles GET /admin/customers/{customerID}/points.
-func (h *PointsHandler) CustomerWallet(w http.ResponseWriter, r *http.Request) {
-	id, ok := uuidParam(w, r, "customerID", "customer not found")
-	if !ok {
-		return
-	}
-	wallet, err := h.points.CustomerWallet(r.Context(), id)
-	if err != nil {
-		h.writeError(w, err, "could not read points")
-		return
-	}
-	utils.JSON(w, http.StatusOK, wallet)
-}
-
-// Adjust handles POST /admin/customers/{customerID}/points/adjustments.
-func (h *PointsHandler) Adjust(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	id, ok := uuidParam(w, r, "customerID", "customer not found")
-	if !ok {
-		return
-	}
-	var in services.AdjustPointsInput
-	if !decodeBody(w, r, &in) {
-		return
-	}
-	if in.IdempotencyKey == "" {
-		in.IdempotencyKey = r.Header.Get(IdempotencyKeyHeader)
-	}
-	wallet, err := h.points.AdjustPoints(r.Context(), admin, id, in)
-	if err != nil {
-		h.writeError(w, err, "could not adjust points")
-		return
-	}
-	utils.JSON(w, http.StatusOK, wallet)
-}
-
-// MyEarningRule handles GET /customers/me/points/earning.
-func (h *PointsHandler) MyEarningRule(w http.ResponseWriter, r *http.Request) {
-	rule, err := h.points.MyEarningRule(r.Context(), actorFromContext(r))
-	if err != nil {
-		h.writeError(w, err, "could not read earning rule")
-		return
-	}
-	utils.JSON(w, http.StatusOK, rule)
-}
-
-// EarningRules handles GET /admin/points/earning-rules.
-func (h *PointsHandler) EarningRules(w http.ResponseWriter, r *http.Request) {
-	rules, err := h.points.EarningRules(r.Context())
-	if err != nil {
-		h.writeError(w, err, "could not list earning rules")
-		return
-	}
-	utils.JSON(w, http.StatusOK, map[string]any{"items": rules})
-}
-
-// SetEarningRule handles PUT /admin/points/earning-rules/{countryID}.
-func (h *PointsHandler) SetEarningRule(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	countryID, ok := uuidParam(w, r, "countryID", "country not found")
-	if !ok {
-		return
-	}
-	var in services.EarningRuleInput
-	if !decodeBody(w, r, &in) {
-		return
-	}
-	rules, err := h.points.SetEarningRule(r.Context(), admin, countryID, in)
-	if err != nil {
-		h.writeError(w, err, "could not save earning rule")
-		return
-	}
-	utils.JSON(w, http.StatusOK, map[string]any{"items": rules})
-}
-
-// RunEarning handles POST /admin/points/earning-runs.
-func (h *PointsHandler) RunEarning(w http.ResponseWriter, r *http.Request) {
-	res, err := h.points.RunEarning(r.Context())
-	if err != nil {
-		h.writeError(w, err, "could not run points earning")
-		return
-	}
-	utils.JSON(w, http.StatusOK, res)
-}
-
 // RunDraw handles POST /admin/competitions/{id}/draw.
 func (h *CompetitionHandler) RunDraw() http.HandlerFunc {
 	return h.adminAction(func(s *services.CompetitionService, r *http.Request, a services.AdminActor, id uuid.UUID) (any, error) {
@@ -490,18 +371,4 @@ func (h *CompetitionHandler) Draw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.JSON(w, http.StatusOK, d)
-}
-
-func (h *PointsHandler) writeError(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, services.ErrCustomerRequired):
-		utils.Error(w, http.StatusUnauthorized, err.Error())
-	case errors.Is(err, services.ErrInvalidPoints):
-		utils.Error(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, services.ErrConfigConflict):
-		utils.JSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": services.PlayIdempotencyConflict})
-	default:
-		log.Printf("points handler: %s: %v", fallback, err)
-		utils.Error(w, http.StatusInternalServerError, fallback)
-	}
 }

@@ -181,7 +181,7 @@ func TestFreeGiftFirstSend(t *testing.T) {
 	if order.SubtotalAmount != freeGiftTestPrice || order.DeliveryAmount != freeGiftTestDelivery || order.FreeGiftCost != freeGiftTestCost {
 		t.Fatalf("subtotal %d delivery %d cost %d", order.SubtotalAmount, order.DeliveryAmount, order.FreeGiftCost)
 	}
-	if len(order.Items) != 1 || order.Items[0].Quantity != 1 || order.Items[0].UnitAmount != freeGiftTestPrice || order.Items[0].RewardPoints != 0 {
+	if len(order.Items) != 1 || order.Items[0].Quantity != 1 || order.Items[0].UnitAmount != freeGiftTestPrice || order.Items[0].GameEntries != 0 {
 		t.Fatalf("items = %+v", order.Items)
 	}
 	if send, recv := f.claims(order.ID, "send", "used"), f.claims(order.ID, "receive", "used"); send != 3 || recv != 2 {

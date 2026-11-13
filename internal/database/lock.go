@@ -13,7 +13,7 @@ import (
 // crash never leaves it stuck.
 const (
 	LockMigrations          int64 = 7_301_001
-	LockPointsEarning       int64 = 7_301_002
+	LockGameEntries         int64 = 7_301_002
 	LockPrizeReconciliation int64 = 7_301_003
 	LockPushDelivery        int64 = 7_301_004
 	LockEmailDelivery       int64 = 7_301_005
@@ -21,8 +21,8 @@ const (
 	LockSMSDelivery         int64 = 7_301_007
 	LockStripePayouts       int64 = 7_301_008
 	LockStripeExpiry        int64 = 7_301_009
-	LockPointsPurchaseSync  int64 = 7_301_010
-	LockCompetitionPoints   int64 = 7_301_011
+	LockAdvertising         int64 = 7_301_010
+	LockMembership          int64 = 7_301_011
 )
 
 // WithLock runs fn while holding the advisory lock key, first waiting for any

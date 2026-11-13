@@ -86,9 +86,9 @@ func (s *CompetitionService) AdjustPrize(ctx context.Context, admin AdminActor, 
 // VoidPlayInput voids one play. Refunding points and reversing the prize
 // increment both default to on; either can be turned off by policy.
 type VoidPlayInput struct {
-	Reason       string `json:"reason"`
-	RefundPoints *bool  `json:"refund_points"`
-	ReversePrize *bool  `json:"reverse_prize"`
+	Reason        string `json:"reason"`
+	RefundEntries *bool  `json:"refund_entries"`
+	ReversePrize  *bool  `json:"reverse_prize"`
 }
 
 // VoidPlay voids a play: it leaves the leaderboard, and its points and prize
@@ -99,8 +99,8 @@ func (s *CompetitionService) VoidPlay(ctx context.Context, admin AdminActor, id,
 		return fmt.Errorf("%w: a reason is required", ErrInvalidAdjustment)
 	}
 	refund, reverse := true, true
-	if in.RefundPoints != nil {
-		refund = *in.RefundPoints
+	if in.RefundEntries != nil {
+		refund = *in.RefundEntries
 	}
 	if in.ReversePrize != nil {
 		reverse = *in.ReversePrize
@@ -301,7 +301,6 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 		OfficialRules:                src.OfficialRules,
 		PrizeGrowthEnabled:           src.PrizeGrowthEnabled,
 		PrizeType:                    src.PrizeType,
-		PrizePoints:                  src.PrizePoints,
 		WinnerMethod:                 src.WinnerMethod,
 		StartPrizeCents:              &startPrize,
 		IncrementPerPlayCents:        src.IncrementPerPlayCents,
@@ -311,9 +310,7 @@ func (s *CompetitionService) DuplicateCompetition(ctx context.Context, admin Adm
 		MinPlaysToWin:                src.MinPlaysToWin,
 		WinOdds:                      src.WinOdds,
 		QuizQuestions:                questions,
-		PointsUnit:                   src.PointsUnit,
-		EntryCostPoints:              duplicateEntryCost(src),
-		CPAllowedSources:             src.CPAllowedSources,
+		StateIDs:                     stateIDStrings(src),
 	}); err != nil {
 		return nil, err
 	}
@@ -497,173 +494,6 @@ func (s *CompetitionService) LiveEvents(ctx context.Context, id uuid.UUID, after
 	return s.repo.EventsSince(ctx, id, after, 100)
 }
 
-// ─── Points ───────────────────────────────────────────────────────────────
-
-var ErrInvalidPoints = errors.New("invalid points change")
-
-// PointsService is the customer points wallet.
-type PointsService struct {
-	points *repository.PointsRepository
-}
-
-func NewPointsService(points *repository.PointsRepository) *PointsService {
-	return &PointsService{points: points}
-}
-
-// MyWallet is the signed-in customer's balance and history.
-func (s *PointsService) MyWallet(ctx context.Context, actor SocialActor) (*models.PointsWallet, error) {
-	id, err := parseCustomer(actor)
-	if err != nil {
-		return nil, err
-	}
-	if id == nil {
-		return nil, ErrCustomerRequired
-	}
-	return s.points.Wallet(ctx, *id, 100)
-}
-
-// CustomerWallet is any customer's wallet, for admins.
-func (s *PointsService) CustomerWallet(ctx context.Context, customerID uuid.UUID) (*models.PointsWallet, error) {
-	return s.points.Wallet(ctx, customerID, 200)
-}
-
-// SearchCustomers finds customers for the admin points tools.
-func (s *PointsService) SearchCustomers(ctx context.Context, query string) ([]models.CustomerPointsSummary, error) {
-	query = strings.TrimSpace(query)
-	if len(query) > 100 {
-		query = query[:100]
-	}
-	// LIKE wildcards in the query are matched literally.
-	query = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(query)
-	return s.points.SearchCustomers(ctx, query, 200)
-}
-
-// AdjustPointsInput is an admin granting or taking points. The key
-// makes a retried request harmless.
-type AdjustPointsInput struct {
-	Amount         int64  `json:"amount"`
-	Reason         string `json:"reason"`
-	IdempotencyKey string `json:"idempotency_key"`
-}
-
-// AdjustPoints grants (positive) or deducts (negative) a customer's points
-// with a mandatory reason, as a ledger entry with its audit row.
-func (s *PointsService) AdjustPoints(ctx context.Context, admin AdminActor, customerID uuid.UUID, in AdjustPointsInput) (*models.PointsWallet, error) {
-	reason := strings.TrimSpace(in.Reason)
-	key := strings.TrimSpace(in.IdempotencyKey)
-	switch {
-	case in.Amount == 0:
-		return nil, fmt.Errorf("%w: amount cannot be zero", ErrInvalidPoints)
-	case in.Amount > 10_000_000 || in.Amount < -10_000_000:
-		return nil, fmt.Errorf("%w: amount is out of range", ErrInvalidPoints)
-	case reason == "":
-		return nil, fmt.Errorf("%w: a reason is required", ErrInvalidPoints)
-	case key == "" || len(key) > 128:
-		return nil, fmt.Errorf("%w: idempotency_key of 1 to 128 characters is required", ErrInvalidPoints)
-	}
-	entryType := models.PointsEntryAdminGrant
-	if in.Amount < 0 {
-		entryType = models.PointsEntryAdminDeduction
-	}
-	adminID := admin.ID
-	audit := admin.audit("points.adjusted", customerID, &reason)
-	audit.EntityType = "customer"
-	_, err := s.points.Adjust(ctx, repository.PointsChange{
-		CustomerID: customerID, EntryType: entryType, Delta: in.Amount,
-		IdempotencyKey: "admin:" + key, Reason: &reason, ActorType: "admin", ActorID: &adminID,
-	}, audit)
-	switch {
-	case errors.Is(err, repository.ErrPointsInsufficient):
-		return nil, fmt.Errorf("%w: the customer does not have that many points", ErrInvalidPoints)
-	case errors.Is(err, repository.ErrPointsDuplicate):
-		return nil, fmt.Errorf("%w: this idempotency_key was already used", ErrConfigConflict)
-	case isForeignKeyViolation(err):
-		return nil, fmt.Errorf("%w: customer not found", ErrInvalidPoints)
-	case err != nil:
-		return nil, err
-	}
-	return s.points.Wallet(ctx, customerID, 200)
-}
-
-// ─── Points earning ───────────────────────────────────────────────────────
-
-// EarningRules lists every country's earning rule.
-func (s *PointsService) EarningRules(ctx context.Context) ([]models.PointsEarningRule, error) {
-	return s.points.EarningRules(ctx)
-}
-
-// MyEarningRule is how the signed-in customer earns points.
-func (s *PointsService) MyEarningRule(ctx context.Context, actor SocialActor) (*models.PointsEarningRule, error) {
-	id, err := parseCustomer(actor)
-	if err != nil {
-		return nil, err
-	}
-	if id == nil {
-		return nil, ErrCustomerRequired
-	}
-	return s.points.RuleForCustomer(ctx, *id)
-}
-
-// EarningRuleInput is an admin setting one country's rule.
-type EarningRuleInput struct {
-	Enabled       bool `json:"enabled"`
-	PointsPerUnit int  `json:"points_per_unit"`
-	SignupBonus   int  `json:"signup_bonus"`
-}
-
-// SetEarningRule saves a country's earning rule, audited.
-func (s *PointsService) SetEarningRule(ctx context.Context, admin AdminActor, countryID uuid.UUID, in EarningRuleInput) ([]models.PointsEarningRule, error) {
-	if in.PointsPerUnit < 0 || in.PointsPerUnit > 10000 {
-		return nil, fmt.Errorf("%w: points_per_unit must be 0 to 10000", ErrInvalidPoints)
-	}
-	if in.SignupBonus < 0 || in.SignupBonus > 1000000 {
-		return nil, fmt.Errorf("%w: signup_bonus must be 0 to 1000000", ErrInvalidPoints)
-	}
-	audit := admin.audit("points.earning_rule_set", countryID, nil)
-	audit.EntityType = "country"
-	audit.After = in
-	err := s.points.SetEarningRule(ctx, countryID, in.Enabled, in.PointsPerUnit, in.SignupBonus, admin.ID, audit)
-	if errors.Is(err, repository.ErrCountryNotFound) {
-		return nil, fmt.Errorf("%w: country not found", ErrInvalidPoints)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return s.points.EarningRules(ctx)
-}
-
-// RunEarning runs one pass of the earning job now.
-func (s *PointsService) RunEarning(ctx context.Context) (*models.EarningRunResult, error) {
-	return s.points.RunEarning(ctx, 500)
-}
-
-// RunEarningLoop runs the earning job on an interval until ctx ends.
-// exclusive decides whether this server takes each round: with several API
-// servers running, only one runs the job at a time. nil runs every round.
-func (s *PointsService) RunEarningLoop(ctx context.Context, every time.Duration, exclusive Exclusive) {
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := exclusive.run(ctx, func(ctx context.Context) error {
-				res, err := s.points.RunEarning(ctx, 500)
-				if err != nil {
-					return err
-				}
-				if res.Anything() {
-					log.Printf("points earning: %+v", *res)
-				}
-				return nil
-			}); err != nil {
-				log.Printf("points earning: %v", err)
-			}
-		}
-	}
-}
-
 // Exclusive runs fn only when no other API server is already running the
 // same job, and reports whether it ran. database.Exclusive builds one from an
 // advisory lock.
@@ -677,12 +507,11 @@ func (e Exclusive) run(ctx context.Context, fn func(context.Context) error) (boo
 	return e(ctx, fn)
 }
 
-// duplicateEntryCost carries a competition-points round's published entry
-// cost into its copy.
-func duplicateEntryCost(src *models.Competition) *int {
-	if src.PointsUnit != "competition" {
-		return nil
+// stateIDStrings carries a round's state list into its copy.
+func stateIDStrings(src *models.Competition) []string {
+	out := make([]string, 0, len(src.States))
+	for _, st := range src.States {
+		out = append(out, st.StateID.String())
 	}
-	cost := src.PointsPerAttempt
-	return &cost
+	return out
 }

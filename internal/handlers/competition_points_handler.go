@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"myapp/internal/middleware"
 	"myapp/internal/repository"
 	"myapp/internal/services"
 	"myapp/internal/utils"
@@ -22,6 +23,12 @@ type CompetitionPointsHandler struct {
 
 func NewCompetitionPointsHandler(cp *services.CompetitionPointsService) *CompetitionPointsHandler {
 	return &CompetitionPointsHandler{cp: cp}
+}
+
+// sellerID is the signed-in account's id: the JWT subject, whatever the role.
+func sellerID(r *http.Request) string {
+	id, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	return id
 }
 
 // ChannelHeader is how a native app names itself. A browser sends nothing.
@@ -220,116 +227,6 @@ func (h *CompetitionPointsHandler) SyncMembership(w http.ResponseWriter, r *http
 	utils.JSON(w, http.StatusOK, out)
 }
 
-// Wallet handles GET /customers/me/competition-points.
-func (h *CompetitionPointsHandler) Wallet(w http.ResponseWriter, r *http.Request) {
-	id, ok := customerUUID(w, r)
-	if !ok {
-		return
-	}
-	out, err := h.cp.Wallet(r.Context(), id)
-	if err != nil {
-		h.writeError(w, err, "could not read competition points")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
-// Quote handles GET /competitions/{id}/entry-quote.
-func (h *CompetitionPointsHandler) Quote(w http.ResponseWriter, r *http.Request) {
-	customer, ok := customerUUID(w, r)
-	if !ok {
-		return
-	}
-	id, ok := competitionID(w, r)
-	if !ok {
-		return
-	}
-	out, err := h.cp.Quote(r.Context(), customer, channelOf(r), id)
-	if err != nil {
-		h.writeError(w, err, "could not quote the entry")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
-// Reserve handles POST /competitions/{id}/entries {"reference": "..."} with
-// an Idempotency-Key.
-func (h *CompetitionPointsHandler) Reserve(w http.ResponseWriter, r *http.Request) {
-	customer, ok := customerUUID(w, r)
-	if !ok {
-		return
-	}
-	id, ok := competitionID(w, r)
-	if !ok {
-		return
-	}
-	var req services.ReserveRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	req.ClientRequestID = r.Header.Get(IdempotencyKeyHeader)
-	out, err := h.cp.Reserve(r.Context(), customer, channelOf(r), id, req)
-	if err != nil {
-		h.writeError(w, err, "could not reserve the entry")
-		return
-	}
-	status := http.StatusCreated
-	if out.Replayed {
-		status = http.StatusOK
-	}
-	utils.JSON(w, status, out)
-}
-
-// StartEntry handles POST /competitions/{id}/entries/{entryID}/start.
-func (h *CompetitionPointsHandler) StartEntry(w http.ResponseWriter, r *http.Request) {
-	customer, ok := customerUUID(w, r)
-	if !ok {
-		return
-	}
-	id, ok := competitionID(w, r)
-	if !ok {
-		return
-	}
-	entryID, ok := uuidParam(w, r, "entryID", "entry not found")
-	if !ok {
-		return
-	}
-	var body struct {
-		RiskMetadata map[string]any `json:"risk_metadata"`
-	}
-	if r.ContentLength > 0 && !decodeBody(w, r, &body) {
-		return
-	}
-	view, err := h.cp.StartEntry(r.Context(), customer, id, entryID, r.Header.Get(IdempotencyKeyHeader), body.RiskMetadata)
-	if err != nil {
-		h.writeError(w, err, "could not start the attempt")
-		return
-	}
-	status := http.StatusCreated
-	if view.Replayed {
-		status = http.StatusOK
-	}
-	utils.JSON(w, status, view)
-}
-
-// CancelEntry handles POST /competitions/{id}/entries/{entryID}/cancel.
-func (h *CompetitionPointsHandler) CancelEntry(w http.ResponseWriter, r *http.Request) {
-	customer, ok := customerUUID(w, r)
-	if !ok {
-		return
-	}
-	entryID, ok := uuidParam(w, r, "entryID", "entry not found")
-	if !ok {
-		return
-	}
-	out, err := h.cp.CancelEntry(r.Context(), customer, entryID)
-	if err != nil {
-		h.writeError(w, err, "could not cancel the entry")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
 // ─── Admin ───────────────────────────────────────────────────────────────
 
 func (h *CompetitionPointsHandler) list(w http.ResponseWriter, items any, err error, fallback string) {
@@ -451,107 +348,6 @@ func (h *CompetitionPointsHandler) DeleteOffer(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// AdminPolicies handles GET /admin/competition-points/policies.
-func (h *CompetitionPointsHandler) AdminPolicies(w http.ResponseWriter, r *http.Request) {
-	items, err := h.cp.AdminPolicies(r.Context())
-	h.list(w, items, err, "could not list reward policies")
-}
-
-// CreatePolicy handles POST /admin/competition-points/policies.
-func (h *CompetitionPointsHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	var in services.PolicyInput
-	if !decodeBody(w, r, &in) {
-		return
-	}
-	out, err := h.cp.CreatePolicy(r.Context(), admin, in)
-	if err != nil {
-		h.writeError(w, err, "could not create reward policy")
-		return
-	}
-	utils.JSON(w, http.StatusCreated, out)
-}
-
-// UpdatePolicy handles PUT /admin/competition-points/policies/{policyID}.
-func (h *CompetitionPointsHandler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	id, ok := uuidParam(w, r, "policyID", "reward policy not found")
-	if !ok {
-		return
-	}
-	var in services.PolicyInput
-	if !decodeBody(w, r, &in) {
-		return
-	}
-	out, err := h.cp.UpdatePolicy(r.Context(), admin, id, in)
-	if err != nil {
-		h.writeError(w, err, "could not update reward policy")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
-// PolicyAction handles POST /admin/competition-points/policies/{policyID}/{action}.
-func (h *CompetitionPointsHandler) PolicyAction(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	id, ok := uuidParam(w, r, "policyID", "reward policy not found")
-	if !ok {
-		return
-	}
-	out, err := h.cp.PolicyTransition(r.Context(), admin, id, chi.URLParam(r, "action"))
-	if err != nil {
-		h.writeError(w, err, "could not change reward policy")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
-// DeletePolicy handles DELETE /admin/competition-points/policies/{policyID}.
-func (h *CompetitionPointsHandler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	id, ok := uuidParam(w, r, "policyID", "reward policy not found")
-	if !ok {
-		return
-	}
-	if err := h.cp.DeletePolicy(r.Context(), admin, id); err != nil {
-		h.writeError(w, err, "could not delete reward policy")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// PreviewPolicy handles POST /admin/competition-points/policies/preview
-// {"policy": {...}, "eligible_minor": 5000, "member_bonus": 100, "currency": "AUD"}.
-func (h *CompetitionPointsHandler) PreviewPolicy(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Policy        services.PolicyInput `json:"policy"`
-		EligibleMinor int64                `json:"eligible_minor"`
-		MemberBonus   int64                `json:"member_bonus"`
-		Currency      string               `json:"currency"`
-	}
-	if !decodeBody(w, r, &body) {
-		return
-	}
-	out, err := h.cp.PreviewPolicy(body.Policy, body.EligibleMinor, body.MemberBonus, body.Currency)
-	if err != nil {
-		h.writeError(w, err, "could not preview")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
 // AdminApprovals handles GET /admin/competition-points/approvals.
 func (h *CompetitionPointsHandler) AdminApprovals(w http.ResponseWriter, r *http.Request) {
 	items, err := h.cp.AdminApprovals(r.Context())
@@ -668,65 +464,11 @@ func (h *CompetitionPointsHandler) LiftStop(w http.ResponseWriter, r *http.Reque
 	utils.JSON(w, http.StatusOK, out)
 }
 
-// AdminCases handles GET /admin/competition-points/cases?status=open.
-func (h *CompetitionPointsHandler) AdminCases(w http.ResponseWriter, r *http.Request) {
-	items, err := h.cp.AdminCases(r.Context(), r.URL.Query().Get("status"))
-	h.list(w, items, err, "could not list cases")
-}
-
-// ResolveCase handles POST /admin/competition-points/cases/{caseID}/resolve {"resolution": "..."}.
-func (h *CompetitionPointsHandler) ResolveCase(w http.ResponseWriter, r *http.Request) {
-	admin, ok := adminActor(w, r)
-	if !ok {
-		return
-	}
-	id, ok := uuidParam(w, r, "caseID", "case not found")
-	if !ok {
-		return
-	}
-	var body struct {
-		Resolution string `json:"resolution"`
-	}
-	if !decodeBody(w, r, &body) {
-		return
-	}
-	if err := h.cp.ResolveCase(r.Context(), admin, id, body.Resolution); err != nil {
-		h.writeError(w, err, "could not resolve the case")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// Reconcile handles GET /admin/competition-points/reconciliation.
-func (h *CompetitionPointsHandler) Reconcile(w http.ResponseWriter, r *http.Request) {
-	out, err := h.cp.Reconcile(r.Context())
-	if err != nil {
-		h.writeError(w, err, "could not reconcile")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
 // RunNow handles POST /admin/competition-points/run: one pass of the job.
 func (h *CompetitionPointsHandler) RunNow(w http.ResponseWriter, r *http.Request) {
-	out, err := h.cp.RunOnce(r.Context())
-	if err != nil {
+	if err := h.cp.RunOnce(r.Context()); err != nil {
 		h.writeError(w, err, "could not run the job")
 		return
 	}
-	utils.JSON(w, http.StatusOK, out)
-}
-
-// AdminCustomer handles GET /admin/competition-points/customers/{customerID}.
-func (h *CompetitionPointsHandler) AdminCustomer(w http.ResponseWriter, r *http.Request) {
-	id, ok := uuidParam(w, r, "customerID", "customer not found")
-	if !ok {
-		return
-	}
-	out, err := h.cp.AdminCustomer(r.Context(), id)
-	if err != nil {
-		h.writeError(w, err, "could not read the customer")
-		return
-	}
-	utils.JSON(w, http.StatusOK, out)
+	utils.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }

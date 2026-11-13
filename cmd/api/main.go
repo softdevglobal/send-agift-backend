@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"       // context is used to manage the lifecycle of a request
-	"crypto/sha256" // sha256 derives the entry-quote signing key when none is set
-	"encoding/hex"  // hex encodes that derived key
-	"fmt"           // fmt is used to format and print text
-	"log"           // log is used to log messages to the console
-	"net/http"      // net/http is used to create and manage HTTP servers and clients
-	"strings"       // strings is used to read the points payment provider name
-	"time"          // time is used to measure and manage time-related operations
+	"context"  // context is used to manage the lifecycle of a request
+	"fmt"      // fmt is used to format and print text
+	"log"      // log is used to log messages to the console
+	"net/http" // net/http is used to create and manage HTTP servers and clients
+	"time"     // time is used to measure and manage time-related operations
 
 	"github.com/google/uuid"
 
@@ -57,7 +54,8 @@ func main() {
 	messaging := repository.NewMessagingRepository(pool)
 	gameRepo := repository.NewGameRepository(pool)
 	competitionRepo := repository.NewCompetitionRepository(pool)
-	pointsRepo := repository.NewPointsRepository(pool)
+	gameEntriesRepo := repository.NewGameEntriesRepository(pool)
+	adRepo := repository.NewAdRepository(pool)
 
 	// s3Service issues presigned URLs so clients upload straight to the bucket
 	s3Service, err := services.NewS3Service(cfg)
@@ -72,9 +70,6 @@ func main() {
 	countryCapabilityService := services.NewCountryCapabilityService(countryCapabilities, countries)
 	customerService := services.NewCustomerService(customers, countries, countryCapabilityService, products, cfg.JWTSecret, cfg.JWTExpiry) // create a new customer service
 	customerService.UseAdminReads(orders)
-	// Product reward points reach the buyer when the order is placed, or on
-	// delivery (POINTS_REWARD_TIMING=delivery).
-	orders.PayRewardsAtOrder(cfg.PointsRewardTiming != "delivery")
 	orderService := services.NewOrderService(orders, customers, countries, shipments)
 	sellerService := services.NewSellerService(sellers, countries, countryCapabilityService, cfg.JWTSecret, cfg.JWTExpiry)
 	sellerService.UseAdminReads(products, orders)
@@ -84,52 +79,29 @@ func main() {
 	productReviewService := services.NewProductReviewService(productReviews, orders, s3Service, cfg.S3Bucket)
 	messagingService := services.NewMessagingService(messaging, orders, customers, sellers, admins, s3Service, cfg.S3Bucket)
 	gameService := services.NewGameService(gameRepo)
-	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, countries, pointsRepo)
+	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, countries, gameEntriesRepo)
 	gameService.UseCompetitions(competitionService)
-	// Every practice play costs the points an admin set for that game
-	// (competition.games.play_cost_points), taken on the server when it starts.
-	gameService.ChargeForPlays(pointsRepo)
-	pointsService := services.NewPointsService(pointsRepo)
+	// Every play costs the game entries an admin set for that game
+	// (competition.games.entry_cost), taken on the server when it starts.
+	gameService.ChargeForPlays(gameEntriesRepo)
+	// Game entries and where games are switched on. Sign-up asks for the
+	// customer's state wherever their country has states.
+	gameEntriesService := services.NewGameEntriesService(gameEntriesRepo, cfg.StateChangeCooldownDays)
+	customerService.RequireStates(gameEntriesService.RequireStateForSignup)
 	// Prize reconciliation (Progressive Prize spec §9): every round whose
 	// money can still move is re-derived from its ledger on a schedule.
 	// With several API servers running, an advisory lock gives each round
 	// to only one of them.
 	go competitionService.RunReconciliation(context.Background(), 15*time.Minute,
 		database.Exclusive(pool, database.LockPrizeReconciliation))
-	// Points earning: delivered orders, refunds and sign-up bonuses, by each
-	// country's rule, plus product rewards and gift points riding on orders.
+	// Game entries housekeeping: entries on cancelled or refunded orders are
+	// undone, missed grants are made, and packages past their time end.
 	// Idempotent, so it simply runs on a timer.
-	go pointsService.RunEarningLoop(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockPointsEarning))
-	// Sellers buying points: the provider only starts a payment; points are
-	// credited when the webhook or an admin confirms it.
-	// One Stripe client for orders and for sellers buying points. Nil when
-	// STRIPE_SECRET_KEY is not set.
+	go gameEntriesService.RunSettleLoop(context.Background(), time.Minute,
+		database.Exclusive(pool, database.LockGameEntries))
+	// One Stripe client for orders, memberships and sellers' advertising
+	// packages. Nil when STRIPE_SECRET_KEY is not set.
 	stripeClient := services.NewStripeClient(cfg.StripeSecretKey)
-	var pointsProvider services.PointsPaymentProvider
-	if strings.EqualFold(strings.TrimSpace(cfg.PointsPaymentProvider), "stripe") {
-		// Sellers pay for points on Stripe's Checkout page.
-		pointsProvider, err = services.NewStripePointsProvider(stripeClient, cfg.AppWebURL)
-	} else {
-		pointsProvider, err = services.NewPointsPaymentProvider(cfg.PointsPaymentProvider)
-	}
-	if err != nil {
-		log.Fatalf("points payments: %v", err)
-	}
-	if pointsProvider.SelfConfirm() {
-		log.Printf("⚠️  POINTS_PAYMENT_PROVIDER=%s: seller points are credited without a confirmed payment. Connect a card provider before going live.", pointsProvider.Name())
-	}
-	sellerPointsService := services.NewSellerPointsService(pointsRepo, pointsProvider, cfg.PointsCentsPerPoint, cfg.PointsCurrency, cfg.PointsWebhookSecret)
-	sellerPointsService.HoldAfterEmailChange(sellers) // buying points waits a few days after an email change
-	// The point packages sellers pick from; the starting ones are created
-	// once, at the configured rate, when there are none.
-	if err := sellerPointsService.EnsureDefaultPackages(context.Background()); err != nil {
-		log.Printf("points: could not create the starting packages: %v", err)
-	}
-	// A Stripe points purchase is credited by its webhook; this re-checks
-	// any that are still pending, in case a webhook was missed.
-	go sellerPointsService.RunReconcileLoop(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockPointsPurchaseSync))
 	shippingService := services.NewShippingService(shipments, orders)
 
 	// Transactional email through ZeptoMail: rendered into an outbox when
@@ -143,6 +115,15 @@ func main() {
 		log.Printf("⚠️  ZEPTOMAIL_SYSTEM_TOKEN is not set: emails are queued but not sent.")
 	}
 	emailService := services.NewEmailService(repository.NewEmailRepository(pool), emailSender, cfg.AppWebURL)
+	// Sellers' advertising packages: bought through Stripe, activated only
+	// by a confirmed payment. The loop emails budget reminders and re-checks
+	// purchases whose webhook never arrived.
+	advertisingService := services.NewAdvertisingService(adRepo, sellers, stripeClient, emailService, cfg.AppWebURL, cfg.AdTestPayments)
+	if cfg.AdTestPayments && stripeClient == nil {
+		log.Printf("⚠️  ADS_TEST_PAYMENTS=true: sellers can confirm advertising payments by hand (sandbox only).")
+	}
+	go advertisingService.RunLoop(context.Background(), time.Minute,
+		database.Exclusive(pool, database.LockAdvertising))
 	go emailService.RunDeliveryLoop(context.Background(), 15*time.Second,
 		database.Exclusive(pool, database.LockEmailDelivery))
 	// New customers get a welcome email.
@@ -204,14 +185,16 @@ func main() {
 			fmt.Printf("💳 Stripe: seller payout accounts are created in %s (STRIPE_CONNECT_COUNTRY)\n", cfg.StripeConnectCountry)
 		}
 		// An order only counts once it is paid: sellers do not see it, and
-		// its confirmation email, recipient account and rewards wait.
+		// its confirmation email, recipient account and game entries wait.
 		orders.RequirePayment(true)
 		orderService.RequirePayment(true)
-		// Checkout Sessions that pay for a seller's points.
-		stripeService.OnPointsCheckout(sellerPointsService.HandleStripeCheckout)
+		// Checkout Sessions that pay for a seller's advertising package.
+		stripeService.OnAdCheckout(advertisingService.HandleStripeCheckout)
 		stripeService.OnOrderPaid(func(ctx context.Context, orderID uuid.UUID) {
-			if err := orders.PayRewardsForPaidOrder(ctx, orderID); err != nil {
-				log.Printf("order %s paid: rewards: %v", orderID, err)
+			// The payment is confirmed: the entries promised at checkout
+			// are granted now, and counted against the sellers' packages.
+			if err := orders.GrantEntriesForPaidOrder(ctx, orderID); err != nil {
+				log.Printf("order %s paid: game entries: %v", orderID, err)
 			}
 			giftRecipientService.OrderPlaced(ctx, orderID)
 		})
@@ -230,26 +213,16 @@ func main() {
 	} else {
 		log.Printf("⚠️  STRIPE_SECRET_KEY is not set: card payments and seller payouts are off.")
 	}
-	// Competition points (handover v4): memberships, gift points, the member
-	// bonus and reserve-then-capture entries. Nothing is offered until an
-	// approval record covers it; see docs/competition-points.md.
+	// Memberships. Nothing is sold until an approval record covers it.
 	var membershipStripe *services.StripeClient
 	if stripeService.Enabled() {
 		membershipStripe = stripeClient
-	}
-	quoteSecret := cfg.CPQuoteSecret
-	if quoteSecret == "" {
-		sum := sha256.Sum256([]byte("cp-quote:" + cfg.JWTSecret))
-		quoteSecret = hex.EncodeToString(sum[:])
 	}
 	competitionPointsRepo := repository.NewCompetitionPointsRepository(pool)
 	competitionPointsService := services.NewCompetitionPointsService(
 		competitionPointsRepo, competitionService, membershipStripe,
 		services.CompetitionPointsConfig{
 			WebURL:         cfg.AppWebURL,
-			QuoteSecret:    quoteSecret,
-			HoldTTL:        time.Duration(cfg.CPEntryHoldMinutes) * time.Minute,
-			RestoreWindow:  time.Duration(cfg.CPRestoreWindowHours) * time.Hour,
 			TestPayments:   cfg.MembershipTestPayments,
 			PlatformFeeBPS: cfg.StripeFeeBPS,
 		})
@@ -258,7 +231,7 @@ func main() {
 	orderService.UseMemberDiscounts(competitionPointsRepo.MemberDiscount, cfg.StripeFeeBPS)
 	stripeService.OnMembershipEvent(competitionPointsService.HandleStripeEvent)
 	go competitionPointsService.RunLoop(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockCompetitionPoints))
+		database.Exclusive(pool, database.LockMembership))
 	if cfg.MembershipTestPayments && !stripeService.Enabled() {
 		log.Printf("⚠️  MEMBERSHIP_TEST_PAYMENTS=true: membership payments can be confirmed by hand (sandbox only).")
 	}
@@ -271,6 +244,7 @@ func main() {
 	socialAuthService := services.NewSocialAuthService(customers, countries, countryCapabilityService, emailService,
 		cfg.GoogleClientIDs, cfg.FacebookAppID, cfg.FacebookAppSecret, cfg.JWTSecret, cfg.JWTExpiry).
 		EnableApple(cfg.AppleClientIDs)
+	socialAuthService.RequireStates(gameEntriesService.RequireStateForSignup)
 	socialAuthHandler := handlers.NewSocialAuthHandler(socialAuthService)
 
 	authHandler := handlers.NewAuthHandler(authService)          // create a new auth handler
@@ -290,8 +264,7 @@ func main() {
 	messagingHandler := handlers.NewMessagingHandler(messagingService)
 	gameHandler := handlers.NewGameHandler(gameService)
 	competitionHandler := handlers.NewCompetitionHandler(competitionService)
-	pointsHandler := handlers.NewPointsHandler(pointsService)
-	sellerPointsHandler := handlers.NewSellerPointsHandler(sellerPointsService)
+	gameEntriesHandler := handlers.NewGameEntriesHandler(gameEntriesService, advertisingService)
 	mediaHandler := handlers.NewMediaHandler(s3Service) // create a new media handler
 
 	// placesService proxies Google Places so the API key stays on the server
@@ -330,7 +303,7 @@ func main() {
 		fmt.Println("🎁 Free gift program: on")
 	}
 
-	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, pointsHandler, sellerPointsHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, freeGiftHandler, competitionPointsHandler, cfg.JWTSecret)
+	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, gameEntriesHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, freeGiftHandler, competitionPointsHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name

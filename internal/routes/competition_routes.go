@@ -37,7 +37,7 @@ import (
 // voids and refunds, finalising, draws, winners, claims, settlement and
 // points (spec §2, AC-13). Every one is audited, and the ones that move money
 // also need a fresh password confirmation (X-Reauth-Token).
-func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *handlers.PointsHandler, jwtSecret string) {
+func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, jwtSecret string) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.OptionalCustomerOrGuest(jwtSecret, false))
 		r.Get("/competitions", c.List)
@@ -49,8 +49,6 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))
 		r.Use(middleware.RequireRole("customer"))
-		r.Get("/customers/me/points", p.MyWallet)
-		r.Get("/customers/me/points/earning", p.MyEarningRule)
 		r.Post("/competitions/{id}/claim", c.ClaimPrize)
 
 		r.Group(func(r chi.Router) {
@@ -88,9 +86,6 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 		r.Post("/admin/competitions/{id}/freeze", c.Freeze())
 		r.Get("/admin/competitions/{id}/winners", c.Winners)
 		r.Get("/admin/competitions/{id}/draw", c.Draw)
-		r.Get("/admin/points/earning-rules", p.EarningRules)
-		r.Get("/admin/customers", p.SearchCustomers)
-		r.Get("/admin/customers/{customerID}/points", p.CustomerWallet)
 	})
 
 	// Prize economics and payouts.
@@ -113,8 +108,6 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 		r.Post("/admin/competitions/{id}/claims/{claimID}/verify", c.AdvanceClaim("verified"))
 		r.Post("/admin/competitions/{id}/claims/{claimID}/fulfil", c.AdvanceClaim("fulfilled"))
 
-		r.Post("/admin/points/earning-runs", p.RunEarning)
-
 		// Anything that moves money or points, or picks winners by chance,
 		// also needs the admin's password confirmed in the last few minutes
 		// (POST /admin/reauth).
@@ -125,8 +118,6 @@ func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, p *
 			r.Post("/admin/competitions/{id}/plays/{playID}/void", c.VoidPlay)
 			r.Post("/admin/competitions/{id}/settle", c.Settle)
 			r.Post("/admin/competitions/{id}/draw", c.RunDraw())
-			r.Post("/admin/customers/{customerID}/points/adjustments", p.Adjust)
-			r.Put("/admin/points/earning-rules/{countryID}", p.SetEarningRule)
 		})
 	})
 }

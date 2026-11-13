@@ -32,6 +32,7 @@ type customerRegisterRequest struct {
 	Addresses    []services.AddressInput `json:"addresses"`
 	ImageURL     *string                 `json:"image_url"`
 	SignupToken  string                  `json:"signup_token"`
+	StateID      string                  `json:"state_id"`
 }
 
 type customerUpdateRequest struct {
@@ -53,6 +54,7 @@ func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	details, err := h.customers.Register(r.Context(), services.CustomerRegisterInput{
 		CountryID:    req.CountryID,
+		StateID:      req.StateID,
 		Email:        req.Email,
 		Password:     req.Password,
 		Phone:        req.Phone,
@@ -338,6 +340,8 @@ func (h *CustomerHandler) writeCustomerError(w http.ResponseWriter, err error, f
 		utils.Error(w, http.StatusBadRequest, "email and phone number are required, password must be at least 8 characters")
 	case errors.Is(err, services.ErrInvalidCountry):
 		utils.Error(w, http.StatusBadRequest, "invalid country_id")
+	case errors.Is(err, services.ErrInvalidState), errors.Is(err, services.ErrStateNotFound):
+		utils.JSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "STATE_REQUIRED"})
 	case errors.Is(err, services.ErrCustomerRegistrationDisabled):
 		utils.Error(w, http.StatusForbidden, "customer registration is disabled for this country")
 	case errors.Is(err, services.ErrInvalidAddress):

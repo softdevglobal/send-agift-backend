@@ -29,12 +29,6 @@ type Order struct {
 	Currency           string     `json:"currency"`
 	GiftMessage        *string    `json:"gift_message,omitempty"`
 	MediaGreetingID    *uuid.UUID `json:"media_greeting_id,omitempty"`
-	// Points the sender attached to the gift, and where they are:
-	// none | held (taken from the sender, not yet delivered) | delivered
-	// (reached the recipient's account) | returned (back to the sender) |
-	// reversed (taken back after a refund).
-	GiftPoints       int64  `json:"gift_points"`
-	GiftPointsStatus string `json:"gift_points_status"`
 	// paid | free_gift. A free gift has TotalAmount 0: the seller funds
 	// FreeGiftCost (item plus delivery) from their free gift budget.
 	OrderKind    string `json:"order_kind"`
@@ -82,15 +76,15 @@ type OrderItem struct {
 	// is never taken off TotalAmount: the seller is paid on the list price.
 	MemberDiscountAmount int    `json:"-"`
 	FulfilmentStatus     string `json:"fulfilment_status"`
-	// The product's reward points as sold, and where they are:
-	// none | reserved (held from the seller until delivery) | awarded |
-	// released (back to the seller, line cancelled) | reversed (taken back
-	// after a refund).
-	RewardPointsPerUnit int       `json:"reward_points_per_unit"`
-	RewardPoints        int64     `json:"reward_points"`
-	RewardStatus        string    `json:"reward_status"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	// The game entries this line earns, and where they are: none |
+	// reserved (promised, waiting for the payment to be confirmed) |
+	// granted | released (the order was never paid) | reversed (taken back
+	// after a refund or cancellation).
+	GameEntries   int        `json:"game_entries"`
+	EntriesStatus string     `json:"entries_status"`
+	PromotionID   *uuid.UUID `json:"-"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 	// Present once the line has actually been shipped.
 	Tracking *OrderItemTracking `json:"tracking,omitempty"`
 }
@@ -153,7 +147,6 @@ type ReceivedGift struct {
 	OrderNumber string             `json:"order_number"`
 	SenderName  string             `json:"sender_name"`
 	GiftMessage *string            `json:"gift_message,omitempty"`
-	GiftPoints  int64              `json:"gift_points"`
 	DeliveredAt time.Time          `json:"delivered_at"`
 	Items       []ReceivedGiftItem `json:"items"`
 }

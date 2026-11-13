@@ -44,7 +44,7 @@ type ReconciliationCheck struct {
 }
 
 // Reconciliation recomputes a round's prize from its ledger and checks it
-// against the cached prize, the plays and the points charged (AC-12).
+// against the cached prize, the plays and the game entries charged (AC-12).
 type Reconciliation struct {
 	CompetitionID     uuid.UUID             `json:"competition_id"`
 	Status            string                `json:"status"` // ok or discrepancy
@@ -68,7 +68,7 @@ type AdminPlay struct {
 	DisplayName         *string    `json:"display_name,omitempty"`
 	AttemptNumber       int        `json:"attempt_number"`
 	Status              string     `json:"status"`
-	PointsSpent         int        `json:"points_spent"`
+	EntriesSpent        int        `json:"entries_spent"`
 	PrizeIncrementCents int64      `json:"prize_increment_cents"`
 	PrizeAfterCents     *int64     `json:"prize_after_cents,omitempty"`
 	Score               *int64     `json:"score,omitempty"`
@@ -108,9 +108,9 @@ type CompetitionAnalytics struct {
 	UniquePlayers        int64            `json:"unique_players"`
 	RepeatPlayers        int64            `json:"repeat_players"`
 	RepeatPlayRate       float64          `json:"repeat_play_rate"`
-	PointsSpent          int64            `json:"points_spent"`
-	PointsRefunded       int64            `json:"points_refunded"`
-	NetPointsConsumed    int64            `json:"net_points_consumed"`
+	EntriesSpent         int64            `json:"entries_spent"`
+	EntriesRefunded      int64            `json:"entries_refunded"`
+	NetEntriesConsumed   int64            `json:"net_entries_consumed"`
 	IncrementsCents      int64            `json:"increments_cents"`
 	AdjustmentsCents     int64            `json:"adjustments_cents"`
 	ReversalsCents       int64            `json:"reversals_cents"`

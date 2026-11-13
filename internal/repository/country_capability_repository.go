@@ -28,7 +28,7 @@ const countryCapabilityColumns = `
 	id, country_id,
 	customer_registration_enabled, seller_registration_enabled, seller_payouts_enabled,
 	domestic_delivery_enabled, international_delivery_enabled,
-	memberships_enabled, points_earning_enabled, points_usage_enabled,
+	memberships_enabled, entries_earning_enabled, entries_usage_enabled,
 	skill_competitions_enabled, app_store_available, progressive_prizes_enabled, chance_games_enabled,
 	rule_version, created_at, updated_at`
 
@@ -38,7 +38,7 @@ func scanCountryCapability(row pgx.Row) (*models.CountryCapability, error) {
 		&c.ID, &c.CountryID,
 		&c.CustomerRegistrationEnabled, &c.SellerRegistrationEnabled, &c.SellerPayoutsEnabled,
 		&c.DomesticDeliveryEnabled, &c.InternationalDeliveryEnabled,
-		&c.MembershipsEnabled, &c.PointsEarningEnabled, &c.PointsUsageEnabled,
+		&c.MembershipsEnabled, &c.EntriesEarningEnabled, &c.EntriesUsageEnabled,
 		&c.SkillCompetitionsEnabled, &c.AppStoreAvailable, &c.ProgressivePrizesEnabled, &c.ChanceGamesEnabled,
 		&c.RuleVersion, &c.CreatedAt, &c.UpdatedAt,
 	)
@@ -76,7 +76,7 @@ func (r *CountryCapabilityRepository) ListWithCountries(ctx context.Context) ([]
 			cc.id, cc.country_id,
 			cc.customer_registration_enabled, cc.seller_registration_enabled, cc.seller_payouts_enabled,
 			cc.domestic_delivery_enabled, cc.international_delivery_enabled,
-			cc.memberships_enabled, cc.points_earning_enabled, cc.points_usage_enabled,
+			cc.memberships_enabled, cc.entries_earning_enabled, cc.entries_usage_enabled,
 			cc.skill_competitions_enabled, cc.app_store_available, cc.progressive_prizes_enabled, cc.chance_games_enabled,
 			cc.rule_version, cc.created_at, cc.updated_at
 		from core.country_capabilities cc
@@ -98,7 +98,7 @@ func (r *CountryCapabilityRepository) ListWithCountries(ctx context.Context) ([]
 			&item.Capability.CustomerRegistrationEnabled, &item.Capability.SellerRegistrationEnabled,
 			&item.Capability.SellerPayoutsEnabled, &item.Capability.DomesticDeliveryEnabled,
 			&item.Capability.InternationalDeliveryEnabled, &item.Capability.MembershipsEnabled,
-			&item.Capability.PointsEarningEnabled, &item.Capability.PointsUsageEnabled,
+			&item.Capability.EntriesEarningEnabled, &item.Capability.EntriesUsageEnabled,
 			&item.Capability.SkillCompetitionsEnabled, &item.Capability.AppStoreAvailable,
 			&item.Capability.ProgressivePrizesEnabled, &item.Capability.ChanceGamesEnabled,
 			&item.Capability.RuleVersion, &item.Capability.CreatedAt, &item.Capability.UpdatedAt,
@@ -121,7 +121,7 @@ func (r *CountryCapabilityRepository) GetDetailsByCountryID(ctx context.Context,
 			cc.id, cc.country_id,
 			cc.customer_registration_enabled, cc.seller_registration_enabled, cc.seller_payouts_enabled,
 			cc.domestic_delivery_enabled, cc.international_delivery_enabled,
-			cc.memberships_enabled, cc.points_earning_enabled, cc.points_usage_enabled,
+			cc.memberships_enabled, cc.entries_earning_enabled, cc.entries_usage_enabled,
 			cc.skill_competitions_enabled, cc.app_store_available, cc.progressive_prizes_enabled, cc.chance_games_enabled,
 			cc.rule_version, cc.created_at, cc.updated_at
 		from core.country_capabilities cc
@@ -137,7 +137,7 @@ func (r *CountryCapabilityRepository) GetDetailsByCountryID(ctx context.Context,
 		&item.Capability.CustomerRegistrationEnabled, &item.Capability.SellerRegistrationEnabled,
 		&item.Capability.SellerPayoutsEnabled, &item.Capability.DomesticDeliveryEnabled,
 		&item.Capability.InternationalDeliveryEnabled, &item.Capability.MembershipsEnabled,
-		&item.Capability.PointsEarningEnabled, &item.Capability.PointsUsageEnabled,
+		&item.Capability.EntriesEarningEnabled, &item.Capability.EntriesUsageEnabled,
 		&item.Capability.SkillCompetitionsEnabled, &item.Capability.AppStoreAvailable,
 		&item.Capability.ProgressivePrizesEnabled, &item.Capability.ChanceGamesEnabled,
 		&item.Capability.RuleVersion, &item.Capability.CreatedAt, &item.Capability.UpdatedAt,
@@ -178,7 +178,7 @@ func (r *CountryCapabilityRepository) Create(ctx context.Context, c *models.Coun
 			country_id,
 			customer_registration_enabled, seller_registration_enabled, seller_payouts_enabled,
 			domestic_delivery_enabled, international_delivery_enabled,
-			memberships_enabled, points_earning_enabled, points_usage_enabled,
+			memberships_enabled, entries_earning_enabled, entries_usage_enabled,
 			skill_competitions_enabled, app_store_available,
 			rule_version, progressive_prizes_enabled, chance_games_enabled
 		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -186,7 +186,7 @@ func (r *CountryCapabilityRepository) Create(ctx context.Context, c *models.Coun
 		c.CountryID,
 		c.CustomerRegistrationEnabled, c.SellerRegistrationEnabled, c.SellerPayoutsEnabled,
 		c.DomesticDeliveryEnabled, c.InternationalDeliveryEnabled,
-		c.MembershipsEnabled, c.PointsEarningEnabled, c.PointsUsageEnabled,
+		c.MembershipsEnabled, c.EntriesEarningEnabled, c.EntriesUsageEnabled,
 		c.SkillCompetitionsEnabled, c.AppStoreAvailable,
 		c.RuleVersion, c.ProgressivePrizesEnabled, c.ChanceGamesEnabled,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
@@ -202,8 +202,8 @@ func (r *CountryCapabilityRepository) Update(ctx context.Context, c *models.Coun
 		    domestic_delivery_enabled = $5,
 		    international_delivery_enabled = $6,
 		    memberships_enabled = $7,
-		    points_earning_enabled = $8,
-		    points_usage_enabled = $9,
+		    entries_earning_enabled = $8,
+		    entries_usage_enabled = $9,
 		    skill_competitions_enabled = $10,
 		    app_store_available = $11,
 		    rule_version = $12,
@@ -215,7 +215,7 @@ func (r *CountryCapabilityRepository) Update(ctx context.Context, c *models.Coun
 		c.ID,
 		c.CustomerRegistrationEnabled, c.SellerRegistrationEnabled, c.SellerPayoutsEnabled,
 		c.DomesticDeliveryEnabled, c.InternationalDeliveryEnabled,
-		c.MembershipsEnabled, c.PointsEarningEnabled, c.PointsUsageEnabled,
+		c.MembershipsEnabled, c.EntriesEarningEnabled, c.EntriesUsageEnabled,
 		c.SkillCompetitionsEnabled, c.AppStoreAvailable,
 		c.RuleVersion, c.ProgressivePrizesEnabled, c.ChanceGamesEnabled,
 	).Scan(&c.UpdatedAt)

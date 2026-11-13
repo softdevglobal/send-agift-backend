@@ -40,13 +40,27 @@ func (r *CustomerRepository) Create(ctx context.Context, c *models.Customer) err
 	err := r.db.QueryRow(ctx, `
 		insert into customer.customers (
 			country_id, email, phone, password_hash, display_name, customer_type, date_of_birth, status, image_url,
-			password_change_required
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			password_change_required, state_id, state_set_at, state_source
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+		          case when $11::uuid is null then null else now() end,
+		          case when $11::uuid is null then null else 'declared' end)
 		returning id, created_at, updated_at, image_url`,
 		c.CountryID, c.Email, c.Phone, c.PasswordHash, c.DisplayName, c.CustomerType, c.DateOfBirth, c.Status, c.ImageURL,
-		c.PasswordChangeRequired,
+		c.PasswordChangeRequired, c.StateID,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt, &c.ImageURL)
 	return mapCustomerWriteError(err)
+}
+
+// DropStateOutsideCountry clears a customer's state when it no longer
+// belongs to their country (they changed country), so they are asked again.
+func (r *CustomerRepository) DropStateOutsideCountry(ctx context.Context, customerID string) error {
+	_, err := r.db.Exec(ctx, `
+		update customer.customers c
+		set state_id = null, state_set_at = null, state_source = null, updated_at = now()
+		where c.id = $1 and c.state_id is not null
+		  and not exists (select 1 from core.states s where s.id = c.state_id and s.country_id = c.country_id)`,
+		customerID)
+	return err
 }
 
 func (r *CustomerRepository) GetByEmail(ctx context.Context, email string) (*models.Customer, error) {
@@ -409,7 +423,7 @@ func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID stri
 			sg.id, sg.customer_id, sg.product_id, sg.created_at,
 			p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 			p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-			p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
+			`+productSponsoredSQL+`, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
 			p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
 			p.parcel_weight, p.parcel_mass_unit
 		from customer.saved_gifts sg
@@ -433,7 +447,7 @@ func (r *CustomerRepository) ListSavedGifts(ctx context.Context, customerID stri
 			&item.ID, &item.CustomerID, &item.ProductID, &item.CreatedAt,
 			&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
 			&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-			&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
+			&p.Sponsored, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
 			&length, &width, &height, &distanceUnit, &weight, &massUnit,
 		); err != nil {
 			return nil, err
@@ -782,7 +796,7 @@ func (r *CustomerRepository) EmailReserved(ctx context.Context, email string, ex
 	return emailReserved(ctx, r.db, email, except)
 }
 
-// RedemptionLockedUntil is when prize claims and gift points open up again
+// RedemptionLockedUntil is when prize claims open up again
 // after an email change, or nil when nothing is locked.
 func (r *CustomerRepository) RedemptionLockedUntil(ctx context.Context, id uuid.UUID) (*time.Time, error) {
 	var t *time.Time

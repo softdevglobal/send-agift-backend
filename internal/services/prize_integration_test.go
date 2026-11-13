@@ -36,10 +36,32 @@ type prizeFixture struct {
 	ctx      context.Context
 	pool     *pgxpool.Pool
 	svc      *CompetitionService
-	points   *PointsService
+	points   *GameEntriesService
 	admin    AdminActor
 	country  uuid.UUID
 	currency string
+}
+
+// openGamesFor switches the games programme on, and every game on for a
+// country that has no states, so a test customer there can earn and play.
+func openGamesFor(t *testing.T, pool *pgxpool.Pool, country uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `update entries.program set enabled = true, stopped_at = null, stopped_reason = null`); err != nil {
+		t.Fatalf("program: %v", err)
+	}
+	var id uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		insert into entries.jurisdictions
+			(country_id, earning_enabled, play_enabled, chance_games_enabled, official_rules, min_age)
+		values ($1, true, true, true, 'Test rules', 18) returning id`, country).Scan(&id); err != nil {
+		t.Fatalf("jurisdiction: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		insert into entries.jurisdiction_games (jurisdiction_id, game_id, enabled)
+		select $1, id, true from competition.games`, id); err != nil {
+		t.Fatalf("jurisdiction games: %v", err)
+	}
 }
 
 func newPrizeFixture(t *testing.T) *prizeFixture {
@@ -68,18 +90,19 @@ func newPrizeFixture(t *testing.T) *prizeFixture {
 	}
 	if _, err := pool.Exec(ctx, `
 		insert into core.country_capabilities
-			(country_id, skill_competitions_enabled, progressive_prizes_enabled, points_usage_enabled,
-			 points_earning_enabled, chance_games_enabled)
+			(country_id, skill_competitions_enabled, progressive_prizes_enabled, entries_usage_enabled,
+			 entries_earning_enabled, chance_games_enabled)
 		values ($1, true, true, true, true, true)`, f.country); err != nil {
 		t.Fatalf("capabilities: %v", err)
 	}
 
 	competitions := repository.NewCompetitionRepository(pool)
-	pointsRepo := repository.NewPointsRepository(pool)
+	pointsRepo := repository.NewGameEntriesRepository(pool)
+	openGamesFor(t, pool, f.country)
 	f.svc = NewCompetitionService(competitions, repository.NewGameRepository(pool),
 		repository.NewCustomerRepository(pool), repository.NewCountryCapabilityRepository(pool),
 		repository.NewCountryRepository(pool), pointsRepo)
-	f.points = NewPointsService(pointsRepo)
+	f.points = NewGameEntriesService(pointsRepo, 0)
 	return f
 }
 
@@ -95,7 +118,7 @@ func (f *prizeFixture) customer(points int64) uuid.UUID {
 		f.t.Fatalf("customer: %v", err)
 	}
 	if points > 0 {
-		if _, err := f.points.AdjustPoints(f.ctx, f.admin, id, AdjustPointsInput{
+		if _, err := f.points.Adjust(f.ctx, f.admin, id, AdjustEntriesInput{
 			Amount: points, Reason: "test float", IdempotencyKey: uuid.NewString(),
 		}); err != nil {
 			f.t.Fatalf("grant points: %v", err)
@@ -187,15 +210,15 @@ func (f *prizeFixture) gameCost(slug string, points int) {
 	f.t.Helper()
 	var before int
 	if err := f.pool.QueryRow(f.ctx, `
-		update competition.games g set play_cost_points = $2
+		update competition.games g set entry_cost = $2
 		from competition.games old
 		where g.slug = $1 and old.id = g.id
-		returning old.play_cost_points`, slug, points).Scan(&before); err != nil {
+		returning old.entry_cost`, slug, points).Scan(&before); err != nil {
 		f.t.Fatalf("game cost: %v", err)
 	}
 	f.t.Cleanup(func() {
 		_, _ = f.pool.Exec(context.Background(),
-			`update competition.games set play_cost_points = $2 where slug = $1`, slug, before)
+			`update competition.games set entry_cost = $2 where slug = $1`, slug, before)
 	})
 }
 
@@ -214,7 +237,7 @@ func (f *prizeFixture) round(id uuid.UUID) *models.Competition {
 
 func (f *prizeFixture) balance(customer uuid.UUID) int64 {
 	f.t.Helper()
-	b, err := f.svc.points.Balance(f.ctx, customer)
+	b, err := f.svc.entries.Balance(f.ctx, customer)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -275,7 +298,7 @@ func TestPrizeSeedAndSinglePlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.PointsSpent != 10 || view.WalletPointsRemaining != 90 || view.Status != "COMPLETED" {
+	if view.EntriesSpent != 10 || view.EntriesRemaining != 90 || view.Status != "COMPLETED" {
 		t.Fatalf("receipt %+v", view)
 	}
 	if view.PrizeBeforeCents != 10000 || view.PrizeIncrementCents != 100 || view.PrizeAfterCents != 10100 {
@@ -354,7 +377,7 @@ func TestPrizeConcurrentPlays(t *testing.T) {
 	if got.EligiblePlayCount != 100 || got.CurrentPrizeCents != 10000+100*100 || got.UniquePlayerCount != 25 {
 		t.Fatalf("after 100 plays: plays %d prize %d players %d", got.EligiblePlayCount, got.CurrentPrizeCents, got.UniquePlayerCount)
 	}
-	if n := f.count(`select count(*) from points.points_ledger where competition_id = $1 and entry_type = 'play_debit'`, c.ID); n != 100 {
+	if n := f.count(`select count(*) from entries.ledger where competition_id = $1 and entry_type = 'play_debit'`, c.ID); n != 100 {
 		t.Fatalf("want 100 charges, got %d", n)
 	}
 	if n := f.count(`select count(*) from competition.prize_ledger where competition_id = $1 and entry_type = 'play_increment'`, c.ID); n != 100 {
@@ -422,8 +445,8 @@ func TestPrizeRefusalsChargeNothing(t *testing.T) {
 	c := f.liveRound(roundOpts{start: 10000, increment: 100, cost: 10, maxPlays: 2, daily: intp(1)})
 
 	broke := f.customer(5)
-	r := wantRefusal(t, func() error { _, err := f.play(c, broke, "a"); return err }(), PlayInsufficientPoints)
-	if r.Details["points_required"] != int64(10) || r.Details["points_balance"] != int64(5) {
+	r := wantRefusal(t, func() error { _, err := f.play(c, broke, "a"); return err }(), PlayInsufficientEntries)
+	if r.Details["entries_required"] != int64(10) || r.Details["entries_balance"] != int64(5) {
 		t.Fatalf("details %+v", r.Details)
 	}
 
@@ -570,7 +593,7 @@ func TestPrizeCancelRefundsEverything(t *testing.T) {
 	if got.CurrentPrizeCents != 0 || got.FinalPrizeCents == nil || *got.FinalPrizeCents != 10300 {
 		t.Fatalf("prize after cancel %d, final %v", got.CurrentPrizeCents, got.FinalPrizeCents)
 	}
-	if n := f.count(`select count(*) from points.points_ledger where competition_id = $1 and entry_type = 'play_refund'`, c.ID); n != 3 {
+	if n := f.count(`select count(*) from entries.ledger where competition_id = $1 and entry_type = 'play_refund'`, c.ID); n != 3 {
 		t.Fatalf("refunds %d", n)
 	}
 }
@@ -652,31 +675,31 @@ func TestPrizeSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.ValidPlays != 3 || a.SettledCents != 10301 || a.PrizeGrowthCents != 300 || a.PointsSpent != 3 {
+	if a.ValidPlays != 3 || a.SettledCents != 10301 || a.PrizeGrowthCents != 300 || a.EntriesSpent != 3 {
 		t.Fatalf("analytics %+v", a)
 	}
 }
 
-// Points: grants need a reason and a key, and a retried grant is refused
-// rather than paid twice.
+// Game entries: grants need a reason and a key, and a retried grant is
+// applied once, never twice.
 func TestPrizePointsAdjustments(t *testing.T) {
 	f := newPrizeFixture(t)
 	p := f.customer(0)
 	key := uuid.NewString()
-	if _, err := f.points.AdjustPoints(f.ctx, f.admin, p, AdjustPointsInput{Amount: 50, Reason: "welcome", IdempotencyKey: key}); err != nil {
+	if _, err := f.points.Adjust(f.ctx, f.admin, p, AdjustEntriesInput{Amount: 50, Reason: "welcome", IdempotencyKey: key}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.points.AdjustPoints(f.ctx, f.admin, p, AdjustPointsInput{Amount: 50, Reason: "welcome", IdempotencyKey: key}); !errors.Is(err, ErrConfigConflict) {
-		t.Fatalf("duplicate grant: %v", err)
+	if w, err := f.points.Adjust(f.ctx, f.admin, p, AdjustEntriesInput{Amount: 50, Reason: "welcome", IdempotencyKey: key}); err != nil || w.Balance != 50 {
+		t.Fatalf("a repeated grant was not applied exactly once: %v", err)
 	}
-	if _, err := f.points.AdjustPoints(f.ctx, f.admin, p, AdjustPointsInput{Amount: -60, Reason: "too much", IdempotencyKey: uuid.NewString()}); !errors.Is(err, ErrInvalidPoints) {
+	if _, err := f.points.Adjust(f.ctx, f.admin, p, AdjustEntriesInput{Amount: -60, Reason: "too much", IdempotencyKey: uuid.NewString()}); !errors.Is(err, ErrInvalidEntries) {
 		t.Fatalf("overdraw: %v", err)
 	}
 	w, err := f.points.CustomerWallet(f.ctx, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.Balance != 50 || len(w.Entries) != 1 {
+	if w.Balance != 50 || len(w.History) != 1 {
 		t.Fatalf("wallet %+v", w)
 	}
 }
@@ -824,57 +847,6 @@ func TestPrizeChanceGate(t *testing.T) {
 	}
 }
 
-// Points earning: once per delivered order, taken back on refund, sign-up
-// bonus only for customers who join after it was switched on.
-func TestPointsEarning(t *testing.T) {
-	f := newPrizeFixture(t)
-	early := f.customer(0)
-	if _, err := f.points.SetEarningRule(f.ctx, f.admin, f.country, EarningRuleInput{
-		Enabled: true, PointsPerUnit: 2, SignupBonus: 25,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	late := f.customer(0)
-
-	var orderID uuid.UUID
-	if err := f.pool.QueryRow(f.ctx, `
-		insert into marketplace.orders
-			(order_number, customer_id, country_id, delivery_date, status, subtotal_amount, total_amount, currency)
-		values ($1, $2, $3, current_date, 'delivered', 12345, 12345, 'USD') returning id`,
-		"T-"+uuid.NewString()[:8], late, f.country).Scan(&orderID); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		if _, err := f.points.RunEarning(f.ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// $123.45 at 2 points per $1 is 246 points, plus the 25-point welcome.
-	if b := f.balance(late); b != 246+25 {
-		t.Fatalf("late customer balance %d, want 271", b)
-	}
-	if b := f.balance(early); b != 0 {
-		t.Fatalf("customers from before the bonus get none, got %d", b)
-	}
-
-	if _, err := f.pool.Exec(f.ctx, `update marketplace.orders set status = 'refunded' where id = $1`, orderID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.points.RunEarning(f.ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.points.RunEarning(f.ctx); err != nil {
-		t.Fatal(err)
-	}
-	if b := f.balance(late); b != 25 {
-		t.Fatalf("after refund balance %d, want 25", b)
-	}
-	w, _ := f.points.CustomerWallet(f.ctx, late)
-	if len(w.Entries) != 3 {
-		t.Fatalf("want reward, reversal and bonus entries, got %d", len(w.Entries))
-	}
-}
-
 // A quiz round: the device gets the questions without their answers, and
 // the server scores the answers from its own copy. At submission and again
 // at finalisation.
@@ -1005,6 +977,7 @@ func TestCompetitionCountries(t *testing.T) {
 		values ($1, true)`, other); err != nil {
 		t.Fatal(err)
 	}
+	openGamesFor(t, f.pool, other)
 	c, err := f.svc.load(f.ctx, view.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1278,8 +1251,9 @@ func TestPushAfterSignIn(t *testing.T) {
 	}
 }
 
-// Entering needs no date of birth, age or identity check.
-func TestNoAgeCheckToPlay(t *testing.T) {
+// Entering needs a date of birth that meets the minimum age of where the
+// customer lives: without one, the games gate says no.
+func TestAgeCheckToPlay(t *testing.T) {
 	f := newPrizeFixture(t)
 	c := f.liveRound(roundOpts{start: 100})
 	var id uuid.UUID
@@ -1293,8 +1267,14 @@ func TestNoAgeCheckToPlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	ok, reason, err := f.svc.eligibility(f.ctx, c, cust, capabilityCache{})
-	if err != nil || !ok {
-		t.Fatalf("an unverified player should be able to enter: %v %q", err, reason)
+	if err != nil || ok {
+		t.Fatalf("a player with no date of birth was let in: %v %q", err, reason)
+	}
+	if _, err := f.pool.Exec(f.ctx, `update customer.customers set date_of_birth = '1990-01-01' where id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason, err = f.svc.eligibility(f.ctx, c, cust, capabilityCache{}); err != nil || !ok {
+		t.Fatalf("an adult should be able to enter: %v %q", err, reason)
 	}
 }
 

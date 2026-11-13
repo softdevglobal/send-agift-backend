@@ -30,17 +30,6 @@ type Config struct {
 	S3Bucket       string
 	GoogleMapsKey  string
 
-	// Seller points purchases. PointsCentsPerPoint is what one point costs in
-	// minor units of PointsCurrency (10 = $0.10 a point). The provider is
-	// "instant" (the default until Stripe is connected: points are credited
-	// the moment they are bought), "manual" (an admin confirms each payment)
-	// or "test" (sellers approve their own purchase. Development only). The webhook secret
-	// signs provider confirmations; without it the webhook is refused.
-	PointsCentsPerPoint   int
-	PointsCurrency        string
-	PointsPaymentProvider string
-	PointsWebhookSecret   string
-
 	// Stripe. Customers pay the platform account; delivered order lines are
 	// then transferred to each seller's Connect account. The two webhook
 	// secrets belong to two endpoints (events from your account, and events
@@ -59,10 +48,6 @@ type Config struct {
 	// one), so for testing a supported one such as AU can be used instead of
 	// the seller's own. Leave empty to use the seller's country.
 	StripeConnectCountry string
-	// PointsRewardTiming is when a product's reward points reach the buyer:
-	// "order" (as soon as the order is placed. The default while there is
-	// no payment step) or "delivery".
-	PointsRewardTiming string
 
 	// Firebase service-account credentials for push notifications: a path
 	// to the JSON key file, or the JSON itself (for secret managers). With
@@ -113,18 +98,14 @@ type Config struct {
 	FreeGiftIdentitySecret string
 	FreeGiftTermsVersion   string
 
-	// Competition points (handover v4). Nothing is offered without an
-	// approval record, so there is no on/off flag here: these only tune it.
-	// CPQuoteSecret signs entry quotes (falls back to a key derived from
-	// JWT_SECRET). CPEntryHoldMinutes is how long a reserved entry waits to
-	// start. CPRestoreWindowHours keeps points released from a lot that
-	// expired while held usable for that long; it is a release decision,
-	// with a sandbox default of 24. MembershipTestPayments lets a sandbox
-	// without Stripe confirm membership payments by hand.
-	CPQuoteSecret          string
-	CPEntryHoldMinutes     int
-	CPRestoreWindowHours   int
+	// MembershipTestPayments lets a sandbox without Stripe confirm
+	// membership payments by hand. AdTestPayments does the same for sellers'
+	// advertising packages. Neither is ever set in production.
 	MembershipTestPayments bool
+	AdTestPayments         bool
+	// StateChangeCooldownDays is how long a customer waits before changing
+	// the state or region on their account (default 90).
+	StateChangeCooldownDays int
 }
 
 // Load reads .env (if present) and required environment variables.
@@ -147,12 +128,6 @@ func Load() (*Config, error) {
 		AWSSecretKey:    os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		S3Bucket:        os.Getenv("S3_BUCKET"),
 		GoogleMapsKey:   os.Getenv("GOOGLE_MAPS_API_KEY"),
-
-		PointsCentsPerPoint:   intOr("POINTS_CENTS_PER_POINT", 10),
-		PointsCurrency:        envOr("POINTS_CURRENCY", "USD"),
-		PointsPaymentProvider: envOr("POINTS_PAYMENT_PROVIDER", "instant"),
-		PointsWebhookSecret:   os.Getenv("POINTS_WEBHOOK_SECRET"),
-		PointsRewardTiming:    envOr("POINTS_REWARD_TIMING", "order"),
 
 		StripeSecretKey:            os.Getenv("STRIPE_SECRET_KEY"),
 		StripePublishableKey:       strings.TrimSpace(os.Getenv("STRIPE_PUBLISHABLE_KEY")),
@@ -186,10 +161,9 @@ func Load() (*Config, error) {
 		FreeGiftIdentitySecret: os.Getenv("FREE_GIFT_IDENTITY_SECRET"),
 		FreeGiftTermsVersion:   envOr("FREE_GIFT_TERMS_VERSION", "v1"),
 
-		CPQuoteSecret:          os.Getenv("CP_QUOTE_SECRET"),
-		CPEntryHoldMinutes:     intOr("CP_ENTRY_HOLD_MINUTES", 10),
-		CPRestoreWindowHours:   wholeOr("CP_RESTORE_WINDOW_HOURS", 24),
-		MembershipTestPayments: strings.EqualFold(strings.TrimSpace(os.Getenv("MEMBERSHIP_TEST_PAYMENTS")), "true"),
+		MembershipTestPayments:  strings.EqualFold(strings.TrimSpace(os.Getenv("MEMBERSHIP_TEST_PAYMENTS")), "true"),
+		AdTestPayments:          strings.EqualFold(strings.TrimSpace(os.Getenv("ADS_TEST_PAYMENTS")), "true"),
+		StateChangeCooldownDays: intOr("STATE_CHANGE_COOLDOWN_DAYS", 90),
 	}
 
 	// if the JWT secret is not set, return an error
@@ -218,12 +192,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.FreeGiftEnabled && len(cfg.FreeGiftIdentitySecret) < 32 {
 		return nil, fmt.Errorf("FREE_GIFT_IDENTITY_SECRET (32 characters or more) is required when FREE_GIFT_ENABLED=true")
-	}
-	if cfg.CPEntryHoldMinutes < 1 || cfg.CPEntryHoldMinutes > 120 {
-		return nil, fmt.Errorf("CP_ENTRY_HOLD_MINUTES must be 1 to 120")
-	}
-	if cfg.CPRestoreWindowHours < 0 || cfg.CPRestoreWindowHours > 24*30 {
-		return nil, fmt.Errorf("CP_RESTORE_WINDOW_HOURS must be 0 to 720")
 	}
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")

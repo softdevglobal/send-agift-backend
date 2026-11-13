@@ -38,10 +38,10 @@ func (s *GameService) AdminGames(ctx context.Context) ([]models.AdminGameSummary
 }
 
 // maxPlayCost caps what one play of a game can cost.
-const maxPlayCost = 1_000_000
+const maxPlayCost = 1000
 
 // ErrInvalidPlayCost is a play price out of range.
-var ErrInvalidPlayCost = errors.New("play_cost_points must be a whole number from 0 to 1000000")
+var ErrInvalidPlayCost = errors.New("entry_cost must be a whole number of game entries from 0 to 1000")
 
 // SetPlayCost sets what one practice play of a game costs, audited. Any
 // platform admin may set it. It

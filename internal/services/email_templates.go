@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"myapp/internal/models"
 	"myapp/internal/repository"
 )
 
@@ -323,9 +324,9 @@ func renderCustomerWelcome(webURL, name string) (*EmailContent, error) {
 		"Steps": []emailStep{
 			{Title: "Find a gift", Body: "Discover gifts from shops near them."},
 			{Title: "Make it personal", Body: "Add a message or video to your gift."},
-			{Title: "Earn points", Body: "Get points whenever you send a gift."},
+			{Title: "Track it", Body: "Follow your gift until it is delivered."},
 		},
-		"Callout": emailCallout{Label: "One more thing", Body: "Every gift you send earns points. Use them to play our skill games and see what you can win."},
+		"Callout": emailCallout{Label: "One more thing", Body: "You can add a message or a short video to any gift, so it feels like it came straight from you."},
 		"Closing": emailClosing{Title: "Ready to make someone's day?", Body: "Your next thoughtful gift is only a few clicks away."},
 	}
 	text := fmt.Sprintf(`Hi %s,
@@ -336,7 +337,7 @@ Send thoughtful gifts to the people who matter, right from your phone or desktop
 
   01 Find a gift. Discover gifts from shops near them.
   02 Make it personal. Add a message or video to your gift.
-  03 Earn points. Get points whenever you send a gift.
+  03 Track it. Follow your gift until it is delivered.
 
 Start sending gifts: %s/products
 
@@ -362,7 +363,6 @@ type orderEmailData struct {
 	Subtotal      int
 	Delivery      int
 	Total         int
-	GiftPoints    int64
 	// Account details for a recipient whose account was made for them.
 	LoginEmail   string
 	TempPassword string
@@ -396,7 +396,6 @@ const orderPlacedContent = `{{define "content"}}
   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:14px;line-height:20px;color:{{c "muted"}};">
     <tr><td style="padding:5px 0;">Subtotal</td><td align="right" style="padding:5px 0;">{{money .Subtotal .Currency}}</td></tr>
     <tr><td style="padding:5px 0;">Delivery</td><td align="right" style="padding:5px 0;">{{if eq .Delivery 0}}<span style="color:{{c "teal"}};font-weight:700;">Free</span>{{else}}{{money .Delivery .Currency}}{{end}}</td></tr>
-    {{if gt .GiftPoints 0}}<tr><td style="padding:5px 0;">Gift points attached</td><td align="right" style="padding:5px 0;color:{{c "violet"}};font-weight:700;">{{.GiftPoints}} pts</td></tr>{{end}}
     <tr><td style="padding:12px 0 0;border-top:1px solid {{c "navy"}};font-size:16px;font-weight:700;color:{{c "navy"}};">Total</td><td align="right" style="padding:12px 0 0;border-top:1px solid {{c "navy"}};font-size:16px;font-weight:700;color:{{c "navy"}};">{{money .Total .Currency}}</td></tr>
   </table>
 </td></tr>
@@ -448,9 +447,6 @@ const giftDeliveredContent = `{{define "content"}}
   </table>
 </td></tr>{{end}}
 {{template "items" .}}
-{{if gt .GiftPoints 0}}<tr><td class="px" style="padding:20px 60px 0;">
-  <div style="font-size:14px;line-height:22px;color:{{c "text"}};"><strong style="color:{{c "violet"}};">+{{.GiftPoints}} points</strong> from {{.SenderName}} are waiting in your SendAGift wallet.</div>
-</td></tr>{{end}}
 {{if .TempPassword}}<tr><td class="px" style="padding:32px 60px 0;">
   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid {{c "border"}};border-radius:6px;">
     <tr><td style="padding:22px 24px;">
@@ -494,9 +490,6 @@ func renderGiftDelivered(webURL string, o *repository.OrderEmailSummary, tempPas
 	b.WriteString("What arrived:\n")
 	for _, it := range data.Items {
 		fmt.Fprintf(&b, "  • %s ×%d (from %s)\n", it.ProductName, it.Quantity, it.ShopName)
-	}
-	if data.GiftPoints > 0 {
-		fmt.Fprintf(&b, "\n%s also sent you %d points. They're in your SendAGift wallet.\n", data.SenderName, data.GiftPoints)
 	}
 	if tempPassword != "" {
 		fmt.Fprintf(&b, "\nWe've set up a SendAGift account for you:\n  Email: %s\n  Password: %s\nThis is a temporary password. Please change it as soon as you sign in.\n", data.LoginEmail, tempPassword)
@@ -555,7 +548,6 @@ func orderData(o *repository.OrderEmailSummary) orderEmailData {
 		Subtotal:      o.SubtotalAmount,
 		Delivery:      o.DeliveryAmount,
 		Total:         o.TotalAmount,
-		GiftPoints:    o.GiftPoints,
 	}
 }
 
@@ -682,7 +674,7 @@ func renderEmailChangeReverted(webURL, resetPath string) (*EmailContent, error) 
 		"Heading": "Your email is restored",
 		"Intro":   "Hi,\nYour SendAGift account is back on this email and every device was signed out. Reset your password to sign in again.",
 		"CTA":     emailButton{Label: "Reset my password", URL: webURL + resetPath},
-		"Callout": emailCallout{Label: "Some actions are on hold", Body: "Prizes, gift points, buying points and raising rewards stay on hold for a few days as a precaution."},
+		"Callout": emailCallout{Label: "Some actions are on hold", Body: "Prize claims and buying advertising packages stay on hold for a few days as a precaution."},
 	}
 	text := fmt.Sprintf("Hi,\n\nYour SendAGift account is back on this email and every device was signed out.\n\nReset your password to sign in again: %s%s\n\nThe SendAGift team", webURL, resetPath)
 	return renderEmail(webURL, emailChangeNoticeContent, "Your SendAGift email is restored",
@@ -733,4 +725,48 @@ func renderOrderDispatched(webURL string, o *repository.OrderEmailSummary) (*Ema
 	fmt.Fprintf(&b, "\nThe SendAGift team")
 	return renderEmail(webURL, orderDeliveredContent, "On its way: your gift for "+recipient,
 		"Order "+o.OrderNumber+" has left the shop and is on its way.", data, b.String())
+}
+
+// renderAdPurchaseReceipt is the seller's receipt for an advertising package.
+func renderAdPurchaseReceipt(webURL string, p *models.AdPurchase) (*EmailContent, error) {
+	paid := p.PriceMinor
+	if p.PaidAmountMinor != nil {
+		paid = *p.PaidAmountMinor
+	}
+	until := ""
+	if p.ExpiresAt != nil {
+		until = p.ExpiresAt.UTC().Format("2 January 2006")
+	}
+	reference := p.ID.String()
+	summary := fmt.Sprintf("%s advertising package. Paid: %s. Promotes up to %d products. Budget: %d game entries. Active until %s. Reference: %s.",
+		p.PackageName, formatMoney(int(paid), p.Currency), p.ProductSlots, p.EntriesPool, until, reference)
+	data := map[string]any{
+		"Eyebrow": "Receipt",
+		"Heading": "Your advertising package is active",
+		"Intro":   "Hi,\nThank you. Your payment was received and your advertising package is now active. Choose the products to promote and put them in its priority levels.",
+		"CTA":     emailButton{Label: "Choose products to promote", URL: webURL + "/seller/advertising"},
+		"Callout": emailCallout{Label: "Your receipt", Body: summary},
+	}
+	text := fmt.Sprintf("Hi,\n\nYour payment was received and your advertising package is now active.\n\n%s\n\nChoose the products to promote: %s/seller/advertising\n\nThe SendAGift team", summary, webURL)
+	return renderEmail(webURL, emailChangeNoticeContent, "Your SendAGift advertising package receipt",
+		"Your advertising package is active.", data, text)
+}
+
+// renderAdReminder is a budget notice for an advertising package.
+func renderAdReminder(r *models.AdReminderEmail, dashboardURL string) (*EmailContent, error) {
+	heading := fmt.Sprintf("%d%% of your advertising budget is used", r.Threshold)
+	label := "Buy another package"
+	if r.Threshold >= 100 {
+		heading = "Your advertising budget is fully used"
+		label = "Buy a new package"
+	}
+	data := map[string]any{
+		"Eyebrow": "Advertising · " + r.PackageName,
+		"Heading": heading,
+		"Intro":   "Hi,\n" + r.Message,
+		"CTA":     emailButton{Label: label, URL: dashboardURL},
+		"Callout": emailCallout{Label: "Nothing is bought automatically", Body: "A new package starts only when you buy one."},
+	}
+	text := fmt.Sprintf("Hi,\n\n%s\n\n%s: %s\n\nThe SendAGift team", r.Message, label, dashboardURL)
+	return renderEmail("", emailChangeNoticeContent, "SendAGift advertising: "+heading, r.Message, data, text)
 }
