@@ -1100,3 +1100,48 @@ func TestStateCode(t *testing.T) {
 		}
 	}
 }
+
+// A country's states are fetched from Google the first time they are asked
+// for, all of them, even where Google only answers five at a time.
+func TestStatesImportFromGoogle(t *testing.T) {
+	f := newShopFixture(t)
+	var iso string
+	f.scan(&iso, `select iso_code from core.countries where id = $1`, f.country)
+	states := map[string]string{ // place id -> name
+		"nh": "New Hampshire", "nj": "New Jersey", "nm": "New Mexico", "ny": "New York",
+		"nv": "Nevada", "ne": "Nebraska", "oh": "Ohio",
+	}
+	searches := 0
+	f.entries.placeSearch = func(_ context.Context, input, country string) ([]PlaceSuggestion, error) {
+		searches++
+		if country != iso {
+			t.Fatalf("searched %q, not this country", country)
+		}
+		var out []PlaceSuggestion
+		for id, name := range states {
+			if strings.HasPrefix(strings.ToLower(name), input) {
+				out = append(out, PlaceSuggestion{PlaceID: id, MainText: name})
+			}
+		}
+		if len(out) > 5 { // Google answers at most five
+			out = out[:5]
+		}
+		return out, nil
+	}
+	f.entries.placeDetails = func(_ context.Context, id string) (*PlaceDetails, error) {
+		return &PlaceDetails{Region: states[id], RegionCode: strings.ToUpper(id), CountryCode: iso,
+			Types: []string{"administrative_area_level_1"}}, nil
+	}
+
+	list, err := f.entries.States(f.ctx, f.country.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != len(states) {
+		t.Fatalf("imported %d of %d states", len(list), len(states))
+	}
+	asked := searches
+	if _, err := f.entries.States(f.ctx, f.country.String()); err != nil || searches != asked {
+		t.Fatalf("Google was asked again: %d searches, then %d (%v)", asked, searches, err)
+	}
+}

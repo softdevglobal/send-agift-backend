@@ -87,6 +87,21 @@ func mapStateErr(err error) error {
 	return err
 }
 
+// StatesImported is true once a country's states were fetched from Google.
+func (r *GameEntriesRepository) StatesImported(ctx context.Context, countryID uuid.UUID) (bool, error) {
+	var done bool
+	err := r.db.QueryRow(ctx, `select exists(select 1 from core.state_imports where country_id = $1)`, countryID).Scan(&done)
+	return done, err
+}
+
+// MarkStatesImported records an import of a country's states from Google.
+func (r *GameEntriesRepository) MarkStatesImported(ctx context.Context, countryID uuid.UUID, found int) error {
+	_, err := r.db.Exec(ctx, `
+		insert into core.state_imports (country_id, found) values ($1, $2)
+		on conflict (country_id) do update set imported_at = now(), found = excluded.found`, countryID, found)
+	return err
+}
+
 // CountryISO is a country's ISO 3166-1 alpha-2 code, e.g. "AU".
 func (r *GameEntriesRepository) CountryISO(ctx context.Context, countryID uuid.UUID) (string, error) {
 	var iso string

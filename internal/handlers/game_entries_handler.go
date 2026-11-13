@@ -425,6 +425,21 @@ func (h *GameEntriesHandler) AdminStates(w http.ResponseWriter, r *http.Request)
 	h.reply(w, map[string]any{"items": list}, err, "could not list states")
 }
 
+// ImportStates handles POST /admin/countries/{countryID}/states/import:
+// fetch the country's states from Google and add any that are missing.
+func (h *GameEntriesHandler) ImportStates(w http.ResponseWriter, r *http.Request) {
+	if _, ok := adminActor(w, r); !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "countryID"))
+	if err != nil {
+		utils.Error(w, http.StatusBadRequest, "invalid country")
+		return
+	}
+	total, err := h.entries.ImportStates(r.Context(), id)
+	h.reply(w, map[string]int{"total": total}, err, "could not import the states")
+}
+
 // CreateState handles POST /admin/states.
 func (h *GameEntriesHandler) CreateState(w http.ResponseWriter, r *http.Request) {
 	admin, ok := adminActor(w, r)

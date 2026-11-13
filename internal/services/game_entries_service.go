@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sync"
 	"unicode"
 
 	"context"
@@ -41,6 +42,10 @@ type GameEntriesService struct {
 	// placeDetails looks a Google place up, so a state picked from Google
 	// can be checked before it is used. Nil turns state lookups off.
 	placeDetails func(ctx context.Context, placeID string) (*PlaceDetails, error)
+	// placeSearch finds a country's states on Google, for importing them.
+	placeSearch func(ctx context.Context, input, countryCode string) ([]PlaceSuggestion, error)
+	// importing holds one lock per country, so one import runs at a time.
+	importing sync.Map
 }
 
 // UsePlaces lets customers pick their state from Google Places.
@@ -48,6 +53,92 @@ func (s *GameEntriesService) UsePlaces(places *PlacesService) {
 	s.placeDetails = func(ctx context.Context, placeID string) (*PlaceDetails, error) {
 		return places.Details(ctx, placeID, "", "en")
 	}
+	s.placeSearch = func(ctx context.Context, input, countryCode string) ([]PlaceSuggestion, error) {
+		return places.Autocomplete(ctx, AutocompleteParams{
+			Input: input, CountryCode: countryCode, Language: "en", Types: "states",
+		})
+	}
+}
+
+// ImportStates fetches every top-level state of a country from Google Places
+// and adds the ones not on our list yet. Google has no "list the states"
+// call, so it searches letter by letter, and digs one letter deeper wherever
+// Google's answer was full (it returns at most five). Each find is checked
+// the same way a customer's pick is. Returns how many states the country
+// has afterwards.
+func (s *GameEntriesService) ImportStates(ctx context.Context, countryID uuid.UUID) (int, error) {
+	if s.placeSearch == nil || s.placeDetails == nil {
+		return 0, invalidState("state lookups are not configured")
+	}
+	lock, _ := s.importing.LoadOrStore(countryID, &sync.Mutex{})
+	lock.(*sync.Mutex).Lock()
+	defer lock.(*sync.Mutex).Unlock()
+
+	// Finish even if the customer who asked gives up waiting.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+	defer cancel()
+
+	iso, err := s.repo.CountryISO(ctx, countryID)
+	if err != nil {
+		return 0, mapEntriesErr(err)
+	}
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	const maxSearches = 300
+	queue := make([]string, 0, len(letters))
+	for _, r := range letters {
+		queue = append(queue, string(r))
+	}
+	found := map[string]bool{}
+	for searches := 0; len(queue) > 0 && searches < maxSearches; searches++ {
+		prefix := queue[0]
+		queue = queue[1:]
+		hits, err := s.placeSearch(ctx, prefix, iso)
+		if err != nil {
+			return 0, err
+		}
+		for _, h := range hits {
+			found[h.PlaceID] = true
+		}
+		if len(hits) >= 5 && len(prefix) < 3 {
+			for _, r := range letters {
+				queue = append(queue, prefix+string(r))
+			}
+		}
+	}
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		fail error
+		sem  = make(chan struct{}, 6)
+	)
+	for placeID := range found {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(placeID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			_, err := s.ResolveState(ctx, countryID.String(), placeID)
+			// A find that turns out not to be a state is simply skipped.
+			if err != nil && !errors.Is(err, ErrInvalidState) {
+				mu.Lock()
+				fail = err
+				mu.Unlock()
+			}
+		}(placeID)
+	}
+	wg.Wait()
+	if fail != nil {
+		return 0, fail
+	}
+	list, err := s.repo.States(ctx, countryID, false)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.repo.MarkStatesImported(ctx, countryID, len(list)); err != nil {
+		return 0, err
+	}
+	return len(list), nil
 }
 
 func NewGameEntriesService(repo *repository.GameEntriesRepository, stateCooldownDays int) *GameEntriesService {
@@ -167,6 +258,18 @@ func (s *GameEntriesService) States(ctx context.Context, countryID string) ([]mo
 	id, err := uuid.Parse(strings.TrimSpace(countryID))
 	if err != nil {
 		return nil, invalidState("country_id is required")
+	}
+	list, err := s.repo.States(ctx, id, true)
+	if err != nil || len(list) > 0 || s.placeSearch == nil {
+		return list, err
+	}
+	// No states yet: fetch them from Google, once per country.
+	if done, err := s.repo.StatesImported(ctx, id); err != nil || done {
+		return list, err
+	}
+	if _, err := s.ImportStates(ctx, id); err != nil {
+		log.Printf("import states for %s: %v", id, err)
+		return list, nil
 	}
 	return s.repo.States(ctx, id, true)
 }

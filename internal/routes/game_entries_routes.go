@@ -67,6 +67,8 @@ func RegisterGameEntriesRoutes(r chi.Router, h *handlers.GameEntriesHandler, jwt
 		r.Post("/admin/games-control/program/stop", h.StopProgram)
 		r.Post("/admin/games-control/jurisdictions/{jurisdictionID}/stop", h.StopJurisdiction())
 		r.Post("/admin/advertising/purchases/{purchaseID}/reminder", h.ResendReminder)
+		// Only adds states Google confirms; nothing is changed or removed.
+		r.Post("/admin/countries/{countryID}/states/import", h.ImportStates)
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireReauth(jwtSecret))
