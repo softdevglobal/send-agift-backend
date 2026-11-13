@@ -15,6 +15,9 @@ import (
 func RegisterGameEntriesRoutes(r chi.Router, h *handlers.GameEntriesHandler, jwtSecret string, sellerActive func(http.Handler) http.Handler) {
 	// The states of a country, for sign-up forms.
 	r.Get("/countries/{countryID}/states", h.States)
+	// A state picked from Google Places, turned into one of ours. Public, as
+	// sign-up asks for it; each call is a billed Google lookup, so limited.
+	r.With(middleware.RateLimitByIP(30, time.Minute)).Post("/states/resolve", h.ResolveState)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(jwtSecret))

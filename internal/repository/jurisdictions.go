@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -84,6 +85,61 @@ func mapStateErr(err error) error {
 		return ErrStateNotFound
 	}
 	return err
+}
+
+// CountryISO is a country's ISO 3166-1 alpha-2 code, e.g. "AU".
+func (r *GameEntriesRepository) CountryISO(ctx context.Context, countryID uuid.UUID) (string, error) {
+	var iso string
+	err := r.db.QueryRow(ctx, `select iso_code from core.countries where id = $1`, countryID).Scan(&iso)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrStateNotFound
+	}
+	return iso, err
+}
+
+// FindOrCreateState returns the country's state called [name], adding it
+// with [code] when it is new. A code already used by a different state
+// gets a number on the end (WP, WP2, ...). Two customers picking the same
+// new state at once end up with the one row.
+func (r *GameEntriesRepository) FindOrCreateState(ctx context.Context, countryID uuid.UUID, code, name string) (*models.State, error) {
+	byName := func() (*models.State, error) {
+		st := &models.State{}
+		err := r.db.QueryRow(ctx, `
+			select id, country_id, code, name, is_active from core.states
+			where country_id = $1 and lower(name) = lower($2)
+			order by is_active desc, created_at limit 1`, countryID, name).
+			Scan(&st.ID, &st.CountryID, &st.Code, &st.Name, &st.IsActive)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return st, err
+	}
+	for attempt := 1; attempt <= 9; attempt++ {
+		if st, err := byName(); err != nil || st != nil {
+			return st, err
+		}
+		try := code
+		if attempt > 1 {
+			suffix := fmt.Sprint(attempt)
+			if len(try)+len(suffix) > 10 {
+				try = try[:10-len(suffix)]
+			}
+			try += suffix
+		}
+		st := &models.State{}
+		err := r.db.QueryRow(ctx, `
+			insert into core.states (country_id, code, name, is_active) values ($1, $2, $3, true)
+			on conflict (country_id, code) do nothing
+			returning id, country_id, code, name, is_active`, countryID, try, name).
+			Scan(&st.ID, &st.CountryID, &st.Code, &st.Name, &st.IsActive)
+		if err == nil {
+			return st, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, mapStateErr(err)
+		}
+	}
+	return nil, ErrStateDuplicate
 }
 
 // SaveState creates (id nil) or updates a state, audited.

@@ -75,6 +75,20 @@ func (h *GameEntriesHandler) States(w http.ResponseWriter, r *http.Request) {
 	utils.JSON(w, http.StatusOK, map[string]any{"items": list})
 }
 
+// ResolveState handles POST /states/resolve: { country_id, place_id } for a
+// state picked from Google, answered with our state to send as state_id.
+func (h *GameEntriesHandler) ResolveState(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CountryID string `json:"country_id"`
+		PlaceID   string `json:"place_id"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	out, err := h.entries.ResolveState(r.Context(), in.CountryID, in.PlaceID)
+	h.reply(w, out, err, "could not look up that state")
+}
+
 // ─── Customer ─────────────────────────────────────────────────────────────
 
 // Wallet handles GET /customers/me/game-entries.

@@ -277,6 +277,7 @@ func main() {
 
 	// placesService proxies Google Places so the API key stays on the server
 	placesService := services.NewPlacesService(cfg)
+	gameEntriesService.UsePlaces(placesService)
 	placesHandler := handlers.NewPlacesHandler(placesService) // create a new places handler
 	shippingHandler := handlers.NewShippingHandler(shippingService)
 	availabilityService := services.NewAvailabilityService(repository.NewAvailabilityRepository(pool))

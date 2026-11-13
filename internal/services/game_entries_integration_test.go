@@ -1047,3 +1047,56 @@ func TestOrderShipsToThePickedAddress(t *testing.T) {
 		t.Fatalf("someone else's address: %v", err)
 	}
 }
+
+// A state picked from Google becomes one of ours: added the first time,
+// reused after, and never a city or another country's state.
+func TestResolveStateFromGoogle(t *testing.T) {
+	f := newShopFixture(t)
+	var iso string
+	f.scan(&iso, `select iso_code from core.countries where id = $1`, f.country)
+	places := map[string]*PlaceDetails{
+		"nsw":    {Region: "New South Wales", RegionCode: "NSW", CountryCode: iso, Types: []string{"administrative_area_level_1", "political"}},
+		"west":   {Region: "Western Province", RegionCode: "Western Province", CountryCode: iso, Types: []string{"administrative_area_level_1"}},
+		"city":   {Name: "Sydney", Region: "New South Wales", City: "Sydney", CountryCode: iso, Types: []string{"locality"}},
+		"abroad": {Region: "California", RegionCode: "CA", CountryCode: "ZZ", Types: []string{"administrative_area_level_1"}},
+	}
+	f.entries.placeDetails = func(_ context.Context, id string) (*PlaceDetails, error) { return places[id], nil }
+
+	first, err := f.entries.ResolveState(f.ctx, f.country.String(), "nsw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Code != "NSW" || first.Name != "New South Wales" || !first.IsActive {
+		t.Fatalf("got %+v", first)
+	}
+	again, err := f.entries.ResolveState(f.ctx, f.country.String(), "nsw")
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("a second pick made another state: %v %v", again, err)
+	}
+	west, err := f.entries.ResolveState(f.ctx, f.country.String(), "west")
+	if err != nil || west.Code != "WP" {
+		t.Fatalf("no short form should give initials: %+v %v", west, err)
+	}
+	for _, id := range []string{"city", "abroad"} {
+		if _, err := f.entries.ResolveState(f.ctx, f.country.String(), id); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("%s was accepted: %v", id, err)
+		}
+	}
+	// Once the country has states, sign-up asks for one.
+	if _, err := f.entries.RequireStateForSignup(f.ctx, f.country, ""); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("sign-up without a state: %v", err)
+	}
+}
+
+func TestStateCode(t *testing.T) {
+	for _, c := range []struct{ short, name, want string }{
+		{"NSW", "New South Wales", "NSW"},
+		{"Western Province", "Western Province", "WP"},
+		{"", "Bavaria", "BAVARIA"},
+		{"", "Île-de-France", "IDF"},
+	} {
+		if got := StateCode(c.short, c.name); got != c.want {
+			t.Errorf("StateCode(%q, %q) = %q, want %q", c.short, c.name, got, c.want)
+		}
+	}
+}

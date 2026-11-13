@@ -1,9 +1,12 @@
 package services
 
 import (
+	"unicode"
+
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/text/unicode/norm"
 	"log"
 	"strings"
 	"time"
@@ -35,6 +38,16 @@ type GameEntriesService struct {
 	// stateCooldown is how long a customer waits before changing the state
 	// they gave.
 	stateCooldown time.Duration
+	// placeDetails looks a Google place up, so a state picked from Google
+	// can be checked before it is used. Nil turns state lookups off.
+	placeDetails func(ctx context.Context, placeID string) (*PlaceDetails, error)
+}
+
+// UsePlaces lets customers pick their state from Google Places.
+func (s *GameEntriesService) UsePlaces(places *PlacesService) {
+	s.placeDetails = func(ctx context.Context, placeID string) (*PlaceDetails, error) {
+		return places.Details(ctx, placeID, "", "en")
+	}
 }
 
 func NewGameEntriesService(repo *repository.GameEntriesRepository, stateCooldownDays int) *GameEntriesService {
@@ -176,6 +189,89 @@ func (s *GameEntriesService) SetCustomerState(ctx context.Context, customerID uu
 		return nil, mapEntriesErr(err)
 	}
 	return s.CustomerState(ctx, customerID)
+}
+
+// ResolveState turns a state picked from Google Places into one of our
+// states, adding it to the country's list the first time anyone picks it.
+// Google is asked about the place itself, so only a real top-level state in
+// [countryID] is accepted: never a city, and never a name typed by hand.
+func (s *GameEntriesService) ResolveState(ctx context.Context, countryID, placeID string) (*models.State, error) {
+	country, err := uuid.Parse(strings.TrimSpace(countryID))
+	if err != nil {
+		return nil, invalidState("country_id is required")
+	}
+	placeID = strings.TrimSpace(placeID)
+	if placeID == "" || len(placeID) > 300 {
+		return nil, invalidState("pick your state from the list")
+	}
+	if s.placeDetails == nil {
+		return nil, invalidState("state search is not available right now")
+	}
+	place, err := s.placeDetails(ctx, placeID)
+	if err != nil {
+		return nil, err
+	}
+	isState := false
+	for _, t := range place.Types {
+		if t == "administrative_area_level_1" {
+			isState = true
+		}
+	}
+	name := strings.TrimSpace(place.Region)
+	if name == "" {
+		name = strings.TrimSpace(place.Name)
+	}
+	if !isState || name == "" {
+		return nil, invalidState("pick a state or region, not a city or address")
+	}
+	iso, err := s.repo.CountryISO(ctx, country)
+	if err != nil {
+		return nil, mapEntriesErr(err)
+	}
+	if !strings.EqualFold(iso, place.CountryCode) {
+		return nil, invalidState("that state is in a different country")
+	}
+	if len([]rune(name)) > 80 {
+		name = string([]rune(name)[:80])
+	}
+	st, err := s.repo.FindOrCreateState(ctx, country, StateCode(place.RegionCode, name), name)
+	return st, mapEntriesErr(err)
+}
+
+// StateCode is a state's short code: Google's own when it is a real
+// abbreviation ("NSW"), else the initials of its name ("Western Province"
+// gives "WP"). Always 1 to 10 of A-Z, 0-9 and hyphen.
+func StateCode(short, name string) string {
+	clean := func(v string) string {
+		var b strings.Builder
+		// "Île" becomes "ILE": accents are split off and dropped.
+		for _, r := range strings.ToUpper(norm.NFD.String(v)) {
+			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	if c := clean(short); c != "" && len(c) <= 10 && !strings.EqualFold(strings.TrimSpace(short), strings.TrimSpace(name)) {
+		return c
+	}
+	var initials strings.Builder
+	for _, word := range strings.FieldsFunc(name, func(r rune) bool { return unicode.IsSpace(r) || r == '-' }) {
+		if c := clean(word); c != "" {
+			initials.WriteByte(c[0])
+		}
+	}
+	code := initials.String()
+	if len(code) < 2 {
+		code = clean(name)
+	}
+	if code == "" {
+		code = "STATE"
+	}
+	if len(code) > 10 {
+		code = code[:10]
+	}
+	return code
 }
 
 // RequireStateForSignup checks the state given at sign-up: required when

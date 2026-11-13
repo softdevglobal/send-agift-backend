@@ -69,6 +69,9 @@ type PlaceDetails struct {
 	CountryName string   `json:"country_name,omitempty"`
 	Latitude    *float64 `json:"latitude,omitempty"`
 	Longitude   *float64 `json:"longitude,omitempty"`
+	// Types are Google's place types, e.g. administrative_area_level_1 for a
+	// state. Used to check a picked place really is a state.
+	Types []string `json:"types,omitempty"`
 }
 
 // AutocompleteParams are the knobs the handler exposes on the search endpoint.
@@ -347,6 +350,7 @@ func toPlaceDetails(resp placeDetailsResponse) *PlaceDetails {
 		Region:           long("administrative_area_level_1"),
 		PostalCode:       long("postal_code"),
 		CountryName:      long("country"),
+		Types:            resp.Types,
 	}
 	if c, ok := byType["country"]; ok {
 		details.CountryCode = c.short
