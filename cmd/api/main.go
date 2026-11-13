@@ -32,6 +32,14 @@ func main() {
 	}
 	defer pool.Close()
 
+	// The background jobs hold their "one server at a time" locks on a pool
+	// of their own, so they can never use up the connections requests need.
+	lockPool, err := database.ConnectLocks(cfg, 10)
+	if err != nil {
+		log.Fatalf("database error: %v", err)
+	}
+	defer lockPool.Close()
+
 	// migCtx is the context for the migration operation
 	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer migCancel()
@@ -101,12 +109,12 @@ func main() {
 	// With several API servers running, an advisory lock gives each round
 	// to only one of them.
 	go competitionService.RunReconciliation(context.Background(), 15*time.Minute,
-		database.Exclusive(pool, database.LockPrizeReconciliation))
+		database.Exclusive(lockPool, database.LockPrizeReconciliation))
 	// Game entries housekeeping: entries on cancelled or refunded orders are
 	// undone, missed grants are made, and packages past their time end.
 	// Idempotent, so it simply runs on a timer.
 	go gameEntriesService.RunSettleLoop(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockGameEntries))
+		database.Exclusive(lockPool, database.LockGameEntries))
 	// One Stripe client for orders, memberships and sellers' advertising
 	// packages. Nil when STRIPE_SECRET_KEY is not set.
 	stripeClient := services.NewStripeClient(cfg.StripeSecretKey)
@@ -131,9 +139,9 @@ func main() {
 		log.Printf("⚠️  ADS_TEST_PAYMENTS=true: sellers can confirm advertising payments by hand (sandbox only).")
 	}
 	go advertisingService.RunLoop(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockAdvertising))
+		database.Exclusive(lockPool, database.LockAdvertising))
 	go emailService.RunDeliveryLoop(context.Background(), 15*time.Second,
-		database.Exclusive(pool, database.LockEmailDelivery))
+		database.Exclusive(lockPool, database.LockEmailDelivery))
 	// New customers get a welcome email.
 	customerService.SendEmailsWith(emailService)
 	sellerService.SendEmailsWith(emailService)
@@ -145,7 +153,7 @@ func main() {
 	giftRecipientService := services.NewGiftRecipientService(orders, customers, emailService)
 	orderService.NotifyWith(giftRecipientService)
 	go giftRecipientService.RunDeliveredNotices(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockGiftDeliveryNotices))
+		database.Exclusive(lockPool, database.LockGiftDeliveryNotices))
 	// SMS through textbee: queued like email and sent by this loop. Without
 	// a key the messages wait in the outbox until one is configured.
 	var smsSender services.SMSSender
@@ -157,7 +165,7 @@ func main() {
 	}
 	smsService := services.NewSMSService(repository.NewSMSRepository(pool), smsSender)
 	go smsService.RunDeliveryLoop(context.Background(), 5*time.Second,
-		database.Exclusive(pool, database.LockSMSDelivery))
+		database.Exclusive(lockPool, database.LockSMSDelivery))
 	// Recipients reached by phone get the delivered notice by text too.
 	giftRecipientService.SendSMSWith(smsService, cfg.AppWebURL, cfg.DefaultPhoneCountryCode)
 	// Customers sign in or sign up with a 6-digit code by SMS or email.
@@ -215,9 +223,9 @@ func main() {
 			}
 		})
 		go stripeService.RunPayoutLoop(context.Background(), time.Minute,
-			database.Exclusive(pool, database.LockStripePayouts))
+			database.Exclusive(lockPool, database.LockStripePayouts))
 		go stripeService.RunExpiryLoop(context.Background(), 15*time.Minute,
-			database.Exclusive(pool, database.LockStripeExpiry))
+			database.Exclusive(lockPool, database.LockStripeExpiry))
 	} else {
 		log.Printf("⚠️  STRIPE_SECRET_KEY is not set: card payments and seller payouts are off.")
 	}
@@ -239,7 +247,7 @@ func main() {
 	orderService.UseMemberDiscounts(competitionPointsRepo.MemberDiscount, cfg.StripeFeeBPS)
 	stripeService.OnMembershipEvent(competitionPointsService.HandleStripeEvent)
 	go competitionPointsService.RunLoop(context.Background(), time.Minute,
-		database.Exclusive(pool, database.LockMembership))
+		database.Exclusive(lockPool, database.LockMembership))
 	if cfg.MembershipTestPayments && !stripeService.Enabled() {
 		log.Printf("⚠️  MEMBERSHIP_TEST_PAYMENTS=true: membership payments can be confirmed by hand (sandbox only).")
 	}
@@ -298,7 +306,7 @@ func main() {
 	}
 	pushService := services.NewPushService(repository.NewPushRepository(pool), pushSender)
 	go pushService.RunDeliveryLoop(context.Background(), 10*time.Second,
-		database.Exclusive(pool, database.LockPushDelivery))
+		database.Exclusive(lockPool, database.LockPushDelivery))
 	pushHandler := handlers.NewPushHandler(pushService)
 
 	// First free gift program: off unless FREE_GIFT_ENABLED=true, when every
