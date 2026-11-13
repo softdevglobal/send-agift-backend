@@ -83,7 +83,7 @@ func (r *AdRepository) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error
 // ─── Packages ─────────────────────────────────────────────────────────────
 
 const adPackageCols = `k.id, k.package_key, k.version, k.country_id, co.name, k.name, k.description,
-	k.currency, k.price_minor, k.product_slots, k.level_entries, k.entries_pool, k.validity_days,
+	k.currency, k.price_minor, k.product_slots, k.level_entries, k.level_names, k.entries_pool, k.validity_days,
 	k.status, k.published_at, k.retired_at, k.created_at, k.updated_at,
 	(select count(*) from ads.purchases pu where pu.package_id = k.id and pu.paid_at is not null)`
 
@@ -92,7 +92,7 @@ const adPackageFrom = ` from ads.packages k inner join core.countries co on co.i
 func scanAdPackage(row scanner) (*models.AdPackage, error) {
 	p := &models.AdPackage{}
 	err := row.Scan(&p.ID, &p.PackageKey, &p.Version, &p.CountryID, &p.CountryName, &p.Name, &p.Description,
-		&p.Currency, &p.PriceMinor, &p.ProductSlots, &p.LevelEntries, &p.EntriesPool, &p.ValidityDays,
+		&p.Currency, &p.PriceMinor, &p.ProductSlots, &p.LevelEntries, &p.LevelNames, &p.EntriesPool, &p.ValidityDays,
 		&p.Status, &p.PublishedAt, &p.RetiredAt, &p.CreatedAt, &p.UpdatedAt, &p.Purchases)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrAdPackageNotFound
@@ -156,11 +156,11 @@ func (r *AdRepository) SavePackageDraft(ctx context.Context, id *uuid.UUID, p *m
 			if err := tx.QueryRow(ctx, `
 				insert into ads.packages (country_id, name, description, currency, price_minor,
 					product_slots, level_entries, entries_pool, validity_days,
-					created_by_admin_id, updated_by_admin_id)
-				values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+					created_by_admin_id, updated_by_admin_id, level_names)
+				values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11)
 				returning id`,
 				p.CountryID, p.Name, p.Description, p.Currency, p.PriceMinor,
-				p.ProductSlots, p.LevelEntries, p.EntriesPool, p.ValidityDays, adminID).Scan(&saved); err != nil {
+				p.ProductSlots, p.LevelEntries, p.EntriesPool, p.ValidityDays, adminID, p.LevelNames).Scan(&saved); err != nil {
 				return err
 			}
 		} else {
@@ -175,10 +175,10 @@ func (r *AdRepository) SavePackageDraft(ctx context.Context, id *uuid.UUID, p *m
 				update ads.packages
 				set country_id = $2, name = $3, description = $4, currency = $5, price_minor = $6,
 				    product_slots = $7, level_entries = $8, entries_pool = $9, validity_days = $10,
-				    updated_by_admin_id = $11, updated_at = now()
+				    updated_by_admin_id = $11, level_names = $12, updated_at = now()
 				where id = $1`,
 				*id, p.CountryID, p.Name, p.Description, p.Currency, p.PriceMinor,
-				p.ProductSlots, p.LevelEntries, p.EntriesPool, p.ValidityDays, adminID); err != nil {
+				p.ProductSlots, p.LevelEntries, p.EntriesPool, p.ValidityDays, adminID, p.LevelNames); err != nil {
 				return err
 			}
 			saved = *id
@@ -210,11 +210,11 @@ func (r *AdRepository) NewPackageVersion(ctx context.Context, id, adminID uuid.U
 		if err := tx.QueryRow(ctx, `
 			insert into ads.packages (package_key, version, country_id, name, description, currency,
 				price_minor, product_slots, level_entries, entries_pool, validity_days,
-				created_by_admin_id, updated_by_admin_id)
+				created_by_admin_id, updated_by_admin_id, level_names)
 			select package_key,
 			       (select max(version) + 1 from ads.packages where package_key = k.package_key),
 			       country_id, name, description, currency, price_minor, product_slots, level_entries,
-			       entries_pool, validity_days, $2, $2
+			       entries_pool, validity_days, $2, $2, level_names
 			from ads.packages k where k.id = $1
 			returning id`, id, adminID).Scan(&saved); err != nil {
 			return err
@@ -309,7 +309,7 @@ func (r *AdRepository) DeletePackageDraft(ctx context.Context, id uuid.UUID, aud
 
 const adPurchaseCols = `pu.id, pu.seller_id, coalesce(se.trading_name, se.legal_name, ''), se.email::text,
 	pu.package_id, pu.package_name, pu.country_id, pu.currency, pu.price_minor, pu.product_slots,
-	pu.level_entries, pu.entries_pool, pu.validity_days, pu.status, pu.entries_used, pu.entries_held,
+	pu.level_entries, pu.level_names, pu.entries_pool, pu.validity_days, pu.status, pu.entries_used, pu.entries_held,
 	pu.provider, pu.provider_reference, pu.checkout_url, pu.receipt_url, pu.paid_amount_minor,
 	pu.failure_reason, pu.last_reminder_threshold, pu.paid_at, pu.expires_at, pu.ended_at, pu.created_at`
 
@@ -329,7 +329,7 @@ func scanAdPurchase(row scanner) (*models.AdPurchase, error) {
 	p := &models.AdPurchase{}
 	err := row.Scan(&p.ID, &p.SellerID, &p.SellerName, &p.SellerEmail,
 		&p.PackageID, &p.PackageName, &p.CountryID, &p.Currency, &p.PriceMinor, &p.ProductSlots,
-		&p.LevelEntries, &p.EntriesPool, &p.ValidityDays, &p.Status, &p.EntriesUsed, &p.EntriesHeld,
+		&p.LevelEntries, &p.LevelNames, &p.EntriesPool, &p.ValidityDays, &p.Status, &p.EntriesUsed, &p.EntriesHeld,
 		&p.Provider, &p.ProviderReference, &p.CheckoutURL, &p.ReceiptURL, &p.PaidAmountMinor,
 		&p.FailureReason, &p.LastReminder, &p.PaidAt, &p.ExpiresAt, &p.EndedAt, &p.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -397,12 +397,12 @@ func (r *AdRepository) CreatePurchase(ctx context.Context, sellerID uuid.UUID, p
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `
 			insert into ads.purchases (seller_id, package_id, package_name, country_id, currency, price_minor,
-				product_slots, level_entries, entries_pool, validity_days, provider, idempotency_key)
-			values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+				product_slots, level_entries, entries_pool, validity_days, provider, idempotency_key, level_names)
+			values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 			on conflict (seller_id, idempotency_key) do nothing
 			returning id`,
 			sellerID, pkg.ID, pkg.Name, pkg.CountryID, pkg.Currency, pkg.PriceMinor,
-			pkg.ProductSlots, pkg.LevelEntries, pkg.EntriesPool, pkg.ValidityDays, provider, key).Scan(&id)
+			pkg.ProductSlots, pkg.LevelEntries, pkg.EntriesPool, pkg.ValidityDays, provider, key, pkg.LevelNames).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			err = tx.QueryRow(ctx, `
 				select id from ads.purchases where seller_id = $1 and idempotency_key = $2`, sellerID, key).Scan(&id)

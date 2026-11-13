@@ -1145,3 +1145,39 @@ func TestStatesImportFromGoogle(t *testing.T) {
 		t.Fatalf("Google was asked again: %d searches, then %d (%v)", asked, searches, err)
 	}
 }
+
+// An admin names a package's levels; a purchase keeps the names it was
+// bought with, and a blank name falls back to "Level n".
+func TestAdLevelNames(t *testing.T) {
+	f := newShopFixture(t)
+	p, err := f.ads.CreatePackage(f.ctx, f.admin, AdPackageInput{
+		CountryID: f.country.String(), Name: "Named", Currency: "USD", PriceMinor: 1000,
+		LevelEntries: []int{3, 2, 1}, LevelNames: []string{" Spotlight ", "Featured", ""},
+		EntriesPool: 30, ValidityDays: 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(p.LevelNames, "|"); got != "Spotlight|Featured|Level 3" {
+		t.Fatalf("names %q", got)
+	}
+	if _, err := f.ads.CreatePackage(f.ctx, f.admin, AdPackageInput{
+		CountryID: f.country.String(), Name: "Dupes", Currency: "USD", PriceMinor: 1000,
+		LevelEntries: []int{2, 1}, LevelNames: []string{"Top", "top"}, EntriesPool: 30, ValidityDays: 30,
+	}); !errors.Is(err, ErrInvalidAdPackage) {
+		t.Fatalf("duplicate names were accepted: %v", err)
+	}
+	plain := f.pkg("Plain", 1000, []int{2, 1}, 30)
+	if len(plain.LevelNames) != 0 {
+		t.Fatalf("no names given should keep the defaults, got %v", plain.LevelNames)
+	}
+
+	if p, err = f.ads.PackageAction(f.ctx, f.admin, p.ID, "publish"); err != nil {
+		t.Fatal(err)
+	}
+	f.open()
+	bought := f.buy(f.seller(), p)
+	if got := strings.Join(bought.LevelNames, "|"); got != "Spotlight|Featured|Level 3" {
+		t.Fatalf("purchase names %q", got)
+	}
+}

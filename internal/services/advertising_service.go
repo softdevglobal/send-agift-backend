@@ -108,8 +108,11 @@ type AdPackageInput struct {
 	Currency     string  `json:"currency"`
 	PriceMinor   int64   `json:"price_minor"`
 	LevelEntries []int   `json:"level_entries"`
-	EntriesPool  int     `json:"entries_pool"`
-	ValidityDays int     `json:"validity_days"`
+	// LevelNames name the levels, top first, one per entry in LevelEntries.
+	// Leave it empty, or a name blank, for the default name.
+	LevelNames   []string `json:"level_names"`
+	EntriesPool  int      `json:"entries_pool"`
+	ValidityDays int      `json:"validity_days"`
 }
 
 func (in AdPackageInput) toModel() (*models.AdPackage, error) {
@@ -154,6 +157,11 @@ func (in AdPackageInput) toModel() (*models.AdPackage, error) {
 			top = n
 		}
 		p.LevelEntries = append(p.LevelEntries, int32(n))
+	}
+	if names, err := levelNames(in.LevelNames, len(in.LevelEntries)); err != nil {
+		return nil, err
+	} else {
+		p.LevelNames = names
 	}
 	if p.EntriesPool < top {
 		return nil, invalidAd(fmt.Sprintf("entries_pool must be at least %d, enough for one purchase at the top level", top))
@@ -585,4 +593,40 @@ func (s *AdvertisingService) RunLoop(ctx context.Context, every time.Duration, e
 			}
 		}
 	}
+}
+
+// levelNames checks the admin's names for a package's levels. None given
+// keeps the default names; otherwise there is one per level, a blank one
+// becomes "Level n", and each is at most 40 characters and different.
+func levelNames(given []string, slots int) ([]string, error) {
+	any := false
+	for _, n := range given {
+		if strings.TrimSpace(n) != "" {
+			any = true
+		}
+	}
+	if !any {
+		return []string{}, nil
+	}
+	if len(given) != slots {
+		return nil, invalidAd("give one level name per product, or none")
+	}
+	out := make([]string, slots)
+	seen := map[string]bool{}
+	for i, n := range given {
+		n = strings.Join(strings.Fields(n), " ")
+		if n == "" {
+			n = fmt.Sprintf("Level %d", i+1)
+		}
+		if len([]rune(n)) > 40 {
+			return nil, invalidAd("each level name is at most 40 characters")
+		}
+		key := strings.ToLower(n)
+		if seen[key] {
+			return nil, invalidAd(fmt.Sprintf("two levels are both called %q", n))
+		}
+		seen[key] = true
+		out[i] = n
+	}
+	return out, nil
 }

@@ -165,17 +165,20 @@ const (
 // LevelEntries[0] is what a customer earns for buying the product in the
 // top priority level, and so on down.
 type AdPackage struct {
-	ID           uuid.UUID  `json:"id"`
-	PackageKey   uuid.UUID  `json:"package_key"`
-	Version      int        `json:"version"`
-	CountryID    uuid.UUID  `json:"country_id"`
-	CountryName  string     `json:"country_name,omitempty"`
-	Name         string     `json:"name"`
-	Description  *string    `json:"description"`
-	Currency     string     `json:"currency"`
-	PriceMinor   int64      `json:"price_minor"`
-	ProductSlots int        `json:"product_slots"`
-	LevelEntries []int32    `json:"level_entries"`
+	ID           uuid.UUID `json:"id"`
+	PackageKey   uuid.UUID `json:"package_key"`
+	Version      int       `json:"version"`
+	CountryID    uuid.UUID `json:"country_id"`
+	CountryName  string    `json:"country_name,omitempty"`
+	Name         string    `json:"name"`
+	Description  *string   `json:"description"`
+	Currency     string    `json:"currency"`
+	PriceMinor   int64     `json:"price_minor"`
+	ProductSlots int       `json:"product_slots"`
+	LevelEntries []int32   `json:"level_entries"`
+	// LevelNames are the admin's names for the levels, top first. Empty
+	// means the default names.
+	LevelNames   []string   `json:"level_names"`
 	EntriesPool  int        `json:"entries_pool"`
 	ValidityDays int        `json:"validity_days"`
 	Status       string     `json:"status"`
@@ -200,6 +203,7 @@ type AdPurchase struct {
 	PriceMinor        int64      `json:"price_minor"`
 	ProductSlots      int        `json:"product_slots"`
 	LevelEntries      []int32    `json:"level_entries"`
+	LevelNames        []string   `json:"level_names"`
 	EntriesPool       int        `json:"entries_pool"`
 	ValidityDays      int        `json:"validity_days"`
 	Status            string     `json:"status"`
