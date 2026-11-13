@@ -178,9 +178,11 @@ type AdPackage struct {
 	LevelEntries []int32   `json:"level_entries"`
 	// LevelNames are the admin's names for the levels, top first. Empty
 	// means the default names.
-	LevelNames   []string   `json:"level_names"`
-	EntriesPool  int        `json:"entries_pool"`
-	ValidityDays int        `json:"validity_days"`
+	LevelNames  []string `json:"level_names"`
+	EntriesPool int      `json:"entries_pool"`
+	// ValidityDays limits how long a purchase runs; nil runs until the
+	// budget of game entries is used up.
+	ValidityDays *int       `json:"validity_days"`
 	Status       string     `json:"status"`
 	PublishedAt  *time.Time `json:"published_at"`
 	RetiredAt    *time.Time `json:"retired_at"`
@@ -205,7 +207,7 @@ type AdPurchase struct {
 	LevelEntries      []int32    `json:"level_entries"`
 	LevelNames        []string   `json:"level_names"`
 	EntriesPool       int        `json:"entries_pool"`
-	ValidityDays      int        `json:"validity_days"`
+	ValidityDays      *int       `json:"validity_days"`
 	Status            string     `json:"status"`
 	EntriesUsed       int        `json:"entries_used"`
 	EntriesHeld       int        `json:"entries_held"`

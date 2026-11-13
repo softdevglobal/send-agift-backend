@@ -204,7 +204,7 @@ func (f *shopFixture) pkg(name string, priceMinor int64, levels []int, pool int)
 	f.t.Helper()
 	p, err := f.ads.CreatePackage(f.ctx, f.admin, AdPackageInput{
 		CountryID: f.country.String(), Name: name, Currency: "USD", PriceMinor: priceMinor,
-		LevelEntries: levels, EntriesPool: pool, ValidityDays: 30,
+		LevelEntries: levels, EntriesPool: pool,
 	})
 	if err != nil {
 		f.t.Fatalf("create package: %v", err)
@@ -267,9 +267,9 @@ func TestAdvertisingPackagesAndPromotion(t *testing.T) {
 	// Nonsense is refused: a lower level paying more, or a pool that cannot
 	// pay one top award.
 	for _, bad := range []AdPackageInput{
-		{CountryID: f.country.String(), Name: "x", Currency: "USD", PriceMinor: 1, LevelEntries: []int{1, 2}, EntriesPool: 10, ValidityDays: 30},
-		{CountryID: f.country.String(), Name: "x", Currency: "USD", PriceMinor: 1, LevelEntries: []int{5}, EntriesPool: 4, ValidityDays: 30},
-		{CountryID: f.country.String(), Name: "x", Currency: "USD", PriceMinor: 1, LevelEntries: nil, EntriesPool: 4, ValidityDays: 30},
+		{CountryID: f.country.String(), Name: "x", Currency: "USD", PriceMinor: 1, LevelEntries: []int{1, 2}, EntriesPool: 10},
+		{CountryID: f.country.String(), Name: "x", Currency: "USD", PriceMinor: 1, LevelEntries: []int{5}, EntriesPool: 4},
+		{CountryID: f.country.String(), Name: "x", Currency: "USD", PriceMinor: 1, LevelEntries: nil, EntriesPool: 4},
 	} {
 		if _, err := f.ads.CreatePackage(f.ctx, f.admin, bad); !errors.Is(err, ErrInvalidAdPackage) {
 			t.Fatalf("bad package accepted: %+v (%v)", bad, err)
@@ -279,7 +279,7 @@ func TestAdvertisingPackagesAndPromotion(t *testing.T) {
 	// A published version is frozen, in the service and in the database.
 	if _, err := f.ads.UpdatePackage(f.ctx, f.admin, fifty.ID, AdPackageInput{
 		CountryID: f.country.String(), Name: "Starter", Currency: "USD", PriceMinor: 1,
-		LevelEntries: []int{9, 9, 9}, EntriesPool: 30, ValidityDays: 30}); !errors.Is(err, ErrAdPackageState) {
+		LevelEntries: []int{9, 9, 9}, EntriesPool: 30}); !errors.Is(err, ErrAdPackageState) {
 		t.Fatalf("published package edited: %v", err)
 	}
 	if _, err := f.pool.Exec(f.ctx, `update ads.packages set price_minor = 1 where id = $1`, fifty.ID); err == nil {
@@ -290,7 +290,7 @@ func TestAdvertisingPackagesAndPromotion(t *testing.T) {
 	shop := f.shop(seller)
 	a, b, c, d := f.productIn(shop), f.productIn(shop), f.productIn(shop), f.productIn(shop)
 	bought := f.buy(seller, fifty)
-	if bought.Status != models.AdPurchaseActive || bought.ExpiresAt == nil || bought.EntriesPool != 30 {
+	if bought.Status != models.AdPurchaseActive || bought.ExpiresAt != nil || bought.EntriesPool != 30 {
 		t.Fatalf("purchase = %+v", bought)
 	}
 
@@ -325,7 +325,7 @@ func TestAdvertisingPackagesAndPromotion(t *testing.T) {
 	}
 	if _, err := f.ads.UpdatePackage(f.ctx, f.admin, v2.ID, AdPackageInput{
 		CountryID: f.country.String(), Name: "Starter", Currency: "USD", PriceMinor: 6000,
-		LevelEntries: []int{6, 4, 2}, EntriesPool: 60, ValidityDays: 30}); err != nil {
+		LevelEntries: []int{6, 4, 2}, EntriesPool: 60}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.ads.PackageAction(f.ctx, f.admin, v2.ID, "publish"); err != nil {
@@ -1153,7 +1153,7 @@ func TestAdLevelNames(t *testing.T) {
 	p, err := f.ads.CreatePackage(f.ctx, f.admin, AdPackageInput{
 		CountryID: f.country.String(), Name: "Named", Currency: "USD", PriceMinor: 1000,
 		LevelEntries: []int{3, 2, 1}, LevelNames: []string{" Spotlight ", "Featured", ""},
-		EntriesPool: 30, ValidityDays: 30,
+		EntriesPool: 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1163,7 +1163,7 @@ func TestAdLevelNames(t *testing.T) {
 	}
 	if _, err := f.ads.CreatePackage(f.ctx, f.admin, AdPackageInput{
 		CountryID: f.country.String(), Name: "Dupes", Currency: "USD", PriceMinor: 1000,
-		LevelEntries: []int{2, 1}, LevelNames: []string{"Top", "top"}, EntriesPool: 30, ValidityDays: 30,
+		LevelEntries: []int{2, 1}, LevelNames: []string{"Top", "top"}, EntriesPool: 30,
 	}); !errors.Is(err, ErrInvalidAdPackage) {
 		t.Fatalf("duplicate names were accepted: %v", err)
 	}
@@ -1179,5 +1179,12 @@ func TestAdLevelNames(t *testing.T) {
 	bought := f.buy(f.seller(), p)
 	if got := strings.Join(bought.LevelNames, "|"); got != "Spotlight|Featured|Level 3" {
 		t.Fatalf("purchase names %q", got)
+	}
+	// No days given: it runs until the budget is used, never by date.
+	if bought.ValidityDays != nil || bought.ExpiresAt != nil {
+		t.Fatalf("a package without days got a time limit: %v %v", bought.ValidityDays, bought.ExpiresAt)
+	}
+	if bought.Status != models.AdPurchaseActive {
+		t.Fatalf("status %s", bought.Status)
 	}
 }

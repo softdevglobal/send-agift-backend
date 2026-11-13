@@ -110,9 +110,11 @@ type AdPackageInput struct {
 	LevelEntries []int   `json:"level_entries"`
 	// LevelNames name the levels, top first, one per entry in LevelEntries.
 	// Leave it empty, or a name blank, for the default name.
-	LevelNames   []string `json:"level_names"`
-	EntriesPool  int      `json:"entries_pool"`
-	ValidityDays int      `json:"validity_days"`
+	LevelNames  []string `json:"level_names"`
+	EntriesPool int      `json:"entries_pool"`
+	// ValidityDays is optional: left out, the package runs until its budget
+	// of game entries is used up.
+	ValidityDays *int `json:"validity_days"`
 }
 
 func (in AdPackageInput) toModel() (*models.AdPackage, error) {
@@ -142,8 +144,8 @@ func (in AdPackageInput) toModel() (*models.AdPackage, error) {
 		return nil, invalidAd("price_minor must be positive")
 	case p.ProductSlots < 1 || p.ProductSlots > 20:
 		return nil, invalidAd("a package promotes 1 to 20 products: give level_entries one number per product")
-	case p.ValidityDays < 1 || p.ValidityDays > 365:
-		return nil, invalidAd("validity_days must be 1 to 365")
+	case p.ValidityDays != nil && (*p.ValidityDays < 1 || *p.ValidityDays > 365):
+		return nil, invalidAd("validity_days must be 1 to 365, or left out to run until the budget is used")
 	}
 	top := 0
 	for i, n := range in.LevelEntries {
@@ -364,7 +366,7 @@ func (s *AdvertisingService) Buy(ctx context.Context, sellerID string, in BuyInp
 	back := s.webURL + "/seller/advertising?purchase=" + p.ID.String()
 	cs, err := s.stripe.CreateCheckoutSession(ctx, CheckoutParams{
 		Lines: []CheckoutLine{{
-			Name:       fmt.Sprintf("%s advertising package: %d products, %d days", p.PackageName, p.ProductSlots, p.ValidityDays),
+			Name:       adCheckoutName(p),
 			UnitAmount: int(p.PriceMinor), Quantity: 1,
 		}},
 		Amount:        int(p.PriceMinor),
@@ -629,4 +631,12 @@ func levelNames(given []string, slots int) ([]string, error) {
 		out[i] = n
 	}
 	return out, nil
+}
+
+// adCheckoutName is the line on the Stripe page for a package purchase.
+func adCheckoutName(p *models.AdPurchase) string {
+	if p.ValidityDays != nil {
+		return fmt.Sprintf("%s advertising package: %d products, %d days", p.PackageName, p.ProductSlots, *p.ValidityDays)
+	}
+	return fmt.Sprintf("%s advertising package: %d products, %d game entries", p.PackageName, p.ProductSlots, p.EntriesPool)
 }

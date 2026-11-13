@@ -42,7 +42,7 @@ const productEntriesSQL = `coalesce((
 	from ads.promotions pr
 	inner join ads.purchases pu on pu.id = pr.purchase_id
 	where pr.product_id = p.id and pr.removed_at is null
-	  and pu.status = 'active' and pu.expires_at > now()
+	  and pu.status = 'active' and coalesce(pu.expires_at > now(), true)
 	  and pu.entries_pool - pu.entries_used - pu.entries_held >= pr.entries_per_purchase
 	  and (select enabled and stopped_at is null from entries.program)), 0)`
 
@@ -52,7 +52,7 @@ const productSponsoredSQL = `exists(
 	select 1 from ads.promotions pr
 	inner join ads.purchases pu on pu.id = pr.purchase_id
 	where pr.product_id = p.id and pr.removed_at is null
-	  and pu.status = 'active' and pu.expires_at > now())`
+	  and pu.status = 'active' and coalesce(pu.expires_at > now(), true))`
 
 // productSponsoredRankSQL orders promoted products first, top level first.
 // Products that are not promoted sort after them all.
@@ -60,7 +60,7 @@ const productSponsoredRankSQL = `coalesce((
 	select pr.level from ads.promotions pr
 	inner join ads.purchases pu on pu.id = pr.purchase_id
 	where pr.product_id = p.id and pr.removed_at is null
-	  and pu.status = 'active' and pu.expires_at > now()), 1000)`
+	  and pu.status = 'active' and coalesce(pu.expires_at > now(), true)), 1000)`
 
 type AdRepository struct {
 	db *pgxpool.Pool
@@ -646,7 +646,7 @@ func (r *AdRepository) SetPromotions(ctx context.Context, sellerID, purchaseID u
 		}
 		var live bool
 		if err := tx.QueryRow(ctx, `
-			select status = 'active' and expires_at > now() from ads.purchases where id = $1`, purchaseID).
+			select status = 'active' and coalesce(expires_at > now(), true) from ads.purchases where id = $1`, purchaseID).
 			Scan(&live); err != nil {
 			return err
 		}
@@ -757,7 +757,7 @@ func afterPackageUse(ctx context.Context, q querier, purchaseID uuid.UUID) error
 	)
 	if err := q.QueryRow(ctx, `
 		select seller_id, status, entries_pool, entries_used, entries_held, last_reminder_threshold,
-		       (select min(e) from unnest(level_entries) e), expires_at > now()
+		       (select min(e) from unnest(level_entries) e), coalesce(expires_at > now(), true)
 		from ads.purchases where id = $1 for update`, purchaseID).
 		Scan(&sellerID, &status, &pool, &used, &held, &last, &smallest, &stillRunning); err != nil {
 		return err

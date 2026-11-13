@@ -435,7 +435,7 @@ func livePromotionFor(ctx context.Context, q querier, productID uuid.UUID) (*liv
 		from ads.promotions pr
 		inner join ads.purchases pu on pu.id = pr.purchase_id
 		where pr.product_id = $1 and pr.removed_at is null
-		  and pu.status = 'active' and pu.expires_at > now()`, productID).
+		  and pu.status = 'active' and coalesce(pu.expires_at > now(), true)`, productID).
 		Scan(&p.id, &p.purchaseID, &p.entries)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -504,7 +504,7 @@ func offerFor(ctx context.Context, q querier, gate *models.EntryGate, customerID
 	var pool, used, held int
 	var live bool
 	if err = q.QueryRow(ctx, `
-		select entries_pool, entries_used, entries_held, status = 'active' and expires_at > now()
+		select entries_pool, entries_used, entries_held, status = 'active' and coalesce(expires_at > now(), true)
 		from ads.purchases where id = $1`+lock, promo.purchaseID).Scan(&pool, &used, &held, &live); err != nil {
 		return 0, nil, "", err
 	}
@@ -774,8 +774,8 @@ func settleCancelledEntries(ctx context.Context, q querier, orderID uuid.UUID) (
 		if _, err := q.Exec(ctx, `
 			update ads.purchases
 			set entries_used = greatest(entries_used - $2, 0),
-			    status = case when status = 'exhausted' and expires_at > now() then 'active' else status end,
-			    ended_at = case when status = 'exhausted' and expires_at > now() then null else ended_at end,
+			    status = case when status = 'exhausted' and coalesce(expires_at > now(), true) then 'active' else status end,
+			    ended_at = case when status = 'exhausted' and coalesce(expires_at > now(), true) then null else ended_at end,
 			    updated_at = now()
 			where id = $1`, l.purchase, l.entries); err != nil {
 			return released, reversed, err
