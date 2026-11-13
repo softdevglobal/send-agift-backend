@@ -81,6 +81,14 @@ func main() {
 	gameService := services.NewGameService(gameRepo)
 	competitionService := services.NewCompetitionService(competitionRepo, gameRepo, customers, countryCapabilities, countries, gameEntriesRepo)
 	gameService.UseCompetitions(competitionService)
+	// Competitions stay off for the marketplace launch unless
+	// COMPETITIONS_ENABLED=true. Off refuses discovery, play, official
+	// scores, publishing and resuming; claims, draws and settlements of
+	// existing records still run.
+	competitionService.SetCompetitionsEnabled(cfg.CompetitionsEnabled)
+	if !cfg.CompetitionsEnabled {
+		log.Printf("🏁 Competitions: off (COMPETITIONS_ENABLED is not true)")
+	}
 	// Every play costs the game entries an admin set for that game
 	// (competition.games.entry_cost), taken on the server when it starts.
 	gameService.ChargeForPlays(gameEntriesRepo)
@@ -303,13 +311,25 @@ func main() {
 		fmt.Println("🎁 Free gift program: on")
 	}
 
+	routes.AllowOrigins(cfg.CORSAllowedOrigins)
 	router := routes.New(authHandler, adminHandler, countryHandler, countryCapabilityHandler, customerHandler, orderHandler, shopsHandler, sellerHandler, sellerOrderHandler, productHandler, reelHandler, reelSocialHandler, productReviewHandler, messagingHandler, gameHandler, competitionHandler, gameEntriesHandler, mediaHandler, placesHandler, shippingHandler, availabilityHandler, pushHandler, socialAuthHandler, loginCodeHandler, giftReviewHandler, emailChangeHandler, sellerEmailChangeHandler, stripeHandler, freeGiftHandler, competitionPointsHandler, cfg.JWTSecret)
 
 	addr := ":" + cfg.AppPort                                      // create a new address for the server
 	fmt.Printf("✅ Database connected: %s\n", cfg.DBName)           // print the database name
 	fmt.Printf("🚀 Server listening on http://localhost%s\n", addr) // print the server address
 
-	if err := http.ListenAndServe(addr, router); err != nil { // start the server
+	// Deliberate timeouts, so slow or stalled clients cannot hold the server.
+	// There is no overall write timeout: live competition and message
+	// streams (server-sent events) stay open for as long as they are read.
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if err := server.ListenAndServe(); err != nil { // start the server
 		log.Fatalf("server error: %v", err)
-	} // if the server fails to start, log the error
+	}
 }

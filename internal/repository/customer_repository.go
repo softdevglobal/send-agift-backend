@@ -163,46 +163,6 @@ func (r *CustomerRepository) CustomerIDByVerifiedPhone(ctx context.Context, phon
 	return id, err
 }
 
-// PhoneAccount is a live customer and a phone saved on that account or on a
-// recipient whose email is the same account.
-type PhoneAccount struct {
-	CustomerID string
-	Phone      string
-}
-
-// AccountsByPhoneTail returns live accounts whose own phone, or a recipient
-// phone with the same email, shares the last 9 digits of e164. The caller
-// still checks the full number.
-func (r *CustomerRepository) AccountsByPhoneTail(ctx context.Context, e164 string) ([]PhoneAccount, error) {
-	rows, err := r.db.Query(ctx, `
-		select c.id::text, c.phone
-		from customer.customers c
-		where c.deleted_at is null and c.status = 'active'
-		  and c.phone is not null and c.phone <> ''
-		  and right(regexp_replace(c.phone, '\D', '', 'g'), 9) = right(regexp_replace($1, '\D', '', 'g'), 9)
-		union
-		select c.id::text, r.phone
-		from customer.recipients r
-		join customer.customers c on c.email = r.email
-		where c.deleted_at is null and c.status = 'active'
-		  and r.phone is not null and r.phone <> ''
-		  and r.email is not null
-		  and right(regexp_replace(r.phone, '\D', '', 'g'), 9) = right(regexp_replace($1, '\D', '', 'g'), 9)`, e164)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []PhoneAccount{}
-	for rows.Next() {
-		var a PhoneAccount
-		if err := rows.Scan(&a.CustomerID, &a.Phone); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
-
 // SetVerifiedPhone stores a number the customer proved they hold. One that
 // another live account verified first is ErrCustomerDuplicate.
 func (r *CustomerRepository) SetVerifiedPhone(ctx context.Context, id, display, e164 string) error {

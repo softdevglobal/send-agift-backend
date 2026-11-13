@@ -28,6 +28,7 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.IdempotencyKey = r.Header.Get("Idempotency-Key")
 	details, err := h.orders.Create(r.Context(), customerID, req)
 	if err != nil {
 		h.writeOrderError(w, err, "could not create order")

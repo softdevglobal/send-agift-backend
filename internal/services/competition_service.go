@@ -102,6 +102,31 @@ func refuse(code, message string, details map[string]any) *PlayRefusal {
 	return &PlayRefusal{Code: code, Message: message, Details: details}
 }
 
+// ErrCompetitionsDisabled is any new competition activity while the launch
+// switch is off. Existing obligations (claims, draws, settlements, refunds)
+// are not refused.
+var ErrCompetitionsDisabled = errors.New("Competitions are not available at this time.")
+
+// CompetitionsPolicyVersion identifies the competitions launch policy the
+// capability response describes. Raise it whenever its meaning changes.
+const CompetitionsPolicyVersion = 1
+
+// SetCompetitionsEnabled sets the launch-wide competitions switch.
+func (s *CompetitionService) SetCompetitionsEnabled(on bool) { s.open = on }
+
+// CompetitionsEnabled reports the launch-wide competitions switch.
+func (s *CompetitionService) CompetitionsEnabled() bool { return s.open }
+
+// requireOpen refuses new competition activity while the switch is off. It
+// runs before anything is read or written, so no hold, debit, entry,
+// session, score or prize change happens.
+func (s *CompetitionService) requireOpen() error {
+	if !s.open {
+		return ErrCompetitionsDisabled
+	}
+	return nil
+}
+
 // AdminActor is who performed an admin action, for the audit log.
 type AdminActor struct {
 	ID        uuid.UUID
@@ -143,7 +168,10 @@ type CompetitionService struct {
 	capabilities *repository.CountryCapabilityRepository
 	countries    *repository.CountryRepository
 	entries      *repository.GameEntriesRepository
-	now          func() time.Time
+	// open is the launch-wide competitions switch. False (the default)
+	// refuses discovery, play, official scores, publishing and resuming.
+	open bool
+	now  func() time.Time
 }
 
 func NewCompetitionService(
@@ -368,6 +396,9 @@ func (s *CompetitionService) me(ctx context.Context, c *models.Competition, cust
 // of reach. Signed-in customers see the ones open in their country with their attempts and eligibility;
 // guests see everything that has been published.
 func (s *CompetitionService) ListCompetitions(ctx context.Context, actor SocialActor) ([]models.CompetitionView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	if err := s.repo.SyncStatuses(ctx); err != nil {
 		return nil, err
 	}
@@ -439,6 +470,9 @@ func unclaimedWin(me *models.CompetitionMe) bool {
 // GetCompetition returns one competition with its rules and disclosures, the
 // caller's position when signed in, and published winners once finalised.
 func (s *CompetitionService) GetCompetition(ctx context.Context, id uuid.UUID, actor SocialActor) (*models.CompetitionView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	c, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
@@ -523,6 +557,9 @@ func (s *CompetitionService) GetCompetition(ctx context.Context, id uuid.UUID, a
 // country, score, time and status, plus the caller's own row even when they
 // rank outside the top.
 func (s *CompetitionService) Leaderboard(ctx context.Context, id uuid.UUID, actor SocialActor, limit int) (*models.CompetitionLeaderboardView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	c, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
@@ -613,6 +650,9 @@ const maxClientRequestID = 128
 // A refusal is a *PlayRefusal carrying the spec's machine code; nothing is
 // charged for any refusal.
 func (s *CompetitionService) Play(ctx context.Context, id uuid.UUID, actor SocialActor, req PlayRequest) (*models.AttemptStartView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	customerID, err := parseCustomer(actor)
 	if err != nil {
 		return nil, err
@@ -762,6 +802,9 @@ func (s *CompetitionService) StartAttempt(ctx context.Context, id uuid.UUID, act
 // SubmitOfficial scores an official attempt. GameService hands official
 // sessions here after checking the session belongs to the submitter.
 func (s *CompetitionService) SubmitOfficial(ctx context.Context, session *models.GameSession, in SubmitScoreInput) (*models.GameScoreView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	if session.CustomerID == nil || session.CompetitionID == nil {
 		return nil, ErrGameSessionNotFound
 	}
@@ -1541,6 +1584,9 @@ func competitionAnnouncement(c *models.Competition) models.PushMessage {
 // ScheduleCompetition publishes a draft once every gate passes: every
 // country enabled, rules published, prize reserve funded and covering the prize.
 func (s *CompetitionService) ScheduleCompetition(ctx context.Context, admin AdminActor, id uuid.UUID) (*models.AdminCompetitionView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	c, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err

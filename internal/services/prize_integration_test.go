@@ -103,6 +103,7 @@ func newPrizeFixture(t *testing.T) *prizeFixture {
 		repository.NewCustomerRepository(pool), repository.NewCountryCapabilityRepository(pool),
 		repository.NewCountryRepository(pool), pointsRepo)
 	f.points = NewGameEntriesService(pointsRepo, 0)
+	f.svc.SetCompetitionsEnabled(true) // these tests cover the enabled path
 	return f
 }
 

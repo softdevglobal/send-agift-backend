@@ -38,6 +38,9 @@ import (
 // points (spec §2, AC-13). Every one is audited, and the ones that move money
 // also need a fresh password confirmation (X-Reauth-Token).
 func RegisterCompetitionRoutes(r chi.Router, c *handlers.CompetitionHandler, jwtSecret string) {
+	// What clients may show (competitions on or off).
+	r.Get("/capabilities", c.Capabilities)
+
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.OptionalCustomerOrGuest(jwtSecret, false))
 		r.Get("/competitions", c.List)

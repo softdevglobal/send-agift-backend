@@ -199,6 +199,8 @@ type SocialCompleteInput struct {
 	Phone        string `json:"phone"`
 	CustomerType string `json:"customer_type"`
 	DisplayName  string `json:"display_name"`
+	// TermsVersion is the customer terms version the sign-up screen showed.
+	TermsVersion string `json:"terms_version"`
 }
 
 // Complete creates the customer account for a verified social sign-up and
@@ -278,8 +280,13 @@ func (s *SocialAuthService) Complete(ctx context.Context, in SocialCompleteInput
 			return nil, ErrCustomerConflict
 		}
 		customer = existing
-	} else if err := s.email.SendCustomerWelcome(ctx, customer); err != nil {
-		log.Printf("customer %s welcome email: %v", customer.ID, err)
+	} else {
+		if err := s.customers.RecordTermsAcceptance(ctx, customer.ID, in.TermsVersion, countryID); err != nil {
+			log.Printf("customer %s terms acceptance: %v", customer.ID, err)
+		}
+		if err := s.email.SendCustomerWelcome(ctx, customer); err != nil {
+			log.Printf("customer %s welcome email: %v", customer.ID, err)
+		}
 	}
 	if err := s.customers.LinkSocialIdentity(ctx, customer.ID, profile.Provider, profile.Subject, profile.Email); err != nil {
 		return nil, err

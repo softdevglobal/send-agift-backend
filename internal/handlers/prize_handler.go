@@ -98,6 +98,10 @@ func (h *CompetitionHandler) Play(w http.ResponseWriter, r *http.Request) {
 // and details, and anything unexpected is PLAY_TRANSACTION_FAILED. The
 // transaction rolled back, so nothing was charged.
 func (h *CompetitionHandler) writePlayError(w http.ResponseWriter, err error) {
+	if errors.Is(err, services.ErrCompetitionsDisabled) {
+		writeCompetitionsDisabled(w)
+		return
+	}
 	var refusal *services.PlayRefusal
 	if !errors.As(err, &refusal) {
 		switch {

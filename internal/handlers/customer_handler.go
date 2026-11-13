@@ -33,6 +33,8 @@ type customerRegisterRequest struct {
 	ImageURL     *string                 `json:"image_url"`
 	SignupToken  string                  `json:"signup_token"`
 	StateID      string                  `json:"state_id"`
+	// TermsVersion is the customer terms version the sign-up screen showed.
+	TermsVersion string `json:"terms_version"`
 }
 
 type customerUpdateRequest struct {
@@ -64,6 +66,7 @@ func (h *CustomerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Addresses:    req.Addresses,
 		ImageURL:     req.ImageURL,
 		SignupToken:  req.SignupToken,
+		TermsVersion: req.TermsVersion,
 	})
 	if err != nil {
 		h.writeCustomerError(w, err, "could not register customer")

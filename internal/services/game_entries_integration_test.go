@@ -894,3 +894,156 @@ func TestStateAtSignupAndStateCompetitions(t *testing.T) {
 		t.Fatalf("a play started during the global stop")
 	}
 }
+
+// With the launch switch off (the default), no competition can be found,
+// played, scored, published or resumed, and nothing is written; a claim on
+// an existing win is not refused by the switch.
+func TestCompetitionsSwitchedOff(t *testing.T) {
+	f := newPrizeFixture(t)
+	round := f.liveRound(roundOpts{start: 1000, cost: 1})
+	player := f.customer(50)
+	f.svc.SetCompetitionsEnabled(false)
+	actor := SocialActor{CustomerID: player.String()}
+
+	if _, err := f.svc.ListCompetitions(f.ctx, actor); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("list: %v", err)
+	}
+	if _, err := f.svc.GetCompetition(f.ctx, round.ID, actor); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("get: %v", err)
+	}
+	if _, err := f.svc.Leaderboard(f.ctx, round.ID, actor, 10); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("leaderboard: %v", err)
+	}
+	if _, _, err := f.svc.LiveStart(f.ctx, round.ID); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("live events: %v", err)
+	}
+	if _, err := f.play(round, player, uuid.NewString()); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("play: %v", err)
+	}
+	if _, err := f.svc.StartAttempt(f.ctx, round.ID, actor, ""); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("legacy attempts alias: %v", err)
+	}
+	session := &models.GameSession{ID: uuid.New(), CustomerID: &player, CompetitionID: &round.ID}
+	if _, err := f.svc.SubmitOfficial(f.ctx, session, SubmitScoreInput{}); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("official score: %v", err)
+	}
+	if _, err := f.svc.ScheduleCompetition(f.ctx, f.admin, round.ID); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("publish: %v", err)
+	}
+	if _, err := f.svc.ResumeCompetition(f.ctx, f.admin, round.ID); !errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("resume: %v", err)
+	}
+	if got := f.balance(player); got != 50 {
+		t.Fatalf("a refused play moved entries: balance %d", got)
+	}
+	if n := f.count(`select count(*) from competition.competition_attempts where competition_id = $1`, round.ID); n != 0 {
+		t.Fatalf("%d attempts written while off", n)
+	}
+	if _, err := f.svc.ClaimPrize(f.ctx, round.ID, actor, ClaimPrizeInput{}); errors.Is(err, ErrCompetitionsDisabled) {
+		t.Fatalf("a claim on an existing win must not be refused by the switch")
+	}
+}
+
+// A retried order with the same Idempotency-Key is the same order: one row,
+// one promise of entries, whatever the number of retries.
+func TestOrderRetryIsIdempotent(t *testing.T) {
+	f := newShopFixture(t)
+	customer := f.customer("")
+	product := f.product(f.seller())
+	rid := f.recipient(customer).String()
+	in := OrderCreateInput{
+		CountryID: f.country.String(), DeliveryDate: time.Now().AddDate(0, 0, 3).Format("2006-01-02"),
+		RecipientID: &rid, Items: []OrderItemInput{{ProductID: product.String(), Quantity: 1}},
+		IdempotencyKey: "checkout-" + uuid.NewString(),
+	}
+	first, err := f.orders.Create(f.ctx, customer.String(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.orders.Create(f.ctx, customer.String(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != first.ID {
+		t.Fatalf("a retry made a second order")
+	}
+	if n := f.count(`select count(*) from marketplace.orders where customer_id = $1`, customer); n != 1 {
+		t.Fatalf("%d orders after a retry", n)
+	}
+}
+
+// Signing up keeps the exact terms version the screen showed, and an older
+// client that sends none is recorded as such rather than refused.
+func TestRegistrationRecordsTermsVersion(t *testing.T) {
+	f := newShopFixture(t)
+	countries := repository.NewCountryRepository(f.pool)
+	customers := NewCustomerService(repository.NewCustomerRepository(f.pool), countries,
+		NewCountryCapabilityService(repository.NewCountryCapabilityRepository(f.pool), countries), nil, "secret", 0)
+	register := func(version string) uuid.UUID {
+		phone := "+9477" + uuid.NewString()[:7]
+		details, err := customers.Register(f.ctx, CustomerRegisterInput{
+			CountryID: f.country.String(), Email: uuid.NewString() + "@terms.test",
+			Password: "a-good-password", Phone: &phone, DateOfBirth: "1990-01-01",
+			TermsVersion: version,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return details.Customer.ID
+	}
+	for want, sent := range map[string]string{"customer-terms-2026-11": " customer-terms-2026-11 ", "unspecified": ""} {
+		id := register(sent)
+		var got string
+		f.scan(&got, `select version from core.terms_acceptances
+			where actor_type = 'customer' and actor_id = $1 and document = 'customer_terms'`, id)
+		if got != want {
+			t.Fatalf("recorded %q, want %q", got, want)
+		}
+	}
+}
+
+// Checkout ships to the address that was picked, not the recipient's
+// default, and will not take an address belonging to someone else.
+func TestOrderShipsToThePickedAddress(t *testing.T) {
+	f := newShopFixture(t)
+	customer := f.customer("")
+	product := f.product(f.seller())
+	recipient := f.recipient(customer)
+	var office uuid.UUID
+	f.scan(&office, `insert into customer.recipient_addresses
+		(recipient_id, country_id, line1, city, postal_code, latitude, longitude, is_default)
+		values ($1, $2, '42 Office Road', 'Colombo', '00300', 6.9275, 79.8615, false) returning id`,
+		recipient, f.country)
+	place := func(address string) (*models.OrderDetails, error) {
+		rid := recipient.String()
+		return f.orders.Create(f.ctx, customer.String(), OrderCreateInput{
+			CountryID: f.country.String(), DeliveryDate: time.Now().AddDate(0, 0, 3).Format("2006-01-02"),
+			RecipientID: &rid, RecipientAddressID: &address,
+			Items: []OrderItemInput{{ProductID: product.String(), Quantity: 1}},
+		})
+	}
+	order, err := place(office.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored uuid.UUID
+	f.scan(&stored, `select recipient_address_id from marketplace.orders where id = $1`, order.Order.ID)
+	if stored != office {
+		t.Fatalf("order kept %s, want the office %s", stored, office)
+	}
+	var city string
+	f.scan(&city, `select ra.line1 from marketplace.orders o
+		join customer.recipients r on r.id = o.recipient_id
+		join customer.recipient_addresses ra on ra.id = coalesce(o.recipient_address_id, r.default_address_id)
+		where o.id = $1`, order.Order.ID)
+	if city != "42 Office Road" {
+		t.Fatalf("ships to %q", city)
+	}
+
+	stranger := f.recipient(f.customer(""))
+	var foreign uuid.UUID
+	f.scan(&foreign, `select id from customer.recipient_addresses where recipient_id = $1`, stranger)
+	if _, err := place(foreign.String()); !errors.Is(err, ErrInvalidOrder) {
+		t.Fatalf("someone else's address: %v", err)
+	}
+}

@@ -121,6 +121,10 @@ func (h *GameHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
 
 // writeError maps service errors onto HTTP status codes.
 func (h *GameHandler) writeError(w http.ResponseWriter, err error, fallback string) {
+	if errors.Is(err, services.ErrCompetitionsDisabled) {
+		writeCompetitionsDisabled(w)
+		return
+	}
 	// A paid play turned away: nothing was charged, and the body says why
 	// and what the player needs (entries_required, entries_balance).
 	var refusal *services.PlayRefusal

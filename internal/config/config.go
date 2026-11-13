@@ -66,6 +66,14 @@ type Config struct {
 	ZeptoMailAPIURL string
 	// AppWebURL is the customer website, for links and images in emails.
 	AppWebURL string
+	// CORSAllowedOrigins are the exact browser origins the API answers
+	// (CORS_ALLOWED_ORIGINS, comma separated). Defaults to the website and
+	// its www. form.
+	CORSAllowedOrigins []string
+	// CompetitionsEnabled is the launch-wide switch for competitions
+	// (COMPETITIONS_ENABLED). Off unless exactly "true": a missing or
+	// unreadable value never turns competitions on.
+	CompetitionsEnabled bool
 
 	// Customer sign-in with Google and Facebook. Without an ID the provider's
 	// button is refused with 503. GoogleClientIDs lists every OAuth client
@@ -144,6 +152,7 @@ func Load() (*Config, error) {
 		ZeptoMailFromName:    envOr("ZEPTOMAIL_SYSTEM_FROM_NAME", "SendAGift"),
 		ZeptoMailAPIURL:      envOr("ZEPTOMAIL_API_URL", "https://api.zeptomail.com/v1.1/email"),
 		AppWebURL:            strings.TrimRight(envOr("APP_WEB_URL", "http://localhost:5173"), "/"),
+		CompetitionsEnabled:  strings.TrimSpace(os.Getenv("COMPETITIONS_ENABLED")) == "true",
 
 		GoogleClientIDs:    listEnv("GOOGLE_CLIENT_ID", "GOOGLE_EXTRA_CLIENT_IDS"),
 		AppleClientIDs:     listEnv("APPLE_CLIENT_IDS"),
@@ -196,6 +205,8 @@ func Load() (*Config, error) {
 	if cfg.GoogleMapsKey == "" {
 		return nil, fmt.Errorf("GOOGLE_MAPS_API_KEY is required")
 	}
+
+	cfg.CORSAllowedOrigins = corsOrigins(os.Getenv("CORS_ALLOWED_ORIGINS"), cfg.AppWebURL)
 
 	return cfg, nil // return the configuration
 }
@@ -265,4 +276,28 @@ func wholeOr(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// corsOrigins is the explicit list, or the website with and without www.
+// plus the local development server when the website is local.
+func corsOrigins(raw, webURL string) []string {
+	var out []string
+	for _, o := range strings.Split(raw, ",") {
+		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {
+			out = append(out, o)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	out = []string{webURL}
+	if strings.Contains(webURL, "://www.") {
+		out = append(out, strings.Replace(webURL, "://www.", "://", 1))
+	} else if strings.Contains(webURL, "://") && !strings.Contains(webURL, "localhost") {
+		out = append(out, strings.Replace(webURL, "://", "://www.", 1))
+	}
+	if strings.Contains(webURL, "localhost") || strings.Contains(webURL, "127.0.0.1") {
+		out = append(out, "http://localhost:5173", "http://127.0.0.1:5173")
+	}
+	return out
 }

@@ -128,15 +128,22 @@ type OrderShippingQuoteInput struct {
 }
 
 type OrderCreateInput struct {
-	RecipientID     *string                   `json:"recipient_id"`
-	CountryID       string                    `json:"country_id"`
-	CustomerType    string                    `json:"customer_type"`
-	DeliveryDate    string                    `json:"delivery_date"`
-	GiftMessage     *string                   `json:"gift_message"`
-	MediaGreetingID *string                   `json:"media_greeting_id"`
-	DeliveryAmount  *int                      `json:"delivery_amount"`
-	Items           []OrderItemInput          `json:"items"`
-	ShippingQuotes  []OrderShippingQuoteInput `json:"shipping_quotes"`
+	RecipientID *string `json:"recipient_id"`
+	// RecipientAddressID is the recipient's address picked at checkout, the
+	// same one the delivery was quoted for. Blank uses their default.
+	RecipientAddressID *string                   `json:"recipient_address_id"`
+	CountryID          string                    `json:"country_id"`
+	CustomerType       string                    `json:"customer_type"`
+	DeliveryDate       string                    `json:"delivery_date"`
+	GiftMessage        *string                   `json:"gift_message"`
+	MediaGreetingID    *string                   `json:"media_greeting_id"`
+	DeliveryAmount     *int                      `json:"delivery_amount"`
+	Items              []OrderItemInput          `json:"items"`
+	ShippingQuotes     []OrderShippingQuoteInput `json:"shipping_quotes"`
+	// IdempotencyKey makes a retried request the same order: the same key
+	// from the same customer returns the order already placed. Sent as the
+	// Idempotency-Key header.
+	IdempotencyKey string `json:"-"`
 }
 
 func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCreateInput) (*models.OrderDetails, error) {
@@ -186,6 +193,17 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 			return nil, err
 		}
 		recipientID = &rec.ID
+	}
+	var recipientAddressID *uuid.UUID
+	if in.RecipientAddressID != nil && strings.TrimSpace(*in.RecipientAddressID) != "" {
+		if recipientID == nil {
+			return nil, fmt.Errorf("%w: a delivery address needs its recipient", ErrInvalidOrder)
+		}
+		id, err := uuid.Parse(strings.TrimSpace(*in.RecipientAddressID))
+		if err != nil {
+			return nil, ErrInvalidOrder
+		}
+		recipientAddressID = &id
 	}
 
 	var mediaGreetingID *uuid.UUID
@@ -258,7 +276,7 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	}
 
 	// Every shop is priced from its delivery zones. Client amounts are ignored.
-	sellerDeliveries, err := s.priceShopDeliveries(ctx, customerID, recipientID, shopsInOrder, currency)
+	sellerDeliveries, err := s.priceShopDeliveries(ctx, customerID, recipientID, recipientAddressID, shopsInOrder, currency)
 	if err != nil {
 		return nil, err
 	}
@@ -285,19 +303,20 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 	memberDiscount := applyMemberDiscount(items, memberBPS)
 
 	order := &models.Order{
-		OrderNumber:     newOrderNumber(),
-		CustomerID:      cid,
-		RecipientID:     recipientID,
-		CountryID:       countryID,
-		CustomerType:    customerType,
-		DeliveryDate:    *deliveryDate,
-		Status:          "pending_payment",
-		SubtotalAmount:  subtotal,
-		DeliveryAmount:  deliveryAmount,
-		TotalAmount:     subtotal + deliveryAmount - memberDiscount,
-		Currency:        currency,
-		GiftMessage:     in.GiftMessage,
-		MediaGreetingID: mediaGreetingID,
+		OrderNumber:        newOrderNumber(),
+		CustomerID:         cid,
+		RecipientID:        recipientID,
+		RecipientAddressID: recipientAddressID,
+		CountryID:          countryID,
+		CustomerType:       customerType,
+		DeliveryDate:       *deliveryDate,
+		Status:             "pending_payment",
+		SubtotalAmount:     subtotal,
+		DeliveryAmount:     deliveryAmount,
+		TotalAmount:        subtotal + deliveryAmount - memberDiscount,
+		Currency:           currency,
+		GiftMessage:        in.GiftMessage,
+		MediaGreetingID:    mediaGreetingID,
 	}
 	if memberDiscount > 0 {
 		order.MemberDiscountAmount = memberDiscount
@@ -305,7 +324,24 @@ func (s *OrderService) Create(ctx context.Context, customerID string, in OrderCr
 		order.MemberPaidPeriodID = &memberPeriod
 	}
 
+	if key := strings.TrimSpace(in.IdempotencyKey); key != "" {
+		if len(key) > 128 {
+			return nil, ErrInvalidOrder
+		}
+		order.IdempotencyKey = &key
+		// A retry of an order already placed returns that order.
+		if existing, err := s.orders.OrderIDByIdempotencyKey(ctx, customerID, key); err == nil {
+			return s.Get(ctx, customerID, existing)
+		}
+	}
+
 	err = s.orders.Create(ctx, order, items, deliveries)
+	if errors.Is(err, repository.ErrOrderIdempotencyDuplicate) && order.IdempotencyKey != nil {
+		// Placed meanwhile by a concurrent retry: return that one.
+		if existing, err := s.orders.OrderIDByIdempotencyKey(ctx, customerID, *order.IdempotencyKey); err == nil {
+			return s.Get(ctx, customerID, existing)
+		}
+	}
 	if errors.Is(err, repository.ErrOrderDuplicate) {
 		order.OrderNumber = newOrderNumber()
 		err = s.orders.Create(ctx, order, items, deliveries)
@@ -385,6 +421,7 @@ func (s *OrderService) priceShopDeliveries(
 	ctx context.Context,
 	customerID string,
 	recipientID *uuid.UUID,
+	recipientAddressID *uuid.UUID,
 	shopsInOrder map[string]uuid.UUID,
 	currency string,
 ) (map[string]*SellerDeliveryOption, error) {
@@ -403,8 +440,15 @@ func (s *OrderService) priceShopDeliveries(
 		}
 		shopIDs = append(shopIDs, sid)
 	}
-	to, err := s.shipments.ShipToForRecipient(ctx, customerID, recipientID.String())
+	addressID := ""
+	if recipientAddressID != nil {
+		addressID = recipientAddressID.String()
+	}
+	to, err := s.shipments.ShipToForRecipient(ctx, customerID, recipientID.String(), addressID)
 	if err != nil {
+		if errors.Is(err, repository.ErrShipmentNotFound) {
+			return nil, fmt.Errorf("%w: that delivery address is not one of this recipient's", ErrInvalidOrder)
+		}
 		return nil, err
 	}
 	froms, err := s.shipments.ShipFromForShops(ctx, shopIDs)

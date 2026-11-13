@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"strings"
 	// Standard library for HTTP handling
 	"encoding/json"
 	"net/http"
@@ -24,6 +25,51 @@ var BuildSHA = "dev"
 // New builds the root HTTP router and mounts all route groups.
 // This function takes all the handlers and returns the configured HTTP router.
 // Parameters: handler instances for different features, and JWT secret for authentication
+// allowedOrigins are the browser origins the API answers. Set from
+// configuration before New is called; the default suits local development.
+var allowedOrigins = []string{"http://localhost:5173", "http://127.0.0.1:5173"}
+
+// AllowOrigins sets the exact origins (scheme://host[:port]) the API
+// answers for browsers. Wildcards are not accepted.
+func AllowOrigins(origins []string) {
+	var out []string
+	for _, o := range origins {
+		o = strings.TrimRight(strings.TrimSpace(o), "/")
+		if o != "" && !strings.Contains(o, "*") {
+			out = append(out, o)
+		}
+	}
+	if len(out) > 0 {
+		allowedOrigins = out
+	}
+}
+
+// securityHeaders stops browsers sniffing types, framing API responses or
+// leaking the URL as a referrer.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxBodyBytes caps a request body. Files go straight to S3 on presigned
+// URLs, so the API only ever reads JSON and webhooks, all far below this.
+const maxBodyBytes = 4 << 20
+
+// limitBody stops one request tying up memory with an endless body.
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func New(
 	// Handler instance that manages authentication logic (login, register, etc)
 	auth *handlers.AuthHandler,
@@ -95,14 +141,20 @@ func New(
 
 	// CORS: needed for browser frontends (React/Vite on another port).
 	// Postman / curl do not use CORS. They already work without this.
+	// Only the site's own origins are allowed, and without credentials: the
+	// website sends a bearer token, never cookies, so no other site needs
+	// its requests answered. The mobile app does not use CORS.
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Bootstrap-Secret", "X-Guest-Token", "Idempotency-Key", "X-App-Platform", "X-Device-Id", "X-Reauth-Token"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+	// Basic browser protections on every API response.
+	r.Use(securityHeaders)
+	r.Use(limitBody)
 
 	// Middleware 1: RequestID - adds a unique ID to each request
 	// Useful for tracking requests through logs

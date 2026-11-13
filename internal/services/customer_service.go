@@ -96,6 +96,7 @@ type CustomerRegisterInput struct {
 	Addresses    []AddressInput // Addresses for the customer
 	ImageURL     *string
 	SignupToken  string // from a verified sign-in code; marks the phone or email verified
+	TermsVersion string // customer terms version shown at sign-up; blank from older clients
 }
 
 type CustomerUpdateInput struct {
@@ -232,6 +233,11 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 			return nil, ErrCustomerConflict
 		}
 		return nil, err
+	}
+	// Signing up is agreeing to the terms on that screen. A failure here is
+	// logged rather than undoing an account that already exists.
+	if err := s.customers.RecordTermsAcceptance(ctx, customer.ID, in.TermsVersion, countryID); err != nil {
+		log.Printf("customer %s terms acceptance: %v", customer.ID, err)
 	}
 	switch proven {
 	case ChannelEmail:

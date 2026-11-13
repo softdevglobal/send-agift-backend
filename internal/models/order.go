@@ -8,17 +8,20 @@ import (
 
 // Order maps to marketplace.orders. One checkout, one header row.
 type Order struct {
-	ID             uuid.UUID  `json:"id"`
-	OrderNumber    string     `json:"order_number"`
-	CustomerID     uuid.UUID  `json:"customer_id"`
-	RecipientID    *uuid.UUID `json:"recipient_id,omitempty"`
-	CountryID      uuid.UUID  `json:"country_id"`
-	CustomerType   string     `json:"customer_type"`
-	DeliveryDate   time.Time  `json:"delivery_date"`
-	Status         string     `json:"status"`
-	SubtotalAmount int        `json:"subtotal_amount"`
-	DeliveryAmount int        `json:"delivery_amount"`
-	TotalAmount    int        `json:"total_amount"`
+	ID          uuid.UUID  `json:"id"`
+	OrderNumber string     `json:"order_number"`
+	CustomerID  uuid.UUID  `json:"customer_id"`
+	RecipientID *uuid.UUID `json:"recipient_id,omitempty"`
+	// RecipientAddressID is the address picked at checkout; nil means the
+	// recipient's default (and every order placed before it was kept).
+	RecipientAddressID *uuid.UUID `json:"recipient_address_id,omitempty"`
+	CountryID          uuid.UUID  `json:"country_id"`
+	CustomerType       string     `json:"customer_type"`
+	DeliveryDate       time.Time  `json:"delivery_date"`
+	Status             string     `json:"status"`
+	SubtotalAmount     int        `json:"subtotal_amount"`
+	DeliveryAmount     int        `json:"delivery_amount"`
+	TotalAmount        int        `json:"total_amount"`
 	// MemberDiscountAmount is what a member saved on the items, funded by
 	// SendAGift. TotalAmount is already net of it: subtotal + delivery -
 	// discount. Line prices stay the seller's list prices.

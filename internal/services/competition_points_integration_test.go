@@ -96,6 +96,7 @@ func newCPFixture(t *testing.T, iso string) *cpFixture {
 	f.comps = NewCompetitionService(repository.NewCompetitionRepository(pool), repository.NewGameRepository(pool),
 		repository.NewCustomerRepository(pool), repository.NewCountryCapabilityRepository(pool),
 		repository.NewCountryRepository(pool), pointsRepo)
+	f.comps.SetCompetitionsEnabled(true)
 	f.cp = NewCompetitionPointsService(f.repo, f.comps, nil, CompetitionPointsConfig{
 		WebURL: "http://localhost:5173", TestPayments: true,
 	})

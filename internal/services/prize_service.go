@@ -44,6 +44,9 @@ func (s *CompetitionService) PauseCompetition(ctx context.Context, admin AdminAc
 
 // ResumeCompetition reopens a paused round before its end time.
 func (s *CompetitionService) ResumeCompetition(ctx context.Context, admin AdminActor, id uuid.UUID) (*models.AdminCompetitionView, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
 	return s.lifecycle(ctx, admin, id, "competition.resumed", s.repo.Resume)
 }
 
@@ -468,6 +471,9 @@ type LiveSnapshot struct {
 // LiveStart returns the round's current state and the outbox position a
 // live stream should read from.
 func (s *CompetitionService) LiveStart(ctx context.Context, id uuid.UUID) (*LiveSnapshot, int64, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, 0, err
+	}
 	c, err := s.load(ctx, id)
 	if err != nil {
 		return nil, 0, err

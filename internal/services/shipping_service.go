@@ -216,9 +216,12 @@ type QuoteLineInput struct {
 
 // DeliveryQuoteInput asks what zone delivery will cost for a cart.
 type DeliveryQuoteInput struct {
-	RecipientID  string           `json:"recipient_id"`
-	DeliveryDate string           `json:"delivery_date"`
-	Items        []QuoteLineInput `json:"items"`
+	RecipientID string `json:"recipient_id"`
+	// RecipientAddressID is the recipient's address picked at checkout.
+	// Blank uses their default address.
+	RecipientAddressID string           `json:"recipient_address_id"`
+	DeliveryDate       string           `json:"delivery_date"`
+	Items              []QuoteLineInput `json:"items"`
 }
 
 // QuotedPostalAddress is a shop dispatch address shown at checkout.
@@ -268,7 +271,7 @@ func (s *ShippingService) QuoteDelivery(ctx context.Context, customerID string, 
 	if len(in.Items) == 0 || strings.TrimSpace(in.RecipientID) == "" {
 		return nil, ErrInvalidInput
 	}
-	to, err := s.shipments.ShipToForRecipient(ctx, customerID, strings.TrimSpace(in.RecipientID))
+	to, err := s.shipments.ShipToForRecipient(ctx, customerID, strings.TrimSpace(in.RecipientID), in.RecipientAddressID)
 	if err != nil {
 		if errors.Is(err, repository.ErrShipmentNotFound) {
 			return nil, ErrOrderNotFound

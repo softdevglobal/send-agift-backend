@@ -25,11 +25,6 @@ import (
 //	POST /customers/me/membership/resume                 . Turn renewal back on
 //	POST /customers/me/membership/sync                   . Confirm a checkout's payment with Stripe
 //	POST /customers/me/membership/test-payment           . Sandbox only
-//	GET  /customers/me/competition-points                . Lots, holds, pending gifts, activity
-//	GET  /competitions/{id}/entry-quote                  . Cost, eligible balance, signed reference
-//	POST /competitions/{id}/entries                      . Reserve an entry (Idempotency-Key)
-//	POST /competitions/{id}/entries/{entryID}/start      . Start the attempt it pays for
-//	POST /competitions/{id}/entries/{entryID}/cancel     . Release an entry not started
 //
 // Admin JWT views and changes everything. Changes that move
 // what customers are offered also need a fresh password confirmation

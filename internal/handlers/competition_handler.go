@@ -462,6 +462,10 @@ func (h *CompetitionHandler) AdvanceClaim(to string) http.HandlerFunc {
 
 // writeError maps service errors onto HTTP status codes.
 func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallback string) {
+	if errors.Is(err, services.ErrCompetitionsDisabled) {
+		writeCompetitionsDisabled(w)
+		return
+	}
 	var refusal *services.PlayRefusal
 	switch {
 	case errors.As(err, &refusal):
@@ -500,4 +504,26 @@ func (h *CompetitionHandler) writeError(w http.ResponseWriter, err error, fallba
 		log.Printf("competition handler: %s: %v", fallback, err)
 		utils.Error(w, http.StatusInternalServerError, fallback)
 	}
+}
+
+// writeCompetitionsDisabled is the one answer to new competition activity
+// while competitions are switched off: 403 with a stable code.
+func writeCompetitionsDisabled(w http.ResponseWriter) {
+	utils.JSON(w, http.StatusForbidden, map[string]any{
+		"error": services.ErrCompetitionsDisabled.Error(),
+		"code":  "COMPETITIONS_DISABLED",
+	})
+}
+
+// Capabilities handles GET /capabilities: what the website and apps may
+// show. Nothing private is in it. A client that cannot read it, or reads
+// a policy version it does not know, must keep competitions hidden.
+func (h *CompetitionHandler) Capabilities(w http.ResponseWriter, r *http.Request) {
+	on := h.competitions.CompetitionsEnabled()
+	comp := map[string]any{"enabled": on, "policyVersion": services.CompetitionsPolicyVersion}
+	if !on {
+		comp["reason"] = "COMPETITIONS_DISABLED"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	utils.JSON(w, http.StatusOK, map[string]any{"competitions": comp})
 }
