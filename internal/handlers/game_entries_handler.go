@@ -516,10 +516,3 @@ func (h *GameEntriesHandler) ResolveShortfall(w http.ResponseWriter, r *http.Req
 	err := h.entries.ResolveShortfall(r.Context(), admin, id, in.Resolution)
 	h.reply(w, map[string]any{"ok": true}, err, "could not resolve the case")
 }
-
-// LegacyPoints handles GET /admin/legacy-points: what is still held in the
-// retired points system.
-func (h *GameEntriesHandler) LegacyPoints(w http.ResponseWriter, r *http.Request) {
-	out, err := h.entries.LegacyPoints(r.Context())
-	h.reply(w, out, err, "could not read legacy balances")
-}

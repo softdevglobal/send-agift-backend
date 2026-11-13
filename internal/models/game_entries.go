@@ -100,24 +100,6 @@ type EntryShortfall struct {
 	CreatedAt        time.Time  `json:"created_at"`
 }
 
-// LegacyBalance is one holder of retired points.
-type LegacyBalance struct {
-	ID     uuid.UUID `json:"id"`
-	Name   string    `json:"name"`
-	Email  string    `json:"email"`
-	Points int64     `json:"points"`
-}
-
-// LegacyPoints is what is still held in the retired points system.
-type LegacyPoints struct {
-	CustomerPoints   int64           `json:"customer_points"`
-	CustomersHolding int             `json:"customers_holding"`
-	SellerPoints     int64           `json:"seller_points"`
-	SellersHolding   int             `json:"sellers_holding"`
-	Customers        []LegacyBalance `json:"customers"`
-	Sellers          []LegacyBalance `json:"sellers"`
-}
-
 // ─── States ───────────────────────────────────────────────────────────────
 
 // State is a state or region of a country.

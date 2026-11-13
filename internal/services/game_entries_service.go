@@ -482,12 +482,6 @@ func (s *GameEntriesService) ResolveShortfall(ctx context.Context, admin AdminAc
 	return err
 }
 
-// LegacyPoints is what customers and sellers still hold in the retired
-// points system, awaiting the owner's decision.
-func (s *GameEntriesService) LegacyPoints(ctx context.Context) (*models.LegacyPoints, error) {
-	return s.repo.LegacyBalances(ctx, 500)
-}
-
 // RunSettleLoop keeps entries in line with orders and ends packages whose
 // time has run out, on one server at a time.
 func (s *GameEntriesService) RunSettleLoop(ctx context.Context, every time.Duration, exclusive Exclusive) {

@@ -971,51 +971,6 @@ func (r *GameEntriesRepository) ResolveShortfall(ctx context.Context, id, adminI
 	})
 }
 
-// LegacyBalances lists what customers and sellers still hold in the retired
-// points system, for the owner to settle. It only reads.
-func (r *GameEntriesRepository) LegacyBalances(ctx context.Context, limit int) (*models.LegacyPoints, error) {
-	out := &models.LegacyPoints{Customers: []models.LegacyBalance{}, Sellers: []models.LegacyBalance{}}
-	if err := r.db.QueryRow(ctx, `
-		select (select coalesce(sum(balance), 0) from legacy_points.points_accounts),
-		       (select count(*) from legacy_points.points_accounts where balance > 0),
-		       (select coalesce(sum(balance), 0) from legacy_points.seller_points_accounts),
-		       (select count(*) from legacy_points.seller_points_accounts where balance > 0)`).
-		Scan(&out.CustomerPoints, &out.CustomersHolding, &out.SellerPoints, &out.SellersHolding); err != nil {
-		return nil, err
-	}
-	for _, q := range []struct {
-		sql  string
-		into *[]models.LegacyBalance
-	}{
-		{`select a.customer_id, coalesce(c.display_name, ''), c.email::text, a.balance
-		    from legacy_points.points_accounts a
-		    inner join customer.customers c on c.id = a.customer_id
-		   where a.balance > 0 order by a.balance desc limit $1`, &out.Customers},
-		{`select a.seller_id, coalesce(s.trading_name, s.legal_name, ''), s.email::text, a.balance
-		    from legacy_points.seller_points_accounts a
-		    inner join seller.sellers s on s.id = a.seller_id
-		   where a.balance > 0 order by a.balance desc limit $1`, &out.Sellers},
-	} {
-		rows, err := r.db.Query(ctx, q.sql, limit)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var b models.LegacyBalance
-			if err := rows.Scan(&b.ID, &b.Name, &b.Email, &b.Points); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			*q.into = append(*q.into, b)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 // SearchCustomers finds customers by email or name for the admin tools,
 // newest first when there is no query, with the entries each holds.
 func (r *GameEntriesRepository) SearchCustomers(ctx context.Context, query string, limit int) ([]models.CustomerEntriesSummary, error) {

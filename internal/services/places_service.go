@@ -55,18 +55,20 @@ type PlaceSuggestion struct {
 // PlaceDetails is a resolved place already split into address fields, ready to
 // drop straight into an AddressInput on the client.
 type PlaceDetails struct {
-	PlaceID          string   `json:"place_id"`
-	Name             string   `json:"name,omitempty"`
-	FormattedAddress string   `json:"formatted_address"`
-	Line1            string   `json:"line1"`
-	Line2            string   `json:"line2,omitempty"`
-	City             string   `json:"city"`
-	Region           string   `json:"region,omitempty"`
-	PostalCode       string   `json:"postal_code,omitempty"`
-	CountryCode      string   `json:"country_code,omitempty"`
-	CountryName      string   `json:"country_name,omitempty"`
-	Latitude         *float64 `json:"latitude,omitempty"`
-	Longitude        *float64 `json:"longitude,omitempty"`
+	PlaceID          string `json:"place_id"`
+	Name             string `json:"name,omitempty"`
+	FormattedAddress string `json:"formatted_address"`
+	Line1            string `json:"line1"`
+	Line2            string `json:"line2,omitempty"`
+	City             string `json:"city"`
+	Region           string `json:"region,omitempty"`
+	// RegionCode is the state's short form, e.g. "NSW" for New South Wales.
+	RegionCode  string   `json:"region_code,omitempty"`
+	PostalCode  string   `json:"postal_code,omitempty"`
+	CountryCode string   `json:"country_code,omitempty"`
+	CountryName string   `json:"country_name,omitempty"`
+	Latitude    *float64 `json:"latitude,omitempty"`
+	Longitude   *float64 `json:"longitude,omitempty"`
 }
 
 // AutocompleteParams are the knobs the handler exposes on the search endpoint.
@@ -86,9 +88,12 @@ type AutocompleteParams struct {
 // includedPrimaryTypes maps our simple type names onto the primary-type filters
 // the Places API accepts.
 var includedPrimaryTypes = map[string][]string{
-	"address":       {"street_address", "premise", "subpremise", "route"},
-	"cities":        {"locality", "administrative_area_level_3", "postal_town"},
-	"regions":       {"locality", "administrative_area_level_1", "administrative_area_level_2", "postal_code", "country"},
+	"address": {"street_address", "premise", "subpremise", "route"},
+	"cities":  {"locality", "administrative_area_level_3", "postal_town"},
+	"regions": {"locality", "administrative_area_level_1", "administrative_area_level_2", "postal_code", "country"},
+	// states: only top-level states, provinces and regions, for the admin
+	// list customers pick their state from.
+	"states":        {"administrative_area_level_1"},
 	"establishment": {"establishment"},
 }
 
@@ -345,6 +350,9 @@ func toPlaceDetails(resp placeDetailsResponse) *PlaceDetails {
 	}
 	if c, ok := byType["country"]; ok {
 		details.CountryCode = c.short
+	}
+	if c, ok := byType["administrative_area_level_1"]; ok {
+		details.RegionCode = c.short
 	}
 
 	// Line 1 is "<street number> <route>"; fall back to the place name or the

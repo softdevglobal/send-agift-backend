@@ -59,7 +59,6 @@ func RegisterGameEntriesRoutes(r chi.Router, h *handlers.GameEntriesHandler, jwt
 		r.Get("/admin/customers", h.SearchCustomers)
 		r.Get("/admin/customers/{customerID}/game-entries", h.CustomerWallet)
 		r.Get("/admin/game-entries/shortfalls", h.Shortfalls)
-		r.Get("/admin/legacy-points", h.LegacyPoints)
 
 		// Emergency stops are one step: no password re-entry in the way.
 		r.Post("/admin/games-control/program/stop", h.StopProgram)
