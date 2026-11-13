@@ -233,9 +233,12 @@ func (r *GameEntriesRepository) Adjust(ctx context.Context, ch EntriesChange, au
 // ─── The gate ─────────────────────────────────────────────────────────────
 
 // entryGate decides whether a customer may earn entries (op "earn") or
-// spend them on a game (op "play") right now. Everything defaults to no:
-// the programme, the customer's country and state, and the game must each
-// have been switched on, and nothing may be stopped.
+// spend them on a game (op "play") right now.
+//
+// Earning only needs an active account and the programme switched on, with
+// nothing stopped: a customer who buys a promoted gift gets its entries
+// wherever they live, whether or not games are open there yet. Playing is
+// where the region, state, age and game switches apply.
 func entryGate(ctx context.Context, q querier, customerID uuid.UUID, op string, gameID *uuid.UUID) (*models.EntryGate, error) {
 	g := &models.EntryGate{}
 	var (
@@ -298,20 +301,23 @@ func entryGate(ctx context.Context, q querier, customerID uuid.UUID, op string, 
 		return deny(models.GateProgramOff, "Games and game entries are not available yet.")
 	case programStopped:
 		return deny(models.GateStopped, "Games and game entries are paused for now.")
+	case op == "earn" && on(stopped):
+		return deny(models.GateStopped, "Game entries are paused in your region for now.")
+	case op == "earn":
+		g.Allowed = true
+		return g, nil
 	case countryHasStates && stateID == nil:
-		return deny(models.GateStateRequired, "Tell us your state or region to use games and game entries.")
+		return deny(models.GateStateRequired, "Tell us your state or region to play games.")
 	case jID == nil:
-		return deny(models.GateRegionOff, "Games and game entries are not available in your region.")
+		return deny(models.GateRegionOff, "Games are not open in your region yet. The entries you earn are kept for when they open.")
 	case on(stopped):
-		return deny(models.GateStopped, "Games and game entries are paused in your region for now.")
-	case op == "earn" && !on(earnOn):
-		return deny(models.GateRegionOff, "Game entries cannot be earned in your region.")
-	case op == "play" && !on(playOn):
-		return deny(models.GateRegionOff, "Games cannot be played in your region.")
+		return deny(models.GateStopped, "Games are paused in your region for now. Your entries are kept.")
+	case !on(playOn):
+		return deny(models.GateRegionOff, "Games cannot be played in your region yet. The entries you earn are kept.")
 	case dob == nil:
-		return deny(models.GateAgeRequired, "Add your date of birth to use games and game entries.")
+		return deny(models.GateAgeRequired, "Add your date of birth to play games.")
 	case yearsOld(*dob, time.Now()) < g.MinAge:
-		return deny(models.GateUnderAge, fmt.Sprintf("You must be %d or older to use games and game entries here.", g.MinAge))
+		return deny(models.GateUnderAge, fmt.Sprintf("You must be %d or older to play games here.", g.MinAge))
 	}
 	if op == "play" && gameID != nil {
 		switch {
@@ -850,6 +856,15 @@ func (r *GameEntriesRepository) Settle(ctx context.Context, batch int) (*SettleR
 			return res, err
 		}
 	}
+	// Paid orders whose promoted lines earned nothing under the old rule
+	// that needed games open in the customer's region: reserved and granted
+	// now, as they would be today.
+	caught, err := r.catchUpMissedEntries(ctx, batch)
+	res.Granted += caught
+	if err != nil {
+		return res, err
+	}
+
 	// Paid orders whose entries were not granted when the payment landed
 	// (the hook failed, or the server stopped): granted now.
 	rows, err = r.db.Query(ctx, `
@@ -891,6 +906,114 @@ func (r *GameEntriesRepository) Settle(ctx context.Context, batch int) (*SettleR
 	}
 	res.PackagesExpired = int(tag.RowsAffected())
 	return res, nil
+}
+
+// catchUpMissedEntries gives entries to recent paid orders whose promoted
+// lines earned none. Only a line whose product was already promoted when the
+// order was placed counts, so a seller is never charged for a promotion that
+// came later; every other rule (own products, daily caps, the package's
+// budget, a full award or none) is checked as at checkout. Lines that still
+// cannot earn stay as they are and are looked at again next time.
+func (r *GameEntriesRepository) catchUpMissedEntries(ctx context.Context, batch int) (int, error) {
+	rows, err := r.db.Query(ctx, `
+		select distinct o.id
+		from marketplace.orders o
+		inner join marketplace.order_items oi on oi.order_id = o.id
+		inner join ads.promotions pr on pr.product_id = oi.product_id
+		inner join ads.purchases pu on pu.id = pr.purchase_id
+		where oi.entries_status = 'none' and oi.promotion_id is null
+		  and oi.fulfilment_status <> 'cancelled'
+		  and o.status in ('paid', 'accepted', 'preparing', 'dispatched', 'delivered')
+		  and o.created_at > now() - interval '30 days'
+		  and pr.created_at <= o.created_at
+		  and (pr.removed_at is null or pr.removed_at > o.created_at)
+		  and pu.paid_at is not null and pu.paid_at <= o.created_at
+		limit $1`, batch)
+	if err != nil {
+		return 0, err
+	}
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	granted := 0
+	for _, id := range ids {
+		var reserved int
+		err := r.inTx(ctx, func(tx pgx.Tx) error {
+			var customerID uuid.UUID
+			if err := tx.QueryRow(ctx, `
+				select customer_id from marketplace.orders where id = $1 for update`, id).
+				Scan(&customerID); err != nil {
+				return err
+			}
+			gate, err := entryGate(ctx, tx, customerID, "earn", nil)
+			if err != nil || !gate.Allowed {
+				return err
+			}
+			if _, err := lockEntriesAccount(ctx, tx, customerID); err != nil {
+				return err
+			}
+			lines, err := tx.Query(ctx, `
+				select oi.id, oi.product_id, oi.seller_id
+				from marketplace.order_items oi
+				where oi.order_id = $1 and oi.entries_status = 'none' and oi.promotion_id is null
+				  and oi.fulfilment_status <> 'cancelled'
+				order by oi.id`, id)
+			if err != nil {
+				return err
+			}
+			type line struct{ id, product, seller uuid.UUID }
+			var todo []line
+			for lines.Next() {
+				var l line
+				if err := lines.Scan(&l.id, &l.product, &l.seller); err != nil {
+					lines.Close()
+					return err
+				}
+				todo = append(todo, l)
+			}
+			lines.Close()
+			if err := lines.Err(); err != nil {
+				return err
+			}
+			for _, l := range todo {
+				n, promo, _, err := offerFor(ctx, tx, gate, customerID, l.seller, l.product, 0, 0, true)
+				if err != nil {
+					return err
+				}
+				if n == 0 || promo == nil {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `
+					update marketplace.order_items
+					set game_entries = $2, promotion_id = $3, entries_status = 'reserved', updated_at = now()
+					where id = $1`, l.id, n, promo.id); err != nil {
+					return err
+				}
+				reserved++
+			}
+			if reserved == 0 {
+				return nil
+			}
+			return grantOrderEntries(ctx, tx, id)
+		})
+		if err != nil {
+			return granted, err
+		}
+		if reserved > 0 {
+			granted++
+		}
+	}
+	return granted, nil
 }
 
 // ─── Free entries and review ──────────────────────────────────────────────

@@ -677,17 +677,15 @@ func TestGameEntriesGateAndCaps(t *testing.T) {
 	bought := f.buy(seller, f.pkg("Starter", 5000, []int{2}, 100))
 	f.promote(seller, bought.ID, product)
 
-	// Nothing is switched on for this country yet.
+	// Nothing is switched on for this country yet: buying a promoted gift
+	// still earns its entries, but they cannot be played here.
 	shut := f.customer("")
-	if o := f.mustOrder(shut, product); o.Items[0].GameEntries != 0 {
-		t.Fatalf("an unapproved country earned entries")
-	}
-	if _, err := f.entries.Adjust(f.ctx, f.admin, shut, AdjustEntriesInput{Amount: 5, Reason: "test", IdempotencyKey: uuid.NewString()}); err != nil {
-		t.Fatal(err)
+	if o := f.mustOrder(shut, product); o.Items[0].GameEntries != 2 {
+		t.Fatalf("a purchase where games are not open earned %d, want 2", o.Items[0].GameEntries)
 	}
 	w, err := f.entries.Wallet(f.ctx, shut)
-	if err != nil || w.Earn.Allowed || w.Play.Allowed {
-		t.Fatalf("gate open with nothing switched on: %+v", w)
+	if err != nil || !w.Earn.Allowed || w.Play.Allowed {
+		t.Fatalf("earning should be open and play shut: %+v", w)
 	}
 
 	f.open()
@@ -698,11 +696,14 @@ func TestGameEntriesGateAndCaps(t *testing.T) {
 	if o := f.mustOrder(own, product); o.Items[0].GameEntries != 0 {
 		t.Fatalf("a seller earned from their own product")
 	}
-	// Under age, and no date of birth.
+	// Under age: the entries are earned, but the age limit stops play.
 	young := f.customer("")
 	f.exec(`update customer.customers set date_of_birth = now() - interval '16 years' where id = $1`, young)
-	if o := f.mustOrder(young, product); o.Items[0].GameEntries != 0 {
-		t.Fatalf("an under-age customer earned entries")
+	if o := f.mustOrder(young, product); o.Items[0].GameEntries != 2 {
+		t.Fatalf("an under-age customer's purchase earned %d, want 2", o.Items[0].GameEntries)
+	}
+	if w, err := f.entries.Wallet(f.ctx, young); err != nil || w.Play.Allowed {
+		t.Fatalf("an under-age customer may play: %+v %v", w, err)
 	}
 
 	// Caps: 4 a day overall, 2 a day from one product.
@@ -1186,5 +1187,57 @@ func TestAdLevelNames(t *testing.T) {
 	}
 	if bought.Status != models.AdPurchaseActive {
 		t.Fatalf("status %s", bought.Status)
+	}
+}
+
+// An order paid while earning needed games open in the customer's region
+// earned nothing; the housekeeping pass now gives it the entries, charged to
+// the package it was promoted under, and never for a promotion added later.
+func TestMissedEntriesAreCaughtUp(t *testing.T) {
+	f := newShopFixture(t)
+	seller := f.seller()
+	product := f.product(seller)
+	bought := f.buy(seller, f.pkg("Starter", 5000, []int{3}, 100))
+	f.promote(seller, bought.ID, product)
+
+	// An order as the old rule left it: paid, promoted, earned nothing.
+	missed := f.customer("")
+	o := f.mustOrder(missed, product)
+	f.exec(`update marketplace.order_items set game_entries = 0, promotion_id = null, entries_status = 'none' where order_id = $1`, o.ID)
+	f.exec(`update ads.purchases set entries_held = 0 where id = $1`, bought.ID)
+	f.pay(o.ID)
+	if f.balance(missed) != 0 {
+		t.Fatalf("set-up: %d entries before the catch-up", f.balance(missed))
+	}
+
+	// A product promoted only after its order was placed.
+	later := f.productIn(f.shop(seller))
+	early := f.customer("")
+	lo := f.mustOrder(early, later)
+	f.pay(lo.ID)
+	f.exec(`update marketplace.orders set created_at = now() - interval '1 hour' where id = $1`, lo.ID)
+	second := f.buy(seller, f.pkg("Second", 5000, []int{3}, 100))
+	f.promote(seller, second.ID, later)
+
+	if _, err := f.repo.Settle(f.ctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.balance(missed); got != 3 {
+		t.Fatalf("missed order earned %d after the catch-up, want 3", got)
+	}
+	var used int
+	f.scan(&used, `select entries_used from ads.purchases where id = $1`, bought.ID)
+	if used != 3 {
+		t.Fatalf("the package was charged %d, want 3", used)
+	}
+	if got := f.balance(early); got != 0 {
+		t.Fatalf("an order placed before its product was promoted earned %d", got)
+	}
+	// Running it again changes nothing.
+	if _, err := f.repo.Settle(f.ctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.balance(missed); got != 3 {
+		t.Fatalf("a second pass gave %d", got)
 	}
 }
