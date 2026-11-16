@@ -728,19 +728,12 @@ type PaidPeriodResult struct {
 	PeriodID   uuid.UUID
 	CustomerID uuid.UUID
 	Created    bool
-	// SlotCreated is false for a zero-bonus offer or an overlapping period.
-	SlotCreated bool
-	Overlap     bool
-	// BonusCredited is the bonus put in the account with the payment, for a
-	// package whose bonus is credited on payment.
-	BonusCredited int64
+	// Overlap is a period that overlaps one already paid for.
+	Overlap bool
 }
 
-// RecordPaidPeriod turns a paid invoice into a paid period and, once per
-// canonical period, its bonus slot. A package whose bonus is credited on
-// payment credits the bonus to the customer's points (My points) now, where
-// unused points carry into later periods; otherwise the slot waits for a
-// qualifying gift. Repeating the same invoice changes nothing.
+// RecordPaidPeriod turns a paid invoice into a paid period. Repeating the
+// same invoice changes nothing.
 func (r *CompetitionPointsRepository) RecordPaidPeriod(ctx context.Context, inv PaidInvoice) (*PaidPeriodResult, error) {
 	if !inv.PeriodEnd.After(inv.PeriodStart) {
 		return nil, fmt.Errorf("membership: invoice %s has an empty period", inv.InvoiceID)
@@ -787,9 +780,8 @@ func (r *CompetitionPointsRepository) RecordPaidPeriod(ctx context.Context, inv 
 			return err
 		}
 
-		// Canonical period: an invoice that overlaps a period already paid
-		// for (an upgrade, a retry, a rejoin on another device) is recorded
-		// but does not open a second bonus.
+		// An invoice that overlaps a period already paid for (an upgrade, a
+		// retry, a rejoin on another device) is recorded as such.
 		if err := tx.QueryRow(ctx, `
 			select exists (select 1 from membership.paid_periods
 			               where customer_id = $1 and id <> $2 and status = 'paid'
@@ -797,74 +789,26 @@ func (r *CompetitionPointsRepository) RecordPaidPeriod(ctx context.Context, inv 
 			s.CustomerID, res.PeriodID, inv.PeriodStart, inv.PeriodEnd).Scan(&res.Overlap); err != nil {
 			return err
 		}
-		if res.Overlap {
-			return openCase(ctx, tx, "reconciliation", s.CustomerID, "paid_period", res.PeriodID, map[string]any{
-				"problem": "paid period overlaps another paid period; no second bonus slot was created",
-				"invoice": inv.InvoiceID,
-			})
-		}
-		var (
-			bonus   int64
-			trigger string
-		)
-		if err := tx.QueryRow(ctx, `select member_bonus_points, bonus_trigger from membership.plan_offers where id = $1`,
-			offerID).Scan(&bonus, &trigger); err != nil {
-			return err
-		}
-		if bonus <= 0 {
-			return nil
-		}
-		var slotID uuid.UUID
-		err = tx.QueryRow(ctx, `
-			insert into membership.bonus_slots (customer_id, paid_period_id, bonus_points)
-			values ($1, $2, $3) on conflict (customer_id, paid_period_id) do nothing
-			returning id`, s.CustomerID, res.PeriodID, bonus).Scan(&slotID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		res.SlotCreated = true
-		if trigger != models.BonusTriggerPayment {
-			return nil
-		}
-		reason := "Membership bonus for the period from " + inv.PeriodStart.UTC().Format("2 Jan 2006")
-		if _, _, err := applyPoints(ctx, tx, PointsChange{
-			CustomerID: s.CustomerID, EntryType: models.PointsEntryMemberBonus, Delta: bonus,
-			ReferenceType: ref("membership_bonus_slot"), ReferenceID: &slotID,
-			IdempotencyKey: "member-bonus:" + slotID.String(), Reason: &reason, ActorType: "system",
-		}); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			update membership.bonus_slots
-			set status = 'awarded', awarded_at = now(), updated_at = now()
-			where id = $1 and status = 'unawarded'`, slotID); err != nil {
-			return err
-		}
-		res.BonusCredited = bonus
 		return nil
 	})
 	return res, err
 }
 
 // SetPeriodPaymentStatus records a refund or dispute of a membership
-// payment. A slot not yet awarded can no longer unlock; an awarded one opens
-// a case, because its points may already be spent.
+// payment.
 func (r *CompetitionPointsRepository) SetPeriodPaymentStatus(ctx context.Context, provider, paymentOrInvoiceID, status string) (bool, error) {
 	changed := false
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
 		var (
-			periodID, customerID uuid.UUID
-			prior                string
+			periodID uuid.UUID
+			prior    string
 		)
 		err := tx.QueryRow(ctx, `
-			select p.id, p.customer_id, p.status
+			select p.id, p.status
 			from membership.paid_periods p
 			inner join membership.subscriptions s on s.id = p.subscription_id
 			where s.provider = $1 and (p.provider_payment_id = $2 or p.provider_invoice_id = $2)
-			for update of p`, provider, paymentOrInvoiceID).Scan(&periodID, &customerID, &prior)
+			for update of p`, provider, paymentOrInvoiceID).Scan(&periodID, &prior)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -879,137 +823,22 @@ func (r *CompetitionPointsRepository) SetPeriodPaymentStatus(ctx context.Context
 			return err
 		}
 		changed = true
-		var slotStatus string
-		var slotID uuid.UUID
-		var gift, lot *uuid.UUID
-		err = tx.QueryRow(ctx, `select id, status, qualifying_gift_id, awarded_lot_id
-			from membership.bonus_slots where paid_period_id = $1 for update`,
-			periodID).Scan(&slotID, &slotStatus, &gift, &lot)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if slotStatus != models.BonusAwarded {
-			return nil
-		}
-		if gift == nil && lot != nil {
-			// Credited as competition points before they moved to My points.
-			return reverseBonusLot(ctx, tx, customerID, periodID, slotID, *lot, status)
-		}
-		if gift == nil {
-			// Credited to My points with the payment: its refund takes back
-			// what the customer still has. Points already spent open a case.
-			return reverseMemberBonusPoints(ctx, tx, customerID, periodID, slotID, status)
-		}
-		return openCase(ctx, tx, "membership_dispute", customerID, "bonus_slot", slotID, map[string]any{
-			"period_id": periodID, "payment_status": status,
-		})
+		return nil
 	})
 	return changed, err
-}
-
-// reverseMemberBonusPoints takes a refunded period's bonus back out of the
-// customer's points, as much as their balance allows.
-func reverseMemberBonusPoints(ctx context.Context, tx pgx.Tx, customerID, periodID, slotID uuid.UUID, status string) error {
-	var credited int64
-	err := tx.QueryRow(ctx, `select amount_delta from points.points_ledger
-		where idempotency_key = $1`, "member-bonus:"+slotID.String()).Scan(&credited)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	balance, err := lockPointsAccount(ctx, tx, customerID)
-	if err != nil {
-		return err
-	}
-	take := min(credited, balance)
-	reason := "Membership payment " + status
-	if take > 0 {
-		if _, _, err := applyPoints(ctx, tx, PointsChange{
-			CustomerID: customerID, EntryType: models.PointsEntryMemberBonusReversal, Delta: -take,
-			ReferenceType: ref("membership_bonus_slot"), ReferenceID: &slotID,
-			IdempotencyKey: "member-bonus-reversal:" + slotID.String(), Reason: &reason, ActorType: "system",
-		}); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(ctx, `update membership.bonus_slots
-		set status = 'reversed', status_reason = $2, updated_at = now() where id = $1`, slotID, reason); err != nil {
-		return err
-	}
-	if take < credited {
-		return openCase(ctx, tx, "membership_dispute", customerID, "bonus_slot", slotID, map[string]any{
-			"period_id": periodID, "payment_status": status, "already_spent": credited - take,
-		})
-	}
-	return nil
-}
-
-// reverseBonusLot takes back the unused units of a bonus credited with a
-// membership payment that was refunded or disputed.
-func reverseBonusLot(ctx context.Context, tx pgx.Tx, customerID, periodID, slotID, lotID uuid.UUID, status string) error {
-	if err := lockLots(ctx, tx, []uuid.UUID{lotID}); err != nil {
-		return err
-	}
-	var available, reserved, consumed int64
-	if err := tx.QueryRow(ctx, `select available, reserved, consumed from points.cp_lots where id = $1`, lotID).
-		Scan(&available, &reserved, &consumed); err != nil {
-		return err
-	}
-	reason := "membership payment " + status
-	if available > 0 {
-		txID, first, err := beginCPTx(ctx, tx, "cp:bonus-reverse:"+slotID.String(), "reverse",
-			customerID, systemActor, &periodID, &reason)
-		if err != nil {
-			return err
-		}
-		if first {
-			if err := moveCP(ctx, tx, txID, lotID, "available", "reversed", available); err != nil {
-				return err
-			}
-		}
-	}
-	if _, err := tx.Exec(ctx, `update membership.bonus_slots
-		set status = 'reversed', status_reason = $2, updated_at = now() where id = $1`, slotID, reason); err != nil {
-		return err
-	}
-	if reserved > 0 || consumed > 0 {
-		return openCase(ctx, tx, "membership_dispute", customerID, "bonus_slot", slotID, map[string]any{
-			"period_id": periodID, "payment_status": status, "held": reserved, "spent": consumed,
-		})
-	}
-	return nil
 }
 
 // ─── Status ──────────────────────────────────────────────────────────────
 
 const periodColumns = `p.id, p.subscription_id, p.offer_id, p.period_start, p.period_end, p.amount_minor,
-	p.currency, p.status, p.paid_at, p.status_changed_at, p.provider_invoice_id,
-	b.id, b.bonus_points, b.status, b.qualifying_gift_id, b.awarded_lot_id, b.awarded_at, b.status_reason`
+	p.currency, p.status, p.paid_at, p.status_changed_at, p.provider_invoice_id`
 
 func scanPeriod(row scanner) (*models.PaidPeriod, error) {
-	var (
-		p          models.PaidPeriod
-		slotID     *uuid.UUID
-		bonus      *int64
-		slotStatus *string
-		gift, lot  *uuid.UUID
-		awardedAt  *time.Time
-		reason     *string
-	)
+	var p models.PaidPeriod
 	err := row.Scan(&p.ID, &p.SubscriptionID, &p.OfferID, &p.PeriodStart, &p.PeriodEnd, &p.AmountMinor,
-		&p.Currency, &p.Status, &p.PaidAt, &p.StatusChangedAt, &p.ProviderInvoiceID,
-		&slotID, &bonus, &slotStatus, &gift, &lot, &awardedAt, &reason)
+		&p.Currency, &p.Status, &p.PaidAt, &p.StatusChangedAt, &p.ProviderInvoiceID)
 	if err != nil {
 		return nil, err
-	}
-	if slotID != nil {
-		p.BonusSlot = &models.BonusSlot{ID: *slotID, PaidPeriodID: p.ID, BonusPoints: *bonus,
-			Status: *slotStatus, QualifyingGiftID: gift, AwardedLotID: lot, AwardedAt: awardedAt, StatusReason: reason}
 	}
 	return &p, nil
 }
@@ -1018,7 +847,6 @@ func scanPeriod(row scanner) (*models.PaidPeriod, error) {
 func (r *CompetitionPointsRepository) Periods(ctx context.Context, customerID uuid.UUID, limit int) ([]models.PaidPeriod, error) {
 	rows, err := r.db.Query(ctx, `select `+periodColumns+`
 		from membership.paid_periods p
-		left join membership.bonus_slots b on b.paid_period_id = p.id
 		where p.customer_id = $1
 		order by p.period_start desc limit $2`, customerID, limit)
 	if err != nil {
@@ -1047,17 +875,6 @@ func (r *CompetitionPointsRepository) LatestSubscription(ctx context.Context, cu
 		return nil, nil
 	}
 	return s, err
-}
-
-// HasPendingGiftInPeriod is whether a gift paid for in the period is still
-// waiting to be completed: the bonus is then "pending completion".
-func (r *CompetitionPointsRepository) HasPendingGiftInPeriod(ctx context.Context, customerID uuid.UUID, start, end time.Time) (bool, error) {
-	var yes bool
-	err := r.db.QueryRow(ctx, `
-		select exists (select 1 from points.gift_qualifications
-		               where customer_id = $1 and status = 'pending'
-		                 and anchor_at >= $2 and anchor_at < $3)`, customerID, start, end).Scan(&yes)
-	return yes, err
 }
 
 // RenewingSubscription is a membership that will renew at its period end.

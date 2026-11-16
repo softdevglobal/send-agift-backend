@@ -76,6 +76,7 @@ type SocialAuthService struct {
 	capabilities *CountryCapabilityService
 	email        *EmailService
 	http         *http.Client
+	states       StateChecker // nil: sign-up does not ask for a state
 
 	googleClientIDs   []string
 	appleClientIDs    []string
@@ -133,6 +134,9 @@ type SocialSignInInput struct {
 // the account already linked to this provider account, or the customer with
 // the same verified email (which links it). Anyone else is asked to finish
 // their profile.
+// RequireStates makes social sign-up ask for the customer's state or region.
+func (s *SocialAuthService) RequireStates(check StateChecker) { s.states = check }
+
 func (s *SocialAuthService) SignIn(ctx context.Context, in SocialSignInInput) (*SocialSignInResult, error) {
 	profile, err := s.verify(ctx, in)
 	if err != nil {
@@ -188,11 +192,15 @@ func (s *SocialAuthService) SignIn(ctx context.Context, in SocialSignInInput) (*
 // SocialCompleteInput finishes a social sign-up with what a customer
 // account needs that the provider doesn't give.
 type SocialCompleteInput struct {
-	SignupToken  string `json:"signup_token"`
-	CountryID    string `json:"country_id"`
+	SignupToken string `json:"signup_token"`
+	CountryID   string `json:"country_id"`
+	// StateID is the state or region, required when the country has states.
+	StateID      string `json:"state_id"`
 	Phone        string `json:"phone"`
 	CustomerType string `json:"customer_type"`
 	DisplayName  string `json:"display_name"`
+	// TermsVersion is the customer terms version the sign-up screen showed.
+	TermsVersion string `json:"terms_version"`
 }
 
 // Complete creates the customer account for a verified social sign-up and
@@ -218,6 +226,15 @@ func (s *SocialAuthService) Complete(ctx context.Context, in SocialCompleteInput
 	}
 	if err := s.capabilities.EnsureCustomerRegistrationAllowed(ctx, countryID.String()); err != nil {
 		return nil, err
+	}
+
+	// The account is not complete without the state, where the country
+	// has states.
+	var stateID *uuid.UUID
+	if s.states != nil {
+		if stateID, err = s.states(ctx, countryID, in.StateID); err != nil {
+			return nil, err
+		}
 	}
 
 	name := strings.TrimSpace(in.DisplayName)
@@ -251,6 +268,7 @@ func (s *SocialAuthService) Complete(ctx context.Context, in SocialCompleteInput
 		CustomerType: customerType,
 		Status:       "active",
 		ImageURL:     image,
+		StateID:      stateID,
 	}
 	if err := s.customers.Create(ctx, customer); err != nil {
 		if !errors.Is(err, repository.ErrCustomerDuplicate) {
@@ -262,8 +280,13 @@ func (s *SocialAuthService) Complete(ctx context.Context, in SocialCompleteInput
 			return nil, ErrCustomerConflict
 		}
 		customer = existing
-	} else if err := s.email.SendCustomerWelcome(ctx, customer); err != nil {
-		log.Printf("customer %s welcome email: %v", customer.ID, err)
+	} else {
+		if err := s.customers.RecordTermsAcceptance(ctx, customer.ID, in.TermsVersion, countryID); err != nil {
+			log.Printf("customer %s terms acceptance: %v", customer.ID, err)
+		}
+		if err := s.email.SendCustomerWelcome(ctx, customer); err != nil {
+			log.Printf("customer %s welcome email: %v", customer.ID, err)
+		}
 	}
 	if err := s.customers.LinkSocialIdentity(ctx, customer.ID, profile.Provider, profile.Subject, profile.Email); err != nil {
 		return nil, err

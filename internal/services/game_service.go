@@ -39,22 +39,21 @@ const (
 type GameService struct {
 	games        *repository.GameRepository
 	competitions *CompetitionService
-	// points is the wallet plays are paid from. Without it plays are free,
+	// entries is the wallet plays are paid from. Without it plays are free,
 	// whatever a game's price says.
-	points *repository.PointsRepository
+	entries *repository.GameEntriesRepository
 }
 
-// ChargeForPlays makes each practice play cost the points an admin set
-// for that game, taken on the server when the session starts. A game that
-// costs anything then needs a signed-in customer to play.
-func (s *GameService) ChargeForPlays(wallet *repository.PointsRepository) {
-	s.points = wallet
+// ChargeForPlays makes each practice play cost the game entries an admin
+// set for that game, taken on the server when the session starts.
+func (s *GameService) ChargeForPlays(wallet *repository.GameEntriesRepository) {
+	s.entries = wallet
 }
 
 // costOf is what a play of this game costs: its own price, or nothing when
 // plays are not being charged.
 func (s *GameService) costOf(price int64) int64 {
-	if s.points == nil || price < 0 {
+	if s.entries == nil || price < 0 {
 		return 0
 	}
 	return price
@@ -82,7 +81,7 @@ func (s *GameService) ListGames(ctx context.Context) ([]models.GameView, error) 
 	out := make([]models.GameView, 0, len(all))
 	for _, g := range all {
 		if _, ok := games.EngineFor(g.Slug); ok {
-			g.PlayCostPoints = s.costOf(g.PlayCostPoints)
+			g.EntryCost = s.costOf(g.EntryCost)
 			out = append(out, g)
 		}
 	}
@@ -96,13 +95,13 @@ func (s *GameService) GetGame(ctx context.Context, slug string) (*models.GameVie
 		return nil, err
 	}
 	return &models.GameView{
-		Slug:           pg.Game.Slug,
-		Name:           pg.Game.Name,
-		Description:    pg.Game.Description,
-		GameType:       pg.Game.GameType,
-		Version:        pg.Version.Version,
-		Config:         pg.Version.Config,
-		PlayCostPoints: s.costOf(pg.Game.PlayCostPoints),
+		Slug:        pg.Game.Slug,
+		Name:        pg.Game.Name,
+		Description: pg.Game.Description,
+		GameType:    pg.Game.GameType,
+		Version:     pg.Version.Version,
+		Config:      pg.Version.Config,
+		EntryCost:   s.costOf(pg.Game.EntryCost),
 	}, nil
 }
 
@@ -142,11 +141,11 @@ func (s *GameService) StartSession(ctx context.Context, slug string, actor Socia
 	if err != nil {
 		return nil, err
 	}
-	// A paid play needs an account to pay from.
-	cost := s.costOf(pg.Game.PlayCostPoints)
-	if cost > 0 && identity.CustomerID == nil {
-		return nil, refuse(PlaySignInRequired, fmt.Sprintf("Sign in to play. %s costs %d points.",
-			pg.Game.Name, cost), map[string]any{"points_required": cost})
+	// Games are for signed-in customers: where a game can be played
+	// depends on the country and state on their account.
+	cost := s.costOf(pg.Game.EntryCost)
+	if identity.CustomerID == nil {
+		return nil, refuse(PlaySignInRequired, "Sign in to play.", map[string]any{"entries_required": cost})
 	}
 
 	if level < 1 {
@@ -173,17 +172,21 @@ func (s *GameService) StartSession(ctx context.Context, slug string, actor Socia
 		ServerSeed:    seed,
 		Config:        config,
 		ExpiresAt:     time.Now().Add(ttl),
-		ChargePoints:  cost,
+		ChargeEntries: cost,
 		ChargeReason:  pg.Game.Name,
 	})
-	if errors.Is(err, repository.ErrPointsInsufficient) {
+	var gated *repository.EntryGateError
+	if errors.As(err, &gated) {
+		return nil, refuse(PlayNotEligible, gated.Gate.Message, map[string]any{"reason": gated.Gate.Code})
+	}
+	if errors.Is(err, repository.ErrEntriesInsufficient) {
 		var balance int64
-		if identity.CustomerID != nil && s.points != nil {
-			balance, _ = s.points.Balance(ctx, *identity.CustomerID)
+		if s.entries != nil {
+			balance, _ = s.entries.Balance(ctx, *identity.CustomerID)
 		}
-		return nil, refuse(PlayInsufficientPoints,
-			fmt.Sprintf("%s costs %d points and you have %d.", pg.Game.Name, cost, balance),
-			map[string]any{"points_required": cost, "points_balance": balance})
+		return nil, refuse(PlayInsufficientEntries,
+			fmt.Sprintf("%s costs %s and you have %d.", pg.Game.Name, entriesWord(cost), balance),
+			map[string]any{"entries_required": cost, "entries_balance": balance})
 	}
 	if err != nil {
 		return nil, err
@@ -200,9 +203,9 @@ func (s *GameService) StartSession(ctx context.Context, slug string, actor Socia
 		ExpiresAt: session.ExpiresAt,
 	}
 	if cost > 0 {
-		view.PointsCharged = cost
-		if balance, err := s.points.Balance(ctx, *identity.CustomerID); err == nil {
-			view.PointsBalance = &balance
+		view.EntriesCharged = cost
+		if balance, err := s.entries.Balance(ctx, *identity.CustomerID); err == nil {
+			view.EntriesBalance = &balance
 		}
 	}
 	return view, nil
@@ -493,4 +496,12 @@ func mapGameRepoErr(err error) error {
 	default:
 		return err
 	}
+}
+
+// entriesWord is "1 game entry" or "3 game entries".
+func entriesWord(n int64) string {
+	if n == 1 {
+		return "1 game entry"
+	}
+	return fmt.Sprintf("%d game entries", n)
 }

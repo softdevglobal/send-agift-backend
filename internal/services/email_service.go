@@ -464,3 +464,28 @@ func (s *EmailService) SendEmailChangeReverted(ctx context.Context, restoredEmai
 	key := fmt.Sprintf("email_change_reverted:%s:%d", restoredEmail, time.Now().UnixNano())
 	return s.queue(ctx, "email_change_reverted", key, restoredEmail, "", content)
 }
+
+// SendAdPurchaseReceipt tells a seller their advertising package is paid
+// for and active: the receipt for the purchase.
+func (s *EmailService) SendAdPurchaseReceipt(ctx context.Context, p *models.AdPurchase) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderAdPurchaseReceipt(s.webURL, p)
+	if err != nil {
+		return err
+	}
+	return s.queue(ctx, "ad_purchase_receipt", "ad_purchase_receipt:"+p.ID.String(), p.SellerEmail, p.SellerName, content)
+}
+
+// SendAdReminder emails a seller a budget notice for an advertising package.
+func (s *EmailService) SendAdReminder(ctx context.Context, r *models.AdReminderEmail, dashboardURL string) error {
+	if s == nil {
+		return nil
+	}
+	content, err := renderAdReminder(r, dashboardURL)
+	if err != nil {
+		return err
+	}
+	return s.queue(ctx, "ad_budget_reminder", "ad_budget_reminder:"+r.ID.String(), r.SellerEmail, r.SellerName, content)
+}

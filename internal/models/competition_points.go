@@ -79,25 +79,27 @@ const (
 // PlanOffer maps to membership.plan_offers: one sellable version of a tier
 // in one market.
 type PlanOffer struct {
-	ID                uuid.UUID `json:"id"`
-	TierCode          string    `json:"tier_code"`
-	Version           int       `json:"version"`
-	CountryID         uuid.UUID `json:"country_id"`
-	CountryName       string    `json:"country_name,omitempty"`
-	Name              string    `json:"name"`
-	Description       *string   `json:"description,omitempty"`
-	Currency          string    `json:"currency"`
-	PriceMinor        int64     `json:"price_minor"`
-	IntervalUnit      string    `json:"interval_unit"`
-	IntervalCount     int       `json:"interval_count"`
-	MemberBonusPoints int64     `json:"member_bonus_points"`
+	ID            uuid.UUID `json:"id"`
+	TierCode      string    `json:"tier_code"`
+	Version       int       `json:"version"`
+	CountryID     uuid.UUID `json:"country_id"`
+	CountryName   string    `json:"country_name,omitempty"`
+	Name          string    `json:"name"`
+	Description   *string   `json:"description,omitempty"`
+	Currency      string    `json:"currency"`
+	PriceMinor    int64     `json:"price_minor"`
+	IntervalUnit  string    `json:"interval_unit"`
+	IntervalCount int       `json:"interval_count"`
+	// MemberBonusPoints is the retired points bonus. It is kept only because
+	// published offers are immutable; nothing reads or credits it.
+	MemberBonusPoints int64 `json:"-"`
 	// MemberDiscountBPS is the percentage off the gift price a member gets,
 	// in basis points (100 = 1%), funded from SendAGift's commission.
 	MemberDiscountBPS int `json:"member_discount_bps"`
 	// BonusTrigger is when the member bonus is credited: "payment" (once
 	// the period is paid for) or "first_gift" (after the first qualifying
 	// completed gift in the period).
-	BonusTrigger       string          `json:"bonus_trigger"`
+	BonusTrigger       string          `json:"-"`
 	GiftBenefits       json.RawMessage `json:"gift_benefits"`
 	TermsVersion       string          `json:"terms_version"`
 	Status             string          `json:"status"`
@@ -189,7 +191,6 @@ type PaidPeriod struct {
 	Status            string     `json:"status"`
 	PaidAt            time.Time  `json:"paid_at"`
 	StatusChangedAt   *time.Time `json:"status_changed_at,omitempty"`
-	BonusSlot         *BonusSlot `json:"bonus_slot,omitempty"`
 	ProviderInvoiceID string     `json:"-"`
 }
 
@@ -216,6 +217,7 @@ type BonusSlot struct {
 // Membership state shown on the status screen.
 const (
 	MembershipNone             = "none"
+	MembershipActive           = "active"
 	MembershipPaymentPending   = "payment_pending"
 	MembershipAwaitingGift     = "awaiting_gift"
 	MembershipPendingComplete  = "pending_completion"

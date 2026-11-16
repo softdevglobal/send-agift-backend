@@ -54,6 +54,9 @@ func (h *GameHandler) GetGame(w http.ResponseWriter, r *http.Request) {
 // baked into the session at creation time, so replay never has to know a
 // level was involved.
 func (h *GameHandler) StartSession(w http.ResponseWriter, r *http.Request) {
+	if !requireNativeApp(w, r) {
+		return
+	}
 	level := 1
 	if raw := r.URL.Query().Get("level"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil {
@@ -118,8 +121,12 @@ func (h *GameHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
 
 // writeError maps service errors onto HTTP status codes.
 func (h *GameHandler) writeError(w http.ResponseWriter, err error, fallback string) {
+	if errors.Is(err, services.ErrCompetitionsDisabled) {
+		writeCompetitionsDisabled(w)
+		return
+	}
 	// A paid play turned away: nothing was charged, and the body says why
-	// and what the player needs (points_required, points_balance).
+	// and what the player needs (entries_required, entries_balance).
 	var refusal *services.PlayRefusal
 	if errors.As(err, &refusal) {
 		status := http.StatusUnprocessableEntity

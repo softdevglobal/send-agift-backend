@@ -46,6 +46,7 @@ type sellerRegisterRequest struct {
 	ContactJobTitle    *string                               `json:"contact_job_title"`
 	AuthorityConfirmed bool                                  `json:"authority_confirmed"`
 	TermsAccepted      bool                                  `json:"terms_accepted"`
+	TermsVersion       string                                `json:"terms_version"`
 	MarketingOptIn     bool                                  `json:"marketing_opt_in"`
 	// AcceptFreeGiftBudget must be true: the seller agrees to the marketing
 	// budget SendAGift sets for the free gift program.
@@ -90,6 +91,7 @@ func (h *SellerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		ContactJobTitle:    req.ContactJobTitle,
 		AuthorityConfirmed: req.AuthorityConfirmed,
 		TermsAccepted:      req.TermsAccepted,
+		TermsVersion:       req.TermsVersion,
 		MarketingOptIn:     req.MarketingOptIn,
 
 		FreeGiftBudgetAccepted: req.AcceptFreeGiftBudget,

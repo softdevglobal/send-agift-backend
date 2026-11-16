@@ -40,8 +40,8 @@ type CountryCapabilityInput struct {
 	DomesticDeliveryEnabled      bool
 	InternationalDeliveryEnabled bool
 	MembershipsEnabled           bool
-	PointsEarningEnabled         bool
-	PointsUsageEnabled           bool
+	EntriesEarningEnabled        bool
+	EntriesUsageEnabled          bool
 	SkillCompetitionsEnabled     bool
 	ProgressivePrizesEnabled     bool
 	ChanceGamesEnabled           bool
@@ -80,8 +80,8 @@ func (s *CountryCapabilityService) Create(ctx context.Context, countryID string,
 		DomesticDeliveryEnabled:      in.DomesticDeliveryEnabled,
 		InternationalDeliveryEnabled: in.InternationalDeliveryEnabled,
 		MembershipsEnabled:           in.MembershipsEnabled,
-		PointsEarningEnabled:         in.PointsEarningEnabled,
-		PointsUsageEnabled:           in.PointsUsageEnabled,
+		EntriesEarningEnabled:        in.EntriesEarningEnabled,
+		EntriesUsageEnabled:          in.EntriesUsageEnabled,
 		SkillCompetitionsEnabled:     in.SkillCompetitionsEnabled,
 		ProgressivePrizesEnabled:     in.ProgressivePrizesEnabled,
 		ChanceGamesEnabled:           in.ChanceGamesEnabled,
@@ -120,8 +120,8 @@ func (s *CountryCapabilityService) Update(ctx context.Context, countryID string,
 	existing.DomesticDeliveryEnabled = in.DomesticDeliveryEnabled
 	existing.InternationalDeliveryEnabled = in.InternationalDeliveryEnabled
 	existing.MembershipsEnabled = in.MembershipsEnabled
-	existing.PointsEarningEnabled = in.PointsEarningEnabled
-	existing.PointsUsageEnabled = in.PointsUsageEnabled
+	existing.EntriesEarningEnabled = in.EntriesEarningEnabled
+	existing.EntriesUsageEnabled = in.EntriesUsageEnabled
 	existing.SkillCompetitionsEnabled = in.SkillCompetitionsEnabled
 	existing.ProgressivePrizesEnabled = in.ProgressivePrizesEnabled
 	existing.ChanceGamesEnabled = in.ChanceGamesEnabled

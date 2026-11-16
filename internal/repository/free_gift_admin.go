@@ -86,7 +86,7 @@ func (r *FreeGiftRepository) ListOrders(ctx context.Context, sellerID *uuid.UUID
 		inner join customer.customers c on c.id = o.customer_id
 		left join customer.recipients r on r.id = o.recipient_id
 		left join customer.recipient_addresses ra on ra.id = coalesce(
-			r.default_address_id,
+			o.recipient_address_id, r.default_address_id,
 			(select id from customer.recipient_addresses where recipient_id = r.id
 			 order by is_default desc, created_at asc limit 1)
 		)

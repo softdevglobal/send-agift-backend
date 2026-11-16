@@ -118,7 +118,7 @@ const competitionSelect = `
 	                 where cc.competition_id = c.id), '[]'::jsonb),
 	       c.game_version_id, v.status, g.slug, g.name, v.version, v.config,
 	       c.title, c.status, c.starts_at, c.ends_at, c.timezone, c.server_seed,
-	       c.points_per_attempt, c.max_attempts_per_customer, c.min_age,
+	       c.entries_per_attempt, c.max_attempts_per_customer, c.min_age,
 	       c.requires_identity_verification, c.number_of_winners,
 	       c.prize_description, c.prize_value_amount, c.prize_currency,
 	       c.official_rules, c.official_rules_media_id,
@@ -128,19 +128,24 @@ const competitionSelect = `
 	       c.increment_per_play_cents, c.max_prize_cents, c.continue_at_cap, c.daily_play_limit,
 	       c.min_plays_to_win, c.current_prize_cents, c.eligible_play_count, c.unique_player_count,
 	       c.prize_version, c.final_prize_cents, c.round_no, c.previous_round_id, c.config_version,
-	       c.paused_at, c.closed_at, c.updated_by_admin_id, g.game_type, c.win_odds, c.prize_points,
-	       c.points_unit, c.cp_allowed_sources
+	       c.paused_at, c.closed_at, c.updated_by_admin_id, g.game_type, c.win_odds,
+	       coalesce((select jsonb_agg(jsonb_build_object(
+	                    'state_id', st.id, 'country_id', st.country_id,
+	                    'code', st.code, 'name', st.name) order by st.name)
+	                 from competition.competition_states cs
+	                 inner join core.states st on st.id = cs.state_id
+	                 where cs.competition_id = c.id), '[]'::jsonb)
 	from competition.competitions c
 	inner join competition.game_versions v on v.id = c.game_version_id
 	inner join competition.games g on g.id = v.game_id`
 
 func scanCompetition(row scanner) (*models.Competition, error) {
 	var c models.Competition
-	var cfg, countries []byte
+	var cfg, countries, states []byte
 	err := row.Scan(&c.ID, &countries,
 		&c.GameVersionID, &c.GameVersionStatus, &c.GameSlug, &c.GameName, &c.GameVersion, &cfg,
 		&c.Title, &c.Status, &c.StartsAt, &c.EndsAt, &c.Timezone, &c.ServerSeed,
-		&c.PointsPerAttempt, &c.MaxAttemptsPerCustomer, &c.MinAge,
+		&c.EntriesPerAttempt, &c.MaxAttemptsPerCustomer, &c.MinAge,
 		&c.RequiresIdentityVerification, &c.NumberOfWinners,
 		&c.PrizeDescription, &c.PrizeValueAmount, &c.PrizeCurrency,
 		&c.OfficialRules, &c.OfficialRulesMediaID,
@@ -150,12 +155,14 @@ func scanCompetition(row scanner) (*models.Competition, error) {
 		&c.IncrementPerPlayCents, &c.MaxPrizeCents, &c.ContinueAtCap, &c.DailyPlayLimit,
 		&c.MinPlaysToWin, &c.CurrentPrizeCents, &c.EligiblePlayCount, &c.UniquePlayerCount,
 		&c.PrizeVersion, &c.FinalPrizeCents, &c.RoundNo, &c.PreviousRoundID, &c.ConfigVersion,
-		&c.PausedAt, &c.ClosedAt, &c.UpdatedByAdminID, &c.GameType, &c.WinOdds, &c.PrizePoints,
-		&c.PointsUnit, &c.CPAllowedSources)
+		&c.PausedAt, &c.ClosedAt, &c.UpdatedByAdminID, &c.GameType, &c.WinOdds, &states)
 	if err != nil {
 		return nil, err
 	}
 	c.GameConfig = json.RawMessage(cfg)
+	if err := json.Unmarshal(states, &c.States); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(countries, &c.Countries); err != nil {
 		return nil, err
 	}
@@ -212,8 +219,14 @@ func (r *CompetitionRepository) GetByID(ctx context.Context, id uuid.UUID) (*mod
 type CompetitionFilter struct {
 	IncludeDrafts bool
 	CountryID     *uuid.UUID
-	Limit         int
+	// StateFor hides rounds limited to states other than this customer's.
+	// A round limited to states is hidden from anyone with no state.
+	StateFor *StateScope
+	Limit    int
 }
+
+// StateScope is the state a viewer is in, if they have given one.
+type StateScope struct{ StateID *uuid.UUID }
 
 // List returns competitions live first, then upcoming, then finished.
 func (r *CompetitionRepository) List(ctx context.Context, f CompetitionFilter) ([]models.Competition, error) {
@@ -225,13 +238,17 @@ func (r *CompetitionRepository) List(ctx context.Context, f CompetitionFilter) (
 		  and ($2::uuid is null or exists (
 		        select 1 from competition.competition_countries cc
 		        where cc.competition_id = c.id and cc.country_id = $2))
+		  and (not $4::bool
+		       or not exists (select 1 from competition.competition_states cs where cs.competition_id = c.id)
+		       or exists (select 1 from competition.competition_states cs
+		                   where cs.competition_id = c.id and cs.state_id = $5::uuid))
 		order by case c.status
 		           when 'live' then 0 when 'scheduled' then 1
 		           when 'closed' then 2 when 'frozen' then 2
 		           when 'finalised' then 3 when 'draft' then 4 else 5 end,
 		         case when c.status in ('live', 'scheduled', 'draft') then c.starts_at end asc,
 		         c.ends_at desc
-		limit $3`, f.IncludeDrafts, f.CountryID, f.Limit)
+		limit $3`, f.IncludeDrafts, f.CountryID, f.Limit, f.StateFor != nil, scopeState(f.StateFor))
 	if err != nil {
 		return nil, err
 	}
@@ -253,29 +270,30 @@ func (r *CompetitionRepository) Create(ctx context.Context, c *models.Competitio
 		err := tx.QueryRow(ctx, `
 			insert into competition.competitions
 				(game_version_id, title, status, starts_at, ends_at, timezone, server_seed,
-				 points_per_attempt, max_attempts_per_customer, min_age, requires_identity_verification,
+				 entries_per_attempt, max_attempts_per_customer, min_age, requires_identity_verification,
 				 number_of_winners, prize_description, prize_value_amount, prize_currency, official_rules,
 				 created_by_admin_id,
 				 prize_growth_enabled, prize_type, winner_method, start_prize_cents, increment_per_play_cents,
 				 max_prize_cents, continue_at_cap, daily_play_limit, min_plays_to_win,
-				 round_no, previous_round_id, updated_by_admin_id, win_odds, prize_points,
-				 points_unit, cp_allowed_sources)
+				 round_no, previous_round_id, updated_by_admin_id, win_odds)
 			values ($1, $2, 'draft', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-			        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $16, $28, $29, $30, $31)
+			        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $16, $28)
 			returning id, status, config_version, created_at, updated_at`,
 			c.GameVersionID, c.Title, c.StartsAt, c.EndsAt, c.Timezone, c.ServerSeed,
-			c.PointsPerAttempt, c.MaxAttemptsPerCustomer, c.MinAge, c.RequiresIdentityVerification,
+			c.EntriesPerAttempt, c.MaxAttemptsPerCustomer, c.MinAge, c.RequiresIdentityVerification,
 			c.NumberOfWinners, c.PrizeDescription, c.PrizeValueAmount, c.PrizeCurrency, c.OfficialRules,
 			c.CreatedByAdminID,
 			c.PrizeGrowthEnabled, c.PrizeType, c.WinnerMethod, c.StartPrizeCents, c.IncrementPerPlayCents,
 			c.MaxPrizeCents, c.ContinueAtCap, c.DailyPlayLimit, c.MinPlaysToWin,
-			roundNo(c.RoundNo), c.PreviousRoundID, c.WinOdds, c.PrizePoints,
-			pointsUnit(c.PointsUnit), cpSources(c.CPAllowedSources)).
+			roundNo(c.RoundNo), c.PreviousRoundID, c.WinOdds).
 			Scan(&c.ID, &c.Status, &c.ConfigVersion, &c.CreatedAt, &c.UpdatedAt)
 		if err != nil {
 			return err
 		}
 		if err := saveCountries(ctx, tx, c.ID, c.CountryIDs()); err != nil {
+			return err
+		}
+		if err := saveStates(ctx, tx, c.ID, c.StateIDs()); err != nil {
 			return err
 		}
 		if err := saveQuiz(ctx, tx, c.ID, c.QuizQuestions); err != nil {
@@ -310,28 +328,30 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 		if err := tx.QueryRow(ctx, `
 			update competition.competitions
 			set game_version_id = $2, title = $3, starts_at = $4, ends_at = $5,
-			    timezone = $6, points_per_attempt = $7, max_attempts_per_customer = $8, min_age = $9,
+			    timezone = $6, entries_per_attempt = $7, max_attempts_per_customer = $8, min_age = $9,
 			    requires_identity_verification = $10, number_of_winners = $11, prize_description = $12,
 			    prize_value_amount = $13, prize_currency = $14, official_rules = $15,
 			    prize_growth_enabled = $16, prize_type = $17, winner_method = $18, start_prize_cents = $19,
 			    increment_per_play_cents = $20, max_prize_cents = $21, continue_at_cap = $22,
 			    daily_play_limit = $23, min_plays_to_win = $24, updated_by_admin_id = $25,
-			    win_odds = $26, prize_points = $27, points_unit = $28, cp_allowed_sources = $29,
+			    win_odds = $26,
 			    config_version = config_version + 1,
 			    status = 'draft', updated_at = now()
 			where id = $1
 			returning config_version`,
 			c.ID, c.GameVersionID, c.Title, c.StartsAt, c.EndsAt, c.Timezone,
-			c.PointsPerAttempt, c.MaxAttemptsPerCustomer, c.MinAge, c.RequiresIdentityVerification,
+			c.EntriesPerAttempt, c.MaxAttemptsPerCustomer, c.MinAge, c.RequiresIdentityVerification,
 			c.NumberOfWinners, c.PrizeDescription, c.PrizeValueAmount, c.PrizeCurrency, c.OfficialRules,
 			c.PrizeGrowthEnabled, c.PrizeType, c.WinnerMethod, c.StartPrizeCents,
 			c.IncrementPerPlayCents, c.MaxPrizeCents, c.ContinueAtCap,
-			c.DailyPlayLimit, c.MinPlaysToWin, c.UpdatedByAdminID, c.WinOdds, c.PrizePoints,
-			pointsUnit(c.PointsUnit), cpSources(c.CPAllowedSources)).
+			c.DailyPlayLimit, c.MinPlaysToWin, c.UpdatedByAdminID, c.WinOdds).
 			Scan(&c.ConfigVersion); err != nil {
 			return err
 		}
 		if err := saveCountries(ctx, tx, c.ID, c.CountryIDs()); err != nil {
+			return err
+		}
+		if err := saveStates(ctx, tx, c.ID, c.StateIDs()); err != nil {
 			return err
 		}
 		if err := saveQuiz(ctx, tx, c.ID, c.QuizQuestions); err != nil {
@@ -342,20 +362,22 @@ func (r *CompetitionRepository) Update(ctx context.Context, c *models.Competitio
 	})
 }
 
-// pointsUnit defaults an unset unit to legacy points.
-func pointsUnit(u string) string {
-	if u == "" {
-		return "legacy"
+// saveStates replaces the states a competition is open to. Only states of
+// the competition's own countries are kept.
+func saveStates(ctx context.Context, tx pgx.Tx, competitionID uuid.UUID, stateIDs []uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `
+		delete from competition.competition_states
+		where competition_id = $1 and not (state_id = any($2::uuid[]))`, competitionID, stateIDs); err != nil {
+		return err
 	}
-	return u
-}
-
-// cpSources defaults unset sources to gift points and member bonuses.
-func cpSources(s []string) []string {
-	if len(s) == 0 {
-		return []string{models.LotSourceGift, models.LotSourceMemberBonus}
-	}
-	return s
+	_, err := tx.Exec(ctx, `
+		insert into competition.competition_states (competition_id, state_id)
+		select $1, st.id from core.states st
+		where st.id = any($2::uuid[])
+		  and exists (select 1 from competition.competition_countries cc
+		               where cc.competition_id = $1 and cc.country_id = st.country_id)
+		on conflict do nothing`, competitionID, stateIDs)
+	return err
 }
 
 // saveCountries replaces the countries a competition runs in.
@@ -375,6 +397,13 @@ func saveCountries(ctx context.Context, tx pgx.Tx, competitionID uuid.UUID, coun
 // AnnouncementStats counts how the competition's push announcement went.
 func (r *CompetitionRepository) AnnouncementStats(ctx context.Context, id uuid.UUID) (models.AnnouncementStats, error) {
 	return AnnouncementStats(ctx, r.db, id)
+}
+
+func scopeState(s *StateScope) *uuid.UUID {
+	if s == nil {
+		return nil
+	}
+	return s.StateID
 }
 
 func roundNo(n int) int {
@@ -419,7 +448,7 @@ func (r *CompetitionRepository) Schedule(ctx context.Context, id uuid.UUID, acto
 }
 
 // Cancel stops a competition for one of the permitted reasons (§13.9). No
-// winner is declared; every attempt is voided, the points spent on them are
+// winner is declared; every attempt is voided, the game entries spent on them are
 // returned, the prize is withdrawn on the ledger, and open sessions close.
 func (r *CompetitionRepository) Cancel(ctx context.Context, id uuid.UUID, reason string, note *string, actor Actor, audit models.AuditEntry) error {
 	return r.inTx(ctx, func(tx pgx.Tx) error {
@@ -618,15 +647,15 @@ func (r *CompetitionRepository) MyStats(ctx context.Context, customerID uuid.UUI
 // CreateAttemptInput is everything the server decides when an official
 // attempt begins.
 type CreateAttemptInput struct {
-	CompetitionID  uuid.UUID
-	CustomerID     uuid.UUID
-	GameVersionID  uuid.UUID
-	Seed           string
-	Config         json.RawMessage
-	ExpiresAt      time.Time
-	MaxAttempts    int
-	PointsSpent    int
-	PointsLedgerID *uuid.UUID
+	CompetitionID uuid.UUID
+	CustomerID    uuid.UUID
+	GameVersionID uuid.UUID
+	Seed          string
+	Config        json.RawMessage
+	ExpiresAt     time.Time
+	MaxAttempts   int
+	EntriesSpent  int
+	EntryLedgerID *uuid.UUID
 }
 
 // CreateAttempt opens the game session and records the attempt together.
@@ -645,7 +674,7 @@ func (r *CompetitionRepository) CreateAttempt(ctx context.Context, in CreateAtte
 			Scan(&active, &total); err != nil {
 			return err
 		}
-		// 0 is no limit: only the points balance counts.
+		// 0 is no limit: only the game entries balance counts.
 		if in.MaxAttempts > 0 && active >= in.MaxAttempts {
 			return ErrAttemptLimitReached
 		}
@@ -672,15 +701,15 @@ func (r *CompetitionRepository) CreateAttempt(ctx context.Context, in CreateAtte
 		number := total + 1
 		err := tx.QueryRow(ctx, `
 			insert into competition.competition_attempts
-				(competition_id, customer_id, session_id, points_ledger_id, points_spent,
+				(competition_id, customer_id, session_id, entry_ledger_id, entries_spent,
 				 attempt_number, server_seed, idempotency_key)
 			values ($1, $2, $3, $4, $5, $6, $7, $8)
-			returning id, competition_id, customer_id, session_id, points_ledger_id, points_spent,
+			returning id, competition_id, customer_id, session_id, entry_ledger_id, entries_spent,
 			          attempt_number, status, void_reason, started_at, submitted_at`,
-			in.CompetitionID, in.CustomerID, session.ID, in.PointsLedgerID, in.PointsSpent,
+			in.CompetitionID, in.CustomerID, session.ID, in.EntryLedgerID, in.EntriesSpent,
 			number, in.Seed, fmt.Sprintf("%s:%s:%d", in.CompetitionID, in.CustomerID, number)).
 			Scan(&attempt.ID, &attempt.CompetitionID, &attempt.CustomerID, &attempt.SessionID,
-				&attempt.PointsLedgerID, &attempt.PointsSpent, &attempt.AttemptNumber, &attempt.Status,
+				&attempt.EntryLedgerID, &attempt.EntriesSpent, &attempt.AttemptNumber, &attempt.Status,
 				&attempt.VoidReason, &attempt.StartedAt, &attempt.SubmittedAt)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -697,11 +726,11 @@ func (r *CompetitionRepository) CreateAttempt(ctx context.Context, in CreateAtte
 func (r *CompetitionRepository) getAttempt(ctx context.Context, where string, arg uuid.UUID) (*models.CompetitionAttempt, error) {
 	var a models.CompetitionAttempt
 	err := r.db.QueryRow(ctx, `
-		select id, competition_id, customer_id, session_id, points_ledger_id, points_spent,
+		select id, competition_id, customer_id, session_id, entry_ledger_id, entries_spent,
 		       attempt_number, status, void_reason, started_at, submitted_at
 		from competition.competition_attempts
 		where `+where+` = $1`, arg).
-		Scan(&a.ID, &a.CompetitionID, &a.CustomerID, &a.SessionID, &a.PointsLedgerID, &a.PointsSpent,
+		Scan(&a.ID, &a.CompetitionID, &a.CustomerID, &a.SessionID, &a.EntryLedgerID, &a.EntriesSpent,
 			&a.AttemptNumber, &a.Status, &a.VoidReason, &a.StartedAt, &a.SubmittedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrAttemptNotFound
@@ -1178,24 +1207,18 @@ func (r *CompetitionRepository) WinnerByID(ctx context.Context, competitionID, w
 }
 
 // ValidateWinner confirms a winner and opens their 14-day claim window.
-//
-// A points prize has nothing to claim or ship: the points are credited with
-// the validation, in the same transaction, and the claim is recorded as
-// already fulfilled.
 func (r *CompetitionRepository) ValidateWinner(ctx context.Context, winnerID uuid.UUID, claimDeadline time.Time, audit models.AuditEntry) error {
 	return r.inTx(ctx, func(tx pgx.Tx) error {
 		var (
 			customerID, competitionID uuid.UUID
-			prizeType                 string
-			prizePoints               *int64
 		)
 		err := tx.QueryRow(ctx, `
 			update competition.competition_winners w
 			set status = 'validated', validated_at = now(), updated_at = now()
 			from competition.competitions c
 			where w.id = $1 and w.status = 'pending_validation' and c.id = w.competition_id
-			returning w.customer_id, w.competition_id, c.prize_type, c.prize_points`, winnerID).
-			Scan(&customerID, &competitionID, &prizeType, &prizePoints)
+			returning w.customer_id, w.competition_id`, winnerID).
+			Scan(&customerID, &competitionID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrWinnerStateChanged
 		}
@@ -1203,22 +1226,6 @@ func (r *CompetitionRepository) ValidateWinner(ctx context.Context, winnerID uui
 			return err
 		}
 		claimStatus := "pending"
-		if prizeType == "points" && prizePoints != nil && *prizePoints > 0 {
-			if _, _, err := applyPoints(ctx, tx, PointsChange{
-				CustomerID: customerID, EntryType: models.PointsEntryPrizePoints, Delta: *prizePoints,
-				CompetitionID: &competitionID, ReferenceType: ref("competition_winner"), ReferenceID: &winnerID,
-				IdempotencyKey: "prize:" + winnerID.String(), ActorType: "system",
-			}); err != nil {
-				return err
-			}
-			claimStatus = "fulfilled"
-			if _, err := tx.Exec(ctx, `
-				update competition.competition_winners
-				set settlement_status = 'not_applicable', updated_at = now()
-				where id = $1`, winnerID); err != nil {
-				return err
-			}
-		}
 		if _, err := tx.Exec(ctx, `
 			insert into competition.prize_claims (winner_id, customer_id, claim_deadline_at, status)
 			values ($1, $2, $3, $4)`, winnerID, customerID, claimDeadline, claimStatus); err != nil {

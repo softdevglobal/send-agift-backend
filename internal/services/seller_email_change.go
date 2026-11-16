@@ -17,7 +17,7 @@ import (
 
 // ErrFundingLocked is a seller trying to buy points or raise a product reward
 // in the days after their email changed.
-var ErrFundingLocked = errors.New("buying points and raising rewards are on hold for a few days after an email change")
+var ErrFundingLocked = errors.New("buying advertising packages is on hold for a few days after an email change")
 
 // sellerUndoPath is the page in the seller app that posts the undo token.
 const sellerUndoPath = "/seller/email/undo"

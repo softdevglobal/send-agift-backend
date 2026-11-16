@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -122,7 +123,7 @@ func (r *ShipmentRepository) GetShippingContext(ctx context.Context, sellerID, o
 		left join seller.seller_addresses sa on sa.id = coalesce(s.return_address_id, s.address_id)
 		left join customer.recipients r on r.id = o.recipient_id
 		left join customer.recipient_addresses ra on ra.id = coalesce(
-			r.default_address_id,
+			o.recipient_address_id, r.default_address_id,
 			(select id from customer.recipient_addresses where recipient_id = r.id order by is_default desc, created_at asc limit 1)
 		)
 		left join core.countries fc on fc.id = sa.country_id
@@ -836,9 +837,9 @@ func (r *ShipmentRepository) ShipFromForShops(ctx context.Context, shopIDs []uui
 }
 
 // ShipToForRecipient resolves a recipient's delivery address, scoped to the
-// customer who owns them so one customer cannot quote against another's
-// recipient.
-func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID, recipientID string) (*CartShipTo, error) {
+// customer. With an addressID it is that address, which must be one of the
+// recipient's own; without one it is the recipient's default.
+func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID, recipientID, addressID string) (*CartShipTo, error) {
 	customerUUID, err := uuid.Parse(customerID)
 	if err != nil {
 		return nil, ErrShipmentNotFound
@@ -847,30 +848,45 @@ func (r *ShipmentRepository) ShipToForRecipient(ctx context.Context, customerID,
 	if err != nil {
 		return nil, ErrShipmentNotFound
 	}
+	var addressUUID *uuid.UUID
+	if strings.TrimSpace(addressID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(addressID))
+		if err != nil {
+			return nil, ErrShipmentNotFound
+		}
+		addressUUID = &id
+	}
 
 	to := &CartShipTo{}
+	var foundAddress *uuid.UUID
 	err = r.db.QueryRow(ctx, `
 		select coalesce(r.name, ''), coalesce(ra.line1, ''), coalesce(ra.line2, ''),
 		       coalesce(ra.city, ''), coalesce(ra.region, ''), coalesce(ra.postal_code, ''),
 		       coalesce(tc.iso_code, ''), coalesce(r.phone, ''), coalesce(r.email::text, ''),
-		       ra.latitude::float8, ra.longitude::float8
+		       ra.latitude::float8, ra.longitude::float8, ra.id
 		from customer.recipients r
-		left join customer.recipient_addresses ra on ra.id = coalesce(
+		left join customer.recipient_addresses ra on ra.recipient_id = r.id and ra.id = coalesce(
+			$3::uuid,
 			r.default_address_id,
 			(select id from customer.recipient_addresses where recipient_id = r.id
 			 order by is_default desc, created_at asc limit 1)
 		)
 		left join core.countries tc on tc.id = ra.country_id
 		where r.id = $1 and r.customer_id = $2`,
-		recipientUUID, customerUUID,
+		recipientUUID, customerUUID, addressUUID,
 	).Scan(&to.Name, &to.Street1, &to.Street2, &to.City, &to.Region,
 		&to.PostalCode, &to.CountryISO, &to.Phone, &to.Email,
-		&to.Latitude, &to.Longitude)
+		&to.Latitude, &to.Longitude, &foundAddress)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrShipmentNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	// An address that is not this recipient's is refused, not swapped for
+	// the default.
+	if addressUUID != nil && foundAddress == nil {
+		return nil, ErrShipmentNotFound
 	}
 	return to, nil
 }

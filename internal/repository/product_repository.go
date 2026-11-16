@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -29,24 +28,17 @@ func NewProductRepository(db *pgxpool.Pool) *ProductRepository {
 	return &ProductRepository{db: db}
 }
 
+// productSelectCols ends with whether the product is on a seller's promoted
+// list and the game entries buying it earns right now (see ad_packages.go).
 const productSelectCols = `
 	p.id, p.shop_id, p.name, p.slug, p.description, p.product_type, p.price_amount,
 	p.currency, p.status, p.occasion_tags, p.customer_type_visibility,
-	p.points_display_enabled, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
+	` + productSponsoredSQL + `, p.prep_minutes, p.created_at, p.updated_at, p.image_url,
 	p.parcel_length, p.parcel_width, p.parcel_height, p.parcel_distance_unit,
-	p.parcel_weight, p.parcel_mass_unit, p.reward_points`
+	p.parcel_weight, p.parcel_mass_unit, ` + productEntriesSQL
 
-// publicProductSelectCols is productSelectCols for customer-facing reads,
-// which show a reward while the seller can promise it: from their available
-// points or, when those run low, from their credit (fronted by the platform
-// and taken from their next purchase). Past that the reward is hidden,
-// because it would not be paid. The query must join the shop as s.
-var publicProductSelectCols = strings.Replace(productSelectCols, "p.reward_points", fmt.Sprintf(`
-	case when p.reward_points > 0
-	      and coalesce((select a.balance - a.reserved + a.credit_limit
-	                    from points.seller_points_accounts a
-	                    where a.seller_id = s.seller_id), %d) >= p.reward_points
-	     then p.reward_points else 0 end`, DefaultSellerPointsCredit), 1)
+// publicProductSelectCols is productSelectCols for customer-facing reads.
+const publicProductSelectCols = productSelectCols
 
 func scanProduct(scanner interface {
 	Scan(dest ...any) error
@@ -55,8 +47,8 @@ func scanProduct(scanner interface {
 	if err := scanner.Scan(
 		&p.ID, &p.ShopID, &p.Name, &p.Slug, &p.Description, &p.ProductType, &p.PriceAmount,
 		&p.Currency, &p.Status, &p.OccasionTags, &p.CustomerTypeVisibility,
-		&p.PointsDisplayEnabled, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
-		&length, &width, &height, &distanceUnit, &weight, &massUnit, &p.RewardPoints,
+		&p.Sponsored, &p.PrepMinutes, &p.CreatedAt, &p.UpdatedAt, &p.ImageURL,
+		&length, &width, &height, &distanceUnit, &weight, &massUnit, &p.GameEntries,
 	); err != nil {
 		return err
 	}
@@ -94,14 +86,13 @@ func (r *ProductRepository) Create(ctx context.Context, p *models.Product, asset
 	err = tx.QueryRow(ctx, `
 		insert into seller.products (
 			shop_id, name, slug, description, product_type, price_amount, currency,
-			status, occasion_tags, customer_type_visibility, points_display_enabled, prep_minutes, image_url,
-			parcel_length, parcel_width, parcel_height, parcel_distance_unit, parcel_weight, parcel_mass_unit,
-			reward_points
-		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			status, occasion_tags, customer_type_visibility, prep_minutes, image_url,
+			parcel_length, parcel_width, parcel_height, parcel_distance_unit, parcel_weight, parcel_mass_unit
+		) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		returning id, status, created_at, updated_at`,
 		p.ShopID, p.Name, p.Slug, p.Description, p.ProductType, p.PriceAmount, p.Currency,
-		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
-		pl, pw, ph, pdu, pwt, pmu, p.RewardPoints,
+		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PrepMinutes, p.ImageURL,
+		pl, pw, ph, pdu, pwt, pmu,
 	).Scan(&p.ID, &p.Status, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return mapProductWriteError(err)
@@ -165,22 +156,20 @@ func (r *ProductRepository) Update(ctx context.Context, p *models.Product, asset
 		    status = $8,
 		    occasion_tags = $9,
 		    customer_type_visibility = $10,
-		    points_display_enabled = $11,
-		    prep_minutes = $12,
-		    image_url = $13,
-		    parcel_length = $14,
-		    parcel_width = $15,
-		    parcel_height = $16,
-		    parcel_distance_unit = $17,
-		    parcel_weight = $18,
-		    parcel_mass_unit = $19,
-		    reward_points = $20,
+		    prep_minutes = $11,
+		    image_url = $12,
+		    parcel_length = $13,
+		    parcel_width = $14,
+		    parcel_height = $15,
+		    parcel_distance_unit = $16,
+		    parcel_weight = $17,
+		    parcel_mass_unit = $18,
 		    updated_at = now()
 		where id = $1
 		returning updated_at`,
 		p.ID, p.Name, p.Slug, p.Description, p.ProductType, p.PriceAmount, p.Currency,
-		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PointsDisplayEnabled, p.PrepMinutes, p.ImageURL,
-		pl, pw, ph, pdu, pwt, pmu, p.RewardPoints,
+		p.Status, p.OccasionTags, p.CustomerTypeVisibility, p.PrepMinutes, p.ImageURL,
+		pl, pw, ph, pdu, pwt, pmu,
 	).Scan(&p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrProductNotFound
@@ -324,7 +313,7 @@ func (r *ProductRepository) ListPublishedByShopForCustomerType(
 		  and se.status = 'active'
 		  and p.status = 'published'
 		  and (p.customer_type_visibility = 'both' or p.customer_type_visibility = $2)
-		order by p.created_at desc`, shopID, customerType)
+		order by `+productSponsoredRankSQL+`, p.created_at desc`, shopID, customerType)
 	if err != nil {
 		return nil, err
 	}
@@ -384,8 +373,8 @@ func (r *ProductRepository) GetPublishedByIDForCustomerType(
 	).Scan(
 		&out.ID, &out.ShopID, &out.Name, &out.Slug, &out.Description, &out.ProductType, &out.PriceAmount,
 		&out.Currency, &out.Status, &out.OccasionTags, &out.CustomerTypeVisibility,
-		&out.PointsDisplayEnabled, &out.PrepMinutes, &out.CreatedAt, &out.UpdatedAt, &out.ImageURL,
-		&length, &width, &height, &distanceUnit, &weight, &massUnit, &out.RewardPoints,
+		&out.Sponsored, &out.PrepMinutes, &out.CreatedAt, &out.UpdatedAt, &out.ImageURL,
+		&length, &width, &height, &distanceUnit, &weight, &massUnit, &out.GameEntries,
 		&out.Shop.ID, &out.Shop.Name, &out.Shop.Slug, &out.Shop.ImageURL, &out.Shop.Location, &out.Shop.SellerVerificationStatus,
 		&out.Shop.SellerImageURL,
 	)

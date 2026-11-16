@@ -199,7 +199,7 @@ func (r *SellerRepository) EmailReserved(ctx context.Context, email string, exce
 	return emailReserved(ctx, r.db, email, except)
 }
 
-// FundingLockedUntil is when buying points and raising product rewards open
+// FundingLockedUntil is when buying advertising packages opens
 // up again after an email change, or nil when nothing is locked.
 func (r *SellerRepository) FundingLockedUntil(ctx context.Context, id uuid.UUID) (*time.Time, error) {
 	var t *time.Time

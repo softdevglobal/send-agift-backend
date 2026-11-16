@@ -8,17 +8,20 @@ import (
 
 // Order maps to marketplace.orders. One checkout, one header row.
 type Order struct {
-	ID             uuid.UUID  `json:"id"`
-	OrderNumber    string     `json:"order_number"`
-	CustomerID     uuid.UUID  `json:"customer_id"`
-	RecipientID    *uuid.UUID `json:"recipient_id,omitempty"`
-	CountryID      uuid.UUID  `json:"country_id"`
-	CustomerType   string     `json:"customer_type"`
-	DeliveryDate   time.Time  `json:"delivery_date"`
-	Status         string     `json:"status"`
-	SubtotalAmount int        `json:"subtotal_amount"`
-	DeliveryAmount int        `json:"delivery_amount"`
-	TotalAmount    int        `json:"total_amount"`
+	ID          uuid.UUID  `json:"id"`
+	OrderNumber string     `json:"order_number"`
+	CustomerID  uuid.UUID  `json:"customer_id"`
+	RecipientID *uuid.UUID `json:"recipient_id,omitempty"`
+	// RecipientAddressID is the address picked at checkout; nil means the
+	// recipient's default (and every order placed before it was kept).
+	RecipientAddressID *uuid.UUID `json:"recipient_address_id,omitempty"`
+	CountryID          uuid.UUID  `json:"country_id"`
+	CustomerType       string     `json:"customer_type"`
+	DeliveryDate       time.Time  `json:"delivery_date"`
+	Status             string     `json:"status"`
+	SubtotalAmount     int        `json:"subtotal_amount"`
+	DeliveryAmount     int        `json:"delivery_amount"`
+	TotalAmount        int        `json:"total_amount"`
 	// MemberDiscountAmount is what a member saved on the items, funded by
 	// SendAGift. TotalAmount is already net of it: subtotal + delivery -
 	// discount. Line prices stay the seller's list prices.
@@ -29,12 +32,6 @@ type Order struct {
 	Currency           string     `json:"currency"`
 	GiftMessage        *string    `json:"gift_message,omitempty"`
 	MediaGreetingID    *uuid.UUID `json:"media_greeting_id,omitempty"`
-	// Points the sender attached to the gift, and where they are:
-	// none | held (taken from the sender, not yet delivered) | delivered
-	// (reached the recipient's account) | returned (back to the sender) |
-	// reversed (taken back after a refund).
-	GiftPoints       int64  `json:"gift_points"`
-	GiftPointsStatus string `json:"gift_points_status"`
 	// paid | free_gift. A free gift has TotalAmount 0: the seller funds
 	// FreeGiftCost (item plus delivery) from their free gift budget.
 	OrderKind    string `json:"order_kind"`
@@ -82,15 +79,15 @@ type OrderItem struct {
 	// is never taken off TotalAmount: the seller is paid on the list price.
 	MemberDiscountAmount int    `json:"-"`
 	FulfilmentStatus     string `json:"fulfilment_status"`
-	// The product's reward points as sold, and where they are:
-	// none | reserved (held from the seller until delivery) | awarded |
-	// released (back to the seller, line cancelled) | reversed (taken back
-	// after a refund).
-	RewardPointsPerUnit int       `json:"reward_points_per_unit"`
-	RewardPoints        int64     `json:"reward_points"`
-	RewardStatus        string    `json:"reward_status"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	// The game entries this line earns, and where they are: none |
+	// reserved (promised, waiting for the payment to be confirmed) |
+	// granted | released (the order was never paid) | reversed (taken back
+	// after a refund or cancellation).
+	GameEntries   int        `json:"game_entries"`
+	EntriesStatus string     `json:"entries_status"`
+	PromotionID   *uuid.UUID `json:"-"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 	// Present once the line has actually been shipped.
 	Tracking *OrderItemTracking `json:"tracking,omitempty"`
 }
@@ -153,7 +150,6 @@ type ReceivedGift struct {
 	OrderNumber string             `json:"order_number"`
 	SenderName  string             `json:"sender_name"`
 	GiftMessage *string            `json:"gift_message,omitempty"`
-	GiftPoints  int64              `json:"gift_points"`
 	DeliveredAt time.Time          `json:"delivered_at"`
 	Items       []ReceivedGiftItem `json:"items"`
 }
@@ -170,4 +166,60 @@ type ReceivedGiftItem struct {
 	Quantity         int        `json:"quantity"`
 	FulfilmentStatus string     `json:"fulfilment_status"`
 	ReviewID         *uuid.UUID `json:"review_id,omitempty"`
+}
+
+// SellerCustomer is someone who has ordered from a seller, as that seller
+// sees them: their name and region and what they bought from this seller
+// only. No email, phone or game entries.
+type SellerCustomer struct {
+	CustomerID  uuid.UUID `json:"customer_id"`
+	Name        string    `json:"name"`
+	CountryName string    `json:"country_name"`
+	StateName   *string   `json:"state_name,omitempty"`
+	OrdersCount int       `json:"orders_count"`
+	// Units bought, cancelled lines left out.
+	ItemsCount int `json:"items_count"`
+	// What they paid for this seller's lines, per currency. Free gifts and
+	// cancelled lines are left out.
+	Spent        []SellerCustomerSpend `json:"spent"`
+	FirstOrderAt time.Time             `json:"first_order_at"`
+	LastOrderAt  time.Time             `json:"last_order_at"`
+}
+
+type SellerCustomerSpend struct {
+	Currency string `json:"currency"`
+	Amount   int    `json:"amount"`
+}
+
+// SellerCustomerDetail is one customer and their orders with the seller,
+// newest first.
+type SellerCustomerDetail struct {
+	SellerCustomer
+	Orders []SellerCustomerOrder `json:"orders"`
+}
+
+// SellerCustomerOrder is an order as far as it concerns one seller: only
+// their lines, and the amount of those lines.
+type SellerCustomerOrder struct {
+	OrderID      uuid.UUID                 `json:"order_id"`
+	OrderNumber  string                    `json:"order_number"`
+	Status       string                    `json:"status"`
+	OrderKind    string                    `json:"order_kind"`
+	Currency     string                    `json:"currency"`
+	Amount       int                       `json:"amount"`
+	DeliveryDate time.Time                 `json:"delivery_date"`
+	CreatedAt    time.Time                 `json:"created_at"`
+	Items        []SellerCustomerOrderLine `json:"items"`
+}
+
+type SellerCustomerOrderLine struct {
+	// The order item, as /sellers/me/order-items/{id} knows it.
+	ID               uuid.UUID `json:"id"`
+	ProductName      string    `json:"product_name"`
+	ProductImageURL  *string   `json:"product_image_url,omitempty"`
+	ShopName         string    `json:"shop_name"`
+	Quantity         int       `json:"quantity"`
+	TotalAmount      int       `json:"total_amount"`
+	FulfilmentStatus string    `json:"fulfilment_status"`
+	RecipientName    *string   `json:"recipient_name,omitempty"`
 }

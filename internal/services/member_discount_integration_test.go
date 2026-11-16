@@ -19,7 +19,7 @@ import (
 // the base their payout is worked out on do not move, and the discount can
 // never be more than the platform commission that funds it.
 
-func (f *pointsFixture) memberPeriod(customer uuid.UUID, discountBPS int, start, end time.Time) {
+func (f *shopFixture) memberPeriod(customer uuid.UUID, discountBPS int, start, end time.Time) {
 	f.t.Helper()
 	var offer, sub uuid.UUID
 	f.scan(&offer, `insert into membership.plan_offers
@@ -38,19 +38,19 @@ func (f *pointsFixture) memberPeriod(customer uuid.UUID, discountBPS int, start,
 }
 
 func TestMemberDiscountPricing(t *testing.T) {
-	f := newPointsFixture(t, "manual")
+	f := newShopFixture(t)
 	cp := repository.NewCompetitionPointsRepository(f.pool)
 	// SendAGift's commission is 7.9%.
 	f.orders.UseMemberDiscounts(cp.MemberDiscount, 790)
 	seller := f.seller()
-	product := f.product(seller, 0)
+	product := f.product(seller)
 	ctx := context.Background()
 	now := time.Now()
 
 	type totals struct{ subtotal, discount, total, line int }
 	place := func(customer uuid.UUID) totals {
 		t.Helper()
-		o, err := f.order(customer, product, 1, nil, 0)
+		o, err := f.order(customer, product, 1)
 		if err != nil {
 			t.Fatalf("order: %v", err)
 		}
@@ -120,8 +120,7 @@ func TestMemberDiscountOfferCap(t *testing.T) {
 	offer := func(bps int) (*OfferInput, error) {
 		in := OfferInput{
 			TierCode: "cap-" + uuid.NewString()[:6], CountryID: f.country.String(), Name: "Capped",
-			Currency: f.currency, PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1,
-			MemberBonusPoints: 0, MemberDiscountBPS: bps, TermsVersion: "v1",
+			Currency: f.currency, PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1, MemberDiscountBPS: bps, TermsVersion: "v1",
 		}
 		_, err := f.cp.CreateOffer(f.ctx, f.adminA, in)
 		return &in, err
@@ -263,13 +262,12 @@ func TestMembershipSyncFromStripe(t *testing.T) {
 	client := NewStripeClient("sk_test_x")
 	client.base = stripe.URL
 	f.cp = NewCompetitionPointsService(f.repo, f.comps, client, CompetitionPointsConfig{
-		WebURL: "http://localhost:5173", QuoteSecret: "test-quote-secret", HoldTTL: 10 * time.Minute,
-		RestoreWindow: time.Hour,
+		WebURL: "http://localhost:5173",
 	})
 
 	o, err := f.cp.CreateOffer(f.ctx, f.adminA, OfferInput{
 		TierCode: "sync-" + uuid.NewString()[:6], CountryID: f.country.String(), Name: "Plus", Currency: f.currency,
-		PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1, MemberBonusPoints: 1000, TermsVersion: "v1"})
+		PriceMinor: 999, IntervalUnit: "month", IntervalCount: 1, TermsVersion: "v1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,12 +287,11 @@ func TestMembershipSyncFromStripe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("sync: %v", err)
 		}
-		if st.CurrentPeriod == nil || st.State != models.MembershipBonusUnlocked {
+		if st.CurrentPeriod == nil || st.State != models.MembershipActive {
 			t.Fatalf("after sync %d: %s %+v", i, st.State, st.CurrentPeriod)
 		}
-		if got := f.myPoints(member); got != 1000 {
-			t.Fatalf("after sync %d: %d points, want 1000", i, got)
-		}
 	}
-	f.reconciled()
+	if got := f.count(`select count(*) from membership.paid_periods where customer_id = $1`, member); got != 1 {
+		t.Fatalf("%d paid periods after two syncs, want 1", got)
+	}
 }

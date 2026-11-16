@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -72,6 +73,7 @@ type SellerRegisterInput struct { // SellerRegisterInput is a struct that contai
 	ContactJobTitle    *string
 	AuthorityConfirmed bool
 	TermsAccepted      bool
+	TermsVersion       string // seller agreement version shown; blank from older clients
 	MarketingOptIn     bool
 	// FreeGiftBudgetAccepted is the seller's tick that they accept the free
 	// gift marketing budget SendAGift sets for them. Required to register.
@@ -267,6 +269,11 @@ func (s *SellerService) Register(ctx context.Context, in SellerRegisterInput) (*
 			return nil, ErrShopConflict
 		}
 		return nil, err
+	}
+	if in.TermsAccepted {
+		if err := s.sellers.RecordTermsAcceptance(ctx, seller.ID, in.TermsVersion, seller.CountryID); err != nil {
+			log.Printf("seller %s terms acceptance: %v", seller.ID, err)
+		}
 	}
 	// The account is saved. A failure to store or send the code is logged
 	// inside issueEmailCode; the seller can ask for another from the confirm screen.

@@ -21,14 +21,14 @@ type Product struct {
 	Status                 string    `json:"status"`
 	OccasionTags           []string  `json:"occasion_tags"`
 	CustomerTypeVisibility string    `json:"customer_type_visibility"`
-	PointsDisplayEnabled   bool      `json:"points_display_enabled"`
-	// RewardPoints a customer earns for each unit bought, paid from the
-	// seller's points when the line is delivered. On customer-facing reads it
-	// is zero when the seller does not hold enough points to pay it.
-	RewardPoints int       `json:"reward_points"`
-	PrepMinutes  int       `json:"prep_minutes"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// GameEntries is what buying this product earns a customer right now:
+	// its level's award while the seller promotes it with an advertising
+	// package that still has budget. Sponsored marks a promoted product.
+	GameEntries int       `json:"game_entries"`
+	Sponsored   bool      `json:"sponsored"`
+	PrepMinutes int       `json:"prep_minutes"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 	// ImageURL is the cover thumbnail (list cards, order lines). Prefer Media for galleries.
 	ImageURL *string `json:"image_url,omitempty"`
 	// Shipping parcel used for delivery quotes / rates (seller form dims).

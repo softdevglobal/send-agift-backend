@@ -26,8 +26,8 @@ type countryCapabilityRequest struct {
 	DomesticDeliveryEnabled      bool `json:"domestic_delivery_enabled"`
 	InternationalDeliveryEnabled bool `json:"international_delivery_enabled"`
 	MembershipsEnabled           bool `json:"memberships_enabled"`
-	PointsEarningEnabled         bool `json:"points_earning_enabled"`
-	PointsUsageEnabled           bool `json:"points_usage_enabled"`
+	EntriesEarningEnabled        bool `json:"entries_earning_enabled"`
+	EntriesUsageEnabled          bool `json:"entries_usage_enabled"`
 	SkillCompetitionsEnabled     bool `json:"skill_competitions_enabled"`
 	ProgressivePrizesEnabled     bool `json:"progressive_prizes_enabled"`
 	ChanceGamesEnabled           bool `json:"chance_games_enabled"`
@@ -42,8 +42,8 @@ func (h *CountryCapabilityHandler) toInput(req countryCapabilityRequest) service
 		DomesticDeliveryEnabled:      req.DomesticDeliveryEnabled,
 		InternationalDeliveryEnabled: req.InternationalDeliveryEnabled,
 		MembershipsEnabled:           req.MembershipsEnabled,
-		PointsEarningEnabled:         req.PointsEarningEnabled,
-		PointsUsageEnabled:           req.PointsUsageEnabled,
+		EntriesEarningEnabled:        req.EntriesEarningEnabled,
+		EntriesUsageEnabled:          req.EntriesUsageEnabled,
 		SkillCompetitionsEnabled:     req.SkillCompetitionsEnabled,
 		ProgressivePrizesEnabled:     req.ProgressivePrizesEnabled,
 		ChanceGamesEnabled:           req.ChanceGamesEnabled,

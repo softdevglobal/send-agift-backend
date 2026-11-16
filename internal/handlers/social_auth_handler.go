@@ -72,6 +72,8 @@ func (h *SocialAuthHandler) writeError(w http.ResponseWriter, err error) {
 		utils.Error(w, http.StatusForbidden, "customer registration is disabled for this country")
 	case errors.Is(err, services.ErrInvalidInput):
 		utils.Error(w, http.StatusBadRequest, "provider, token and phone number are required")
+	case errors.Is(err, services.ErrInvalidState), errors.Is(err, services.ErrStateNotFound):
+		writeCodedError(w, http.StatusBadRequest, "state_required", err.Error())
 	default:
 		log.Printf("social auth error: %v", err)
 		utils.Error(w, http.StatusBadGateway, "Sign-in failed. Please try again.")

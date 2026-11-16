@@ -28,11 +28,8 @@ Copy `.env.example` to `.env` and fill in values. Delivery is priced from each s
 
 | Variable | Purpose |
 |---|---|
-| `POINTS_CENTS_PER_POINT` | What one point costs a seller, in minor units of `POINTS_CURRENCY` (default `10` = $0.10) |
-| `POINTS_CURRENCY` | Currency sellers buy points in (default `USD`) |
-| `POINTS_PAYMENT_PROVIDER` | `instant` (default until Stripe is connected — points are credited as soon as they are bought), `manual` (an admin confirms each payment) or `test` (sellers approve their own purchase; development only) |
-| `POINTS_REWARD_TIMING` | When product reward points reach the buyer: `order` (default — as soon as the order is placed; cancelling takes them back and is refused once they are spent) or `delivery` |
-| `POINTS_WEBHOOK_SECRET` | HMAC-SHA256 secret for `POST /api/v1/payments/points/webhook`; empty refuses the webhook |
+| `ADS_TEST_PAYMENTS` | `true` lets a sandbox seller confirm an advertising package payment by hand when no Stripe key is set. Never set in production |
+| `STATE_CHANGE_COOLDOWN_DAYS` | How long a customer waits before changing the state or region on their account (default `90`) |
 
 ## Run with Docker
 
@@ -353,8 +350,8 @@ Get `<admin_token>` from `POST /api/v1/auth/login` (admin account).
   "domestic_delivery_enabled": true,
   "international_delivery_enabled": true,
   "memberships_enabled": true,
-  "points_earning_enabled": true,
-  "points_usage_enabled": true,
+  "entries_earning_enabled": true,
+  "entries_usage_enabled": true,
   "skill_competitions_enabled": false,
   "app_store_available": true
 }
@@ -397,8 +394,8 @@ List all countries that have capability rows, each with nested `country` + `capa
       "domestic_delivery_enabled": true,
       "international_delivery_enabled": true,
       "memberships_enabled": true,
-      "points_earning_enabled": true,
-      "points_usage_enabled": true,
+      "entries_earning_enabled": true,
+      "entries_usage_enabled": true,
       "skill_competitions_enabled": false,
       "app_store_available": true,
       "rule_version": 2,
@@ -440,8 +437,8 @@ Example: `http://localhost:8081/api/v1/admin/countries/3478b972-3c85-49ea-ac32-7
     "domestic_delivery_enabled": true,
     "international_delivery_enabled": true,
     "memberships_enabled": true,
-    "points_earning_enabled": true,
-    "points_usage_enabled": true,
+    "entries_earning_enabled": true,
+    "entries_usage_enabled": true,
     "skill_competitions_enabled": false,
     "app_store_available": true,
     "rule_version": 2,
@@ -677,7 +674,6 @@ Example URL: `http://localhost:8081/api/v1/customers/me/addresses/address-uuid`
       "status": "draft",
       "occasion_tags": ["birthday"],
       "customer_type_visibility": "both",
-      "points_display_enabled": false,
       "prep_minutes": 60,
       "created_at": "...",
       "updated_at": "...",
@@ -1408,7 +1404,6 @@ Example URL: `http://localhost:8081/api/v1/sellers/me/shops/shop-uuid/products`
     "status": "draft",
     "occasion_tags": ["birthday", "thank-you"],
     "customer_type_visibility": "both",
-    "points_display_enabled": false,
     "prep_minutes": 60,
     "created_at": "...",
     "updated_at": "...",
@@ -1436,7 +1431,6 @@ Creates product + inventory (`inventory` optional, defaults to 0).
   "status": "draft",
   "occasion_tags": ["birthday", "thank-you"],
   "customer_type_visibility": "both",
-  "points_display_enabled": false,
   "prep_minutes": 60,
   "image_url": "https://res.cloudinary.com/demo/image/upload/v1/product.jpg",
   "inventory": {
@@ -1463,7 +1457,6 @@ Creates product + inventory (`inventory` optional, defaults to 0).
   "status": "draft",
   "occasion_tags": ["birthday", "thank-you"],
   "customer_type_visibility": "both",
-  "points_display_enabled": false,
   "prep_minutes": 60,
   "created_at": "...",
   "updated_at": "...",
@@ -1509,7 +1502,6 @@ Updates product fields only (not inventory).
   "status": "published",
   "occasion_tags": ["birthday"],
   "customer_type_visibility": "both",
-  "points_display_enabled": false,
   "prep_minutes": 90,
   "image_url": "https://res.cloudinary.com/demo/image/upload/v1/product-new.jpg"
 }
@@ -1860,7 +1852,6 @@ Returns the product **plus a `shop` block**, so the product page can render "sol
   "status": "published",
   "occasion_tags": ["birthday"],
   "customer_type_visibility": "both",
-  "points_display_enabled": false,
   "prep_minutes": 60,
   "image_url": "https://.../product.jpg",
   "created_at": "...",

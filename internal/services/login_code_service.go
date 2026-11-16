@@ -291,44 +291,21 @@ func (s *LoginCodeService) findCustomer(ctx context.Context, channel, dest strin
 	return findCustomerByPhone(ctx, s.customers, s.defaultCC, dest)
 }
 
-// findCustomerByPhone matches a verified phone, a phone saved on the
-// account, or a recipient phone whose email is that account.
+// findCustomerByPhone finds the one live account that has proved it holds
+// this number. Only a verified phone counts: a number typed into an account
+// without proof, or saved on a recipient, never selects an account, since
+// anyone can type anyone's number or email there. An account whose phone is
+// not verified yet signs in by email and verifies the phone from its profile.
 func findCustomerByPhone(ctx context.Context, customers *repository.CustomerRepository, defaultCC, raw string) (*models.Customer, error) {
 	dest, err := NormalizePhone(raw, defaultCC)
 	if err != nil {
 		return nil, err
 	}
 	id, err := customers.CustomerIDByVerifiedPhone(ctx, dest)
-	if err == nil {
-		return customers.GetByID(ctx, id)
-	}
-	if !errors.Is(err, repository.ErrCustomerNotFound) {
-		return nil, err
-	}
-	matches, err := customers.AccountsByPhoneTail(ctx, dest)
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]struct{}{}
-	var ids []string
-	for _, match := range matches {
-		norm, err := NormalizePhone(match.Phone, defaultCC)
-		if err != nil || norm != dest {
-			continue
-		}
-		if _, ok := seen[match.CustomerID]; ok {
-			continue
-		}
-		seen[match.CustomerID] = struct{}{}
-		ids = append(ids, match.CustomerID)
-	}
-	if len(ids) == 0 {
-		return nil, repository.ErrCustomerNotFound
-	}
-	if len(ids) > 1 {
-		return nil, ErrPhoneTaken
-	}
-	return customers.GetByID(ctx, ids[0])
+	return customers.GetByID(ctx, id)
 }
 
 // A sign-up token carries no role, so the auth middleware never accepts it

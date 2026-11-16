@@ -389,12 +389,12 @@ func (s *FreeGiftService) Send(ctx context.Context, customerID, idempotencyKey s
 		UnitAmount:       snap.PriceAmount,
 		TotalAmount:      snap.PriceAmount,
 		FulfilmentStatus: "pending",
-		RewardStatus:     "none", // a free gift earns no reward points
+		EntriesStatus:    "none", // a free gift earns no game entries
 	}}
 	shops := map[string]uuid.UUID{shopID.String(): sellerID}
 
 	// Delivery price and date: the same helpers the paid route uses.
-	sellerDeliveries, err := s.orderSvc.priceShopDeliveries(ctx, customerID, &rec.ID, shops, snap.Currency)
+	sellerDeliveries, err := s.orderSvc.priceShopDeliveries(ctx, customerID, &rec.ID, nil, shops, snap.Currency)
 	if err != nil {
 		return nil, err
 	}

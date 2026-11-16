@@ -26,7 +26,6 @@ func sampleOrderSummary() *repository.OrderEmailSummary {
 		TotalAmount:    7450,
 		Currency:       "AUD",
 		GiftMessage:    str("Happy birthday! Thinking of you today <3"),
-		GiftPoints:     250,
 		CustomerEmail:  "sam@example.com",
 		CustomerName:   str("Sam Perera"),
 		RecipientName:  str("Alex Silva"),
@@ -60,7 +59,7 @@ func TestEmailTemplatesRender(t *testing.T) {
 		"gift_delivered": {func() (*EmailContent, error) {
 			return renderGiftDelivered(web, order, GiftRecipientDefaultPassword, "")
 		},
-			[]string{"Sam sent you", "00001111", "alex@example.com", "250 points", "next=%2Faccount%2Fgifts"}},
+			[]string{"Sam sent you", "00001111", "alex@example.com", "next=%2Faccount%2Fgifts"}},
 	}
 
 	dir := os.Getenv("EMAIL_PREVIEW_DIR")

@@ -26,7 +26,7 @@ var (
 //
 //  1. The customer is sent to Stripe's hosted Checkout page for the order.
 //  2. checkout.session.completed marks the order paid, and only then do the
-//     confirmation email, the recipient's account and reward points happen.
+//     confirmation email, the recipient's account and game entries happen.
 //  3. When a seller's line is delivered, the payout loop transfers its value
 //     (less the platform fee) to the seller's connected account.
 //  4. Cancelling a paid order refunds the payment.
@@ -45,8 +45,9 @@ type StripeService struct {
 
 	// onPaid runs once when an order's payment is confirmed.
 	onPaid func(ctx context.Context, orderID uuid.UUID)
-	// onPointsCheckout applies a session that pays for a seller's points.
-	onPointsCheckout func(ctx context.Context, cs StripeCheckoutSession) error
+	// onAdCheckout applies a session that pays for a seller's advertising
+	// package.
+	onAdCheckout func(ctx context.Context, cs StripeCheckoutSession) error
 	// cancelUnpaid cancels an order nobody paid for.
 	cancelUnpaid func(ctx context.Context, customerID, orderID string) error
 	// onMembership applies events that belong to memberships. It reports
@@ -74,13 +75,13 @@ func (s *StripeService) UseConnectCountry(iso string) {
 }
 
 // OnOrderPaid sets what happens once, when an order's payment is confirmed:
-// its confirmation email, the recipient's account, reward points.
+// its confirmation email, the recipient's account, game entries.
 func (s *StripeService) OnOrderPaid(fn func(ctx context.Context, orderID uuid.UUID)) { s.onPaid = fn }
 
-// OnPointsCheckout sets how a Checkout Session paying for a seller's points
-// is applied (see SellerPointsService.HandleStripeCheckout).
-func (s *StripeService) OnPointsCheckout(fn func(ctx context.Context, cs StripeCheckoutSession) error) {
-	s.onPointsCheckout = fn
+// OnAdCheckout sets how a Checkout Session paying for a seller's advertising
+// package is applied (see AdvertisingService.HandleStripeCheckout).
+func (s *StripeService) OnAdCheckout(fn func(ctx context.Context, cs StripeCheckoutSession) error) {
+	s.onAdCheckout = fn
 }
 
 // OnMembershipEvent sets how membership checkouts, subscriptions, invoices
@@ -347,11 +348,11 @@ func (s *StripeService) HandlePlatformWebhook(ctx context.Context, body []byte, 
 			if err := json.Unmarshal(ev.Data.Object, &cs); err != nil {
 				return err
 			}
-			if cs.Metadata["kind"] == pointsCheckoutKind {
-				if s.onPointsCheckout == nil {
+			if cs.Metadata["kind"] == adCheckoutKind {
+				if s.onAdCheckout == nil {
 					return nil
 				}
-				return s.onPointsCheckout(ctx, cs)
+				return s.onAdCheckout(ctx, cs)
 			}
 			if cs.PaymentStatus != "paid" {
 				return nil // card still pending (a bank step); a later event settles it
@@ -362,11 +363,11 @@ func (s *StripeService) HandlePlatformWebhook(ctx context.Context, body []byte, 
 			if err := json.Unmarshal(ev.Data.Object, &cs); err != nil {
 				return err
 			}
-			if cs.Metadata["kind"] == pointsCheckoutKind {
-				if s.onPointsCheckout == nil {
+			if cs.Metadata["kind"] == adCheckoutKind {
+				if s.onAdCheckout == nil {
 					return nil
 				}
-				return s.onPointsCheckout(ctx, cs)
+				return s.onAdCheckout(ctx, cs)
 			}
 			return s.repo.MarkCheckoutExpired(ctx, cs.ID)
 		case "payment_intent.succeeded":
@@ -718,7 +719,7 @@ func (s *StripeService) RunPayoutLoop(ctx context.Context, every time.Duration, 
 const unpaidOrderHours = 25
 
 // CancelExpiredUnpaid cancels orders nobody paid for, which also gives back
-// the points held on them. It returns how many it cancelled.
+// the game entries promised on them. It returns how many it cancelled.
 func (s *StripeService) CancelExpiredUnpaid(ctx context.Context, limit int) (int, error) {
 	if s.cancelUnpaid == nil {
 		return 0, nil

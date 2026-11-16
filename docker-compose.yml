@@ -8,7 +8,9 @@
 #
 # Secrets (JWT, S3, Google Maps) come from this repo's .env. The database is
 # a fresh one inside Docker, separate from any Postgres on this machine.
-# Host ports can be changed with WEB_PORT, API_PORT and DB_HOST_PORT.
+# Host ports can be changed with WEB_PORT, API_PORT and DB_HOST_PORT. They
+# listen on 127.0.0.1 only; set BIND_ADDR=0.0.0.0 to reach them from other
+# machines on purpose (never do that with the default database password).
 
 name: sendagift
 
@@ -34,7 +36,7 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
     ports:
-      - "${DB_HOST_PORT:-5433}:5432"
+      - "${BIND_ADDR:-127.0.0.1}:${DB_HOST_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sendagift -d sendagift"]
       interval: 2s
@@ -60,7 +62,7 @@ services:
     image: sendagift-api:local
     <<: *api-env
     ports:
-      - "${API_PORT:-8091}:8080"
+      - "${BIND_ADDR:-127.0.0.1}:${API_PORT:-8091}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -75,7 +77,7 @@ services:
     environment:
       API_UPSTREAM: http://api:8080
     ports:
-      - "${WEB_PORT:-8090}:80"
+      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-8090}:80"
     depends_on:
       - api
     restart: unless-stopped

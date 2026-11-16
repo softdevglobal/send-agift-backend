@@ -45,7 +45,15 @@ type CustomerService struct {
 	resets       *repository.PasswordResetRepository
 	codeSignups  *LoginCodeService // sign-ups proven by an SMS or email code
 	emailChanges *repository.EmailChangeRepository
+	states       StateChecker // nil: sign-up does not ask for a state
 }
+
+// StateChecker validates the state given at sign-up against the country:
+// required when the country has states. It returns the state to store.
+type StateChecker func(ctx context.Context, countryID uuid.UUID, stateID string) (*uuid.UUID, error)
+
+// RequireStates makes sign-up ask for the customer's state or region.
+func (s *CustomerService) RequireStates(check StateChecker) { s.states = check }
 
 // SendEmailsWith turns on the welcome email for new customers.
 func (s *CustomerService) SendEmailsWith(email *EmailService) { s.email = email }
@@ -78,6 +86,7 @@ func NewCustomerService(
 
 type CustomerRegisterInput struct {
 	CountryID    string // Country ID for the customer
+	StateID      string // State or region, required when the country has states
 	Email        string // Email for the customer
 	Password     string
 	Phone        *string        // Phone for the customer
@@ -87,6 +96,7 @@ type CustomerRegisterInput struct {
 	Addresses    []AddressInput // Addresses for the customer
 	ImageURL     *string
 	SignupToken  string // from a verified sign-in code; marks the phone or email verified
+	TermsVersion string // customer terms version shown at sign-up; blank from older clients
 }
 
 type CustomerUpdateInput struct {
@@ -188,6 +198,12 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 	if err != nil {
 		return nil, ErrInvalidInput // return an error if the date of birth is invalid
 	}
+	var stateID *uuid.UUID
+	if s.states != nil {
+		if stateID, err = s.states(ctx, countryID, in.StateID); err != nil {
+			return nil, err
+		}
+	}
 
 	hash, err := utils.HashPassword(in.Password)
 	if err != nil {
@@ -210,12 +226,18 @@ func (s *CustomerService) Register(ctx context.Context, in CustomerRegisterInput
 		DateOfBirth:  dob,
 		Status:       "active",
 		ImageURL:     in.ImageURL,
+		StateID:      stateID,
 	}
 	if err := s.customers.Create(ctx, customer); err != nil {
 		if errors.Is(err, repository.ErrCustomerDuplicate) {
 			return nil, ErrCustomerConflict
 		}
 		return nil, err
+	}
+	// Signing up is agreeing to the terms on that screen. A failure here is
+	// logged rather than undoing an account that already exists.
+	if err := s.customers.RecordTermsAcceptance(ctx, customer.ID, in.TermsVersion, countryID); err != nil {
+		log.Printf("customer %s terms acceptance: %v", customer.ID, err)
 	}
 	switch proven {
 	case ChannelEmail:
@@ -389,6 +411,9 @@ func (s *CustomerService) Update(ctx context.Context, customerID string, in Cust
 		if errors.Is(err, repository.ErrCustomerNotFound) {
 			return nil, ErrCustomerNotFound
 		}
+		return nil, err
+	}
+	if err := s.customers.DropStateOutsideCountry(ctx, customerID); err != nil {
 		return nil, err
 	}
 	updated, err := s.customers.GetByID(ctx, customerID)

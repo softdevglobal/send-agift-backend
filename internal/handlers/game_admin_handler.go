@@ -75,23 +75,23 @@ func (h *GameHandler) AdminReviewScore(w http.ResponseWriter, r *http.Request) {
 }
 
 // AdminSetPlayCost handles PUT /admin/games/{slug}/play-cost with
-// {"play_cost_points": 50}. Any platform admin, with a fresh reauth.
+// {"entry_cost": 50}. Any platform admin, with a fresh reauth.
 func (h *GameHandler) AdminSetPlayCost(w http.ResponseWriter, r *http.Request) {
 	admin, ok := adminActor(w, r)
 	if !ok {
 		return
 	}
 	var in struct {
-		PlayCostPoints *int64 `json:"play_cost_points"`
+		EntryCost *int64 `json:"entry_cost"`
 	}
 	if !decodeBody(w, r, &in) {
 		return
 	}
-	if in.PlayCostPoints == nil {
-		utils.Error(w, http.StatusBadRequest, "play_cost_points is required")
+	if in.EntryCost == nil {
+		utils.Error(w, http.StatusBadRequest, "entry_cost is required")
 		return
 	}
-	game, err := h.games.SetPlayCost(r.Context(), admin, chi.URLParam(r, "slug"), *in.PlayCostPoints)
+	game, err := h.games.SetPlayCost(r.Context(), admin, chi.URLParam(r, "slug"), *in.EntryCost)
 	if err != nil {
 		h.writeAdminError(w, err, "could not set the play cost")
 		return
