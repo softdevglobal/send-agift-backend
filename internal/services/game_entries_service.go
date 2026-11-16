@@ -511,8 +511,11 @@ func (s *GameEntriesService) StopProgram(ctx context.Context, admin AdminActor, 
 // JurisdictionInput is the games settings of a country or one of its
 // states. GameIDs are the games switched on there.
 type JurisdictionInput struct {
-	CountryID          string   `json:"country_id"`
-	StateID            *string  `json:"state_id"`
+	CountryID string  `json:"country_id"`
+	StateID   *string `json:"state_id"`
+	// StateIDs saves the same settings for several states of the country
+	// at once, each its own place, in place of StateID.
+	StateIDs           []string `json:"state_ids,omitempty"`
 	EarningEnabled     bool     `json:"earning_enabled"`
 	PlayEnabled        bool     `json:"play_enabled"`
 	ChanceGamesEnabled bool     `json:"chance_games_enabled"`
@@ -557,8 +560,10 @@ func (s *GameEntriesService) SaveJurisdiction(ctx context.Context, admin AdminAc
 		}
 	}
 	switch {
-	case has && j.StateID == nil:
+	case has && j.StateID == nil && len(in.StateIDs) == 0:
 		return nil, invalidEntries("this country has states: switch games on state by state")
+	case !has && len(in.StateIDs) > 0:
+		return nil, invalidEntries("this country has no states")
 	case j.MinAge < 13 || j.MinAge > 25:
 		return nil, invalidEntries("min_age must be 13 to 25")
 	case (j.EarningEnabled || j.PlayEnabled) && j.OfficialRules == nil:
@@ -579,10 +584,54 @@ func (s *GameEntriesService) SaveJurisdiction(ctx context.Context, admin AdminAc
 		}
 		j.GameIDs = append(j.GameIDs, id)
 	}
+	if len(in.StateIDs) > 0 {
+		return s.saveJurisdictionStates(ctx, admin, in, j)
+	}
 	audit := admin.entriesAudit("games.jurisdiction_saved", "jurisdiction", nil, nil)
 	audit.After = in
 	out, err := s.repo.SaveJurisdiction(ctx, j, admin.ID, audit)
 	return out, mapEntriesErr(err)
+}
+
+// saveJurisdictionStates writes the same settings for each listed state of
+// the country, each still its own place with its own audit entry. Every
+// state is checked before anything is written.
+func (s *GameEntriesService) saveJurisdictionStates(ctx context.Context, admin AdminActor, in JurisdictionInput, base *models.Jurisdiction) (*models.Jurisdiction, error) {
+	states, err := s.repo.States(ctx, base.CountryID, true)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[uuid.UUID]bool, len(states))
+	for _, st := range states {
+		known[st.ID] = true
+	}
+	seen := map[uuid.UUID]bool{}
+	var ids []uuid.UUID
+	for _, raw := range in.StateIDs {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil || !known[id] {
+			return nil, invalidEntries("state_ids must be active states of the country")
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	var out *models.Jurisdiction
+	for _, id := range ids {
+		j := *base
+		j.StateID = &id
+		one := in
+		one.StateIDs = nil
+		sid := id.String()
+		one.StateID = &sid
+		audit := admin.entriesAudit("games.jurisdiction_saved", "jurisdiction", nil, nil)
+		audit.After = one
+		if out, err = s.repo.SaveJurisdiction(ctx, &j, admin.ID, audit); err != nil {
+			return nil, mapEntriesErr(err)
+		}
+	}
+	return out, nil
 }
 
 // StopJurisdiction is the emergency stop for one place; stop false lifts it.

@@ -1241,3 +1241,51 @@ func TestMissedEntriesAreCaughtUp(t *testing.T) {
 		t.Fatalf("a second pass gave %d", got)
 	}
 }
+
+func TestGamesSwitchedOnForSeveralStatesAtOnce(t *testing.T) {
+	f := newPrizeFixture(t)
+	entries := repository.NewGameEntriesRepository(f.pool)
+	svc := NewGameEntriesService(entries, 90)
+	var ids []string
+	for _, name := range []string{"East", "West"} {
+		st, err := svc.SaveState(f.ctx, f.admin, nil, StateInput{CountryID: f.country.String(), Code: strings.ToUpper(name[:2]), Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, st.ID.String())
+	}
+	rules := "Official rules."
+	count := func() int {
+		var n int
+		if err := f.pool.QueryRow(f.ctx, `select count(*) from entries.jurisdictions where country_id = $1 and state_id is not null`, f.country).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// A state of another country stops the whole save before anything is written.
+	if _, err := svc.SaveJurisdiction(f.ctx, f.admin, JurisdictionInput{
+		CountryID: f.country.String(), StateIDs: []string{ids[0], uuid.NewString()},
+		EarningEnabled: true, PlayEnabled: true, MinAge: 18, OfficialRules: &rules,
+	}); !errors.Is(err, ErrInvalidEntries) || count() != 0 {
+		t.Fatalf("save with a foreign state: err %v, places %d", err, count())
+	}
+
+	if _, err := svc.SaveJurisdiction(f.ctx, f.admin, JurisdictionInput{
+		CountryID: f.country.String(), StateIDs: append(ids, ids[0]),
+		EarningEnabled: true, PlayEnabled: true, MinAge: 18, OfficialRules: &rules,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count() != 2 {
+		t.Fatalf("places switched on = %d, want one per state", count())
+	}
+	// Each state stays its own place: a state's own settings still apply.
+	customer := f.customer(30)
+	if _, err := svc.SetCustomerState(f.ctx, customer, ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	if gate, _ := entries.Gate(f.ctx, customer, "play", nil); !gate.Allowed {
+		t.Fatalf("a customer in a switched-on state cannot play: %+v", gate)
+	}
+}
