@@ -25,6 +25,7 @@ var (
 	ErrOrderProductVisibility = errors.New("product not visible for this customer type")
 	ErrOrderNotCancellable    = errors.New("order cannot be cancelled")
 	ErrOrderItemNotFound      = errors.New("order item not found")
+	ErrSellerCustomerNotFound = errors.New("customer not found")
 	ErrOrderItemNotAcceptable = errors.New("order item cannot be accepted")
 )
 
@@ -559,6 +560,24 @@ func (s *OrderService) Cancel(ctx context.Context, customerID, orderID string) (
 
 func (s *OrderService) ListItemsForSeller(ctx context.Context, sellerID string) ([]models.SellerOrderItemSummary, error) {
 	return s.orders.ListItemsBySeller(ctx, sellerID)
+}
+
+// ListCustomersForSeller is everyone who has ordered from the seller.
+func (s *OrderService) ListCustomersForSeller(ctx context.Context, sellerID string) ([]models.SellerCustomer, error) {
+	return s.orders.ListSellerCustomers(ctx, sellerID, nil)
+}
+
+// GetCustomerForSeller is one customer's orders with the seller.
+func (s *OrderService) GetCustomerForSeller(ctx context.Context, sellerID, customerID string) (*models.SellerCustomerDetail, error) {
+	id, err := uuid.Parse(customerID)
+	if err != nil {
+		return nil, ErrSellerCustomerNotFound
+	}
+	d, err := s.orders.GetSellerCustomer(ctx, sellerID, id)
+	if errors.Is(err, repository.ErrSellerCustomerNotFound) {
+		return nil, ErrSellerCustomerNotFound
+	}
+	return d, err
 }
 
 func (s *OrderService) GetItemForSeller(ctx context.Context, sellerID, itemID string) (*models.SellerOrderItemDetails, error) {

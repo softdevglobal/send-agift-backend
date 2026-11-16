@@ -76,5 +76,9 @@ func RegisterSellerRoutes(
 		r.Get("/sellers/me/order-items", sellerOrders.ListItems)
 		r.Get("/sellers/me/order-items/{id}", sellerOrders.GetItem)
 		r.Patch("/sellers/me/order-items/{id}/accept", sellerOrders.AcceptItem)
+
+		// Customers who have ordered from this seller, and their orders.
+		r.Get("/sellers/me/customers", sellerOrders.ListCustomers)
+		r.Get("/sellers/me/customers/{id}", sellerOrders.GetCustomer)
 	})
 }

@@ -56,8 +56,32 @@ func (h *SellerOrderHandler) AcceptItem(w http.ResponseWriter, r *http.Request) 
 	utils.JSON(w, http.StatusOK, item)
 }
 
+// ListCustomers is everyone who has ordered from the signed-in seller.
+func (h *SellerOrderHandler) ListCustomers(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	customers, err := h.orders.ListCustomersForSeller(r.Context(), sellerID)
+	if err != nil {
+		h.writeError(w, err, "could not list customers")
+		return
+	}
+	utils.JSON(w, http.StatusOK, customers)
+}
+
+// GetCustomer is one customer's orders with the signed-in seller.
+func (h *SellerOrderHandler) GetCustomer(w http.ResponseWriter, r *http.Request) {
+	sellerID, _ := r.Context().Value(middleware.UserIDContextKey).(string)
+	customer, err := h.orders.GetCustomerForSeller(r.Context(), sellerID, chi.URLParam(r, "id"))
+	if err != nil {
+		h.writeError(w, err, "could not load customer")
+		return
+	}
+	utils.JSON(w, http.StatusOK, customer)
+}
+
 func (h *SellerOrderHandler) writeError(w http.ResponseWriter, err error, fallback string) {
 	switch {
+	case errors.Is(err, services.ErrSellerCustomerNotFound):
+		utils.Error(w, http.StatusNotFound, "customer not found")
 	case errors.Is(err, services.ErrOrderItemNotFound):
 		utils.Error(w, http.StatusNotFound, "order item not found")
 	case errors.Is(err, services.ErrOrderItemNotAcceptable):

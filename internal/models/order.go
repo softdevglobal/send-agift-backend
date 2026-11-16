@@ -167,3 +167,59 @@ type ReceivedGiftItem struct {
 	FulfilmentStatus string     `json:"fulfilment_status"`
 	ReviewID         *uuid.UUID `json:"review_id,omitempty"`
 }
+
+// SellerCustomer is someone who has ordered from a seller, as that seller
+// sees them: their name and region and what they bought from this seller
+// only. No email, phone or game entries.
+type SellerCustomer struct {
+	CustomerID  uuid.UUID `json:"customer_id"`
+	Name        string    `json:"name"`
+	CountryName string    `json:"country_name"`
+	StateName   *string   `json:"state_name,omitempty"`
+	OrdersCount int       `json:"orders_count"`
+	// Units bought, cancelled lines left out.
+	ItemsCount int `json:"items_count"`
+	// What they paid for this seller's lines, per currency. Free gifts and
+	// cancelled lines are left out.
+	Spent        []SellerCustomerSpend `json:"spent"`
+	FirstOrderAt time.Time             `json:"first_order_at"`
+	LastOrderAt  time.Time             `json:"last_order_at"`
+}
+
+type SellerCustomerSpend struct {
+	Currency string `json:"currency"`
+	Amount   int    `json:"amount"`
+}
+
+// SellerCustomerDetail is one customer and their orders with the seller,
+// newest first.
+type SellerCustomerDetail struct {
+	SellerCustomer
+	Orders []SellerCustomerOrder `json:"orders"`
+}
+
+// SellerCustomerOrder is an order as far as it concerns one seller: only
+// their lines, and the amount of those lines.
+type SellerCustomerOrder struct {
+	OrderID      uuid.UUID                 `json:"order_id"`
+	OrderNumber  string                    `json:"order_number"`
+	Status       string                    `json:"status"`
+	OrderKind    string                    `json:"order_kind"`
+	Currency     string                    `json:"currency"`
+	Amount       int                       `json:"amount"`
+	DeliveryDate time.Time                 `json:"delivery_date"`
+	CreatedAt    time.Time                 `json:"created_at"`
+	Items        []SellerCustomerOrderLine `json:"items"`
+}
+
+type SellerCustomerOrderLine struct {
+	// The order item, as /sellers/me/order-items/{id} knows it.
+	ID               uuid.UUID `json:"id"`
+	ProductName      string    `json:"product_name"`
+	ProductImageURL  *string   `json:"product_image_url,omitempty"`
+	ShopName         string    `json:"shop_name"`
+	Quantity         int       `json:"quantity"`
+	TotalAmount      int       `json:"total_amount"`
+	FulfilmentStatus string    `json:"fulfilment_status"`
+	RecipientName    *string   `json:"recipient_name,omitempty"`
+}
