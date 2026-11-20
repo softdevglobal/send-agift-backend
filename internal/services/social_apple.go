@@ -68,7 +68,7 @@ func (s *SocialAuthService) verifyApple(ctx context.Context, in SocialSignInInpu
 			if kid == "" {
 				return nil, errors.New("no key id")
 			}
-			return s.appleKey(ctx, kid)
+			return s.signingKey(ctx, &s.appleKeys, s.appleKeysURL, appleKeysURL, kid)
 		},
 		jwt.WithValidMethods([]string{"RS256"}),
 		jwt.WithIssuer(appleIssuer),
@@ -123,10 +123,14 @@ func (s *SocialAuthService) verifyApple(ctx context.Context, in SocialSignInInpu
 	}, nil
 }
 
-// appleKey returns Apple's public key for a key id, from the cache while it
-// is fresh, and from Apple when it is stale or the id is new.
-func (s *SocialAuthService) appleKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
-	c := &s.appleKeys
+// signingKey returns a provider's public key for a key id (Apple's, or
+// Facebook's for Limited Login), from the cache while it is fresh, and from
+// the provider when it is stale or the id is new. override is a test server;
+// empty uses the provider's real key set at url.
+func (s *SocialAuthService) signingKey(ctx context.Context, c *appleKeyCache, override, url, kid string) (*rsa.PublicKey, error) {
+	if override != "" {
+		url = override
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -137,10 +141,10 @@ func (s *SocialAuthService) appleKey(ctx context.Context, kid string) (*rsa.Publ
 	}
 	// Unknown id, or stale: fetch, but not more than once a minute.
 	if c.keys == nil || now.Sub(c.fetchedAt) >= appleKeysMinRefetch {
-		keys, err := s.fetchAppleKeys(ctx)
+		keys, err := s.fetchSigningKeys(ctx, url)
 		if err != nil {
 			if key, ok := c.keys[kid]; ok {
-				return key, nil // Apple unreachable: the last known key still verifies
+				return key, nil // provider unreachable: the last known key still verifies
 			}
 			return nil, err
 		}
@@ -149,10 +153,11 @@ func (s *SocialAuthService) appleKey(ctx context.Context, kid string) (*rsa.Publ
 	if key, ok := c.keys[kid]; ok {
 		return key, nil
 	}
-	return nil, fmt.Errorf("apple key %q not found", kid)
+	return nil, fmt.Errorf("signing key %q not found", kid)
 }
 
-func (s *SocialAuthService) fetchAppleKeys(ctx context.Context) (map[string]*rsa.PublicKey, error) {
+// fetchSigningKeys reads an RSA JSON Web Key Set.
+func (s *SocialAuthService) fetchSigningKeys(ctx context.Context, url string) (map[string]*rsa.PublicKey, error) {
 	var set struct {
 		Keys []struct {
 			Kty string `json:"kty"`
@@ -160,10 +165,6 @@ func (s *SocialAuthService) fetchAppleKeys(ctx context.Context) (map[string]*rsa
 			N   string `json:"n"`
 			E   string `json:"e"`
 		} `json:"keys"`
-	}
-	url := s.appleKeysURL
-	if url == "" {
-		url = appleKeysURL
 	}
 	if err := s.getJSON(ctx, url, "", &set); err != nil {
 		return nil, err
@@ -188,7 +189,7 @@ func (s *SocialAuthService) fetchAppleKeys(ctx context.Context) (map[string]*rsa
 		keys[k.Kid] = &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: exp}
 	}
 	if len(keys) == 0 {
-		return nil, errors.New("apple returned no signing keys")
+		return nil, errors.New("the provider returned no signing keys")
 	}
 	return keys, nil
 }
