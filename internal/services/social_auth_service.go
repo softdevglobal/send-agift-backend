@@ -82,6 +82,8 @@ type SocialAuthService struct {
 	appleClientIDs    []string
 	appleKeys         appleKeyCache
 	appleKeysURL      string
+	facebookKeys      appleKeyCache
+	facebookKeysURL   string // tests only; empty uses Facebook's key set
 	facebookAppID     string
 	facebookAppSecret string
 	jwtSecret         string
@@ -368,6 +370,11 @@ func (s *SocialAuthService) verify(ctx context.Context, in SocialSignInInput) (*
 	case ProviderFacebook:
 		if s.facebookAppID == "" || s.facebookAppSecret == "" {
 			return nil, ErrSocialNotConfigured
+		}
+		// An iPhone that has not allowed tracking gets Facebook Limited
+		// Login: a signed ID token instead of an access token.
+		if in.TokenType == "id_token" {
+			return s.verifyFacebookLimited(ctx, in)
 		}
 		return s.verifyFacebook(ctx, token)
 	case ProviderApple:
